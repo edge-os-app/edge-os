@@ -42,7 +42,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 __all__ = ["ConfigError", "METHODS", "ProxyGate", "RelayConfig", "RelayCore", "Reply", "ROLES", "Upstream",
            "UpstreamClient", "UpstreamFailure", "UpstreamReply", "build_server", "load_config", "log_line", "main"]
@@ -56,6 +56,8 @@ MAX_PERCENTILES = 100
 RATE_LIMITS = {"observer": (20.0, 60), "broadcast": (2.0, 10)}  # (requests per second, burst)
 MAX_CONCURRENT = {"observer": 8, "broadcast": 2}
 MAX_CONNECTIONS = 32  # open sockets per role, each with its own thread; more are closed at once
+REQUEST_READ_SECONDS = 10.0  # the whole request head and body, from accept; a slower caller is cut off
+KEY_FRAGMENT_CHARS = 16  # any echo of this many consecutive key characters withholds a reply
 UPSTREAM_CONNECT_SECONDS = 10.0
 UPSTREAM_DEADLINE_SECONDS = 15.0
 CLIENT_SOCKET_SECONDS = 10.0
@@ -102,7 +104,11 @@ class Upstream:
         """Every text whose presence in a reply would reveal the key or the account endpoint."""
         netloc = self.host if self.port == 443 else f"{self.host}:{self.port}"
         found = {self.url, f"https://{netloc}{self.path}", self.host, netloc, self.path, self.path.strip("/")}
-        found.update(segment for segment in self.path.split("/") if len(segment) >= 8)
+        segments = [segment for segment in self.path.split("/") if len(segment) >= 8]
+        found.update(segments)
+        for segment in segments:  # partial and hex-encoded echoes of the key
+            found.add(segment.encode().hex())
+            found.update(segment[i:i + KEY_FRAGMENT_CHARS] for i in range(len(segment) - KEY_FRAGMENT_CHARS + 1))
         return tuple(sorted(value for value in found if value and value != "/"))
 
 
@@ -371,8 +377,6 @@ class RelayCore:
         return reply
 
     def _handle(self, body: bytes) -> Reply | tuple[Reply, str, int | None]:
-        if not self.bucket.take():
-            return refusal("rate_limited")
         if len(body) > MAX_REQUEST_BYTES:
             return refusal("body_too_large")
         parsed, request = _parse(body)
@@ -393,6 +397,8 @@ class RelayCore:
         params = request.get("params", [])
         if type(params) is not list or not self.methods[method](params):
             return refusal("invalid_params", ident), logged, None
+        if not self.bucket.take():  # only calls that would reach the provider spend the budget
+            return refusal("rate_limited", ident), logged, None
         wire = _encode({"jsonrpc": "2.0", "id": ident, "method": method, "params": params})
         answer = None
         try:
@@ -405,7 +411,8 @@ class RelayCore:
 
     def _leaks(self, text: str) -> bool:
         lowered = text.lower()
-        return any(secret in lowered for secret in self.secrets)
+        decoded = unquote(lowered).lower()  # a percent-encoded echo
+        return any(secret in lowered or secret in decoded for secret in self.secrets)
 
     def _reply(self, ident: Any, answer: UpstreamReply) -> Reply:
         try:
@@ -469,6 +476,12 @@ class UpstreamClient:
     def __repr__(self) -> str:
         return "UpstreamClient(<redacted>)"
 
+    def _bound(self, connection: Any, until: float) -> None:
+        """Each socket operation gets only the time left in the whole call, never a renewed timeout."""
+        sock = getattr(connection, "sock", None)
+        if sock is not None:
+            sock.settimeout(max(0.001, min(self._timeout, until - self._clock())))
+
     def __call__(self, body: bytes) -> UpstreamReply:
         reply, connection = None, None
         until = self._clock() + self._deadline
@@ -476,9 +489,11 @@ class UpstreamClient:
             connection = self._connect(self._upstream.host, self._upstream.port, timeout=self._timeout,
                                        context=self._context)
             connection.request("POST", self._upstream.path, body=body, headers=dict(self.HEADERS))
+            self._bound(connection, until)
             response = connection.getresponse()
             data = b""
             while len(data) <= MAX_RESPONSE_BYTES and self._clock() < until:
+                self._bound(connection, until)
                 chunk = response.read(min(64 * 1024, MAX_RESPONSE_BYTES + 1 - len(data)))
                 if not chunk:
                     break
@@ -530,16 +545,18 @@ class ProxyGate:
             now = self.clock()
             if self.resolved_at is not None and now - self.resolved_at <= PROXY_CACHE_SECONDS:
                 return self.addresses
-            found: frozenset[Any] = frozenset()
-            try:
-                answers = [_address(answer) for answer in self.resolve(self.name)]
-                if answers and all(answer is not None for answer in answers):
-                    found = frozenset(answers)
-            except Exception:
-                found = frozenset()
-            if found:  # a failed lookup is never cached: the next request asks again
+        # The lookup runs outside the lock, so one slow answer never stalls requests that use a fresh cache.
+        found: frozenset[Any] = frozenset()
+        try:
+            answers = [_address(answer) for answer in self.resolve(self.name)]
+            if answers and all(answer is not None for answer in answers):
+                found = frozenset(answers)
+        except Exception:
+            found = frozenset()
+        if found:  # a failed lookup is never cached: the next request asks again
+            with self.lock:
                 self.addresses, self.resolved_at = found, now
-            return found
+        return found
 
     def __call__(self, peer: str) -> bool:
         address = _address(peer)
@@ -557,21 +574,62 @@ class RelayServer(ThreadingHTTPServer):
         self.core, self.admit_peer = core, admit_peer
         self.slots = threading.BoundedSemaphore(MAX_CONCURRENT[core.role])
         self.connections = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        self.reading: dict[Any, float] = {}  # socket -> read deadline, until its request is read
+        self.reading_lock = threading.Lock()
         super().__init__(address, RelayHandler)
+
+    def _note(self, outcome: str) -> None:
+        self.core.record(method="-", outcome=outcome, status=0, upstream_status=None, started=self.core.clock(),
+                         bytes_in=0, bytes_out=0)
+
+    def verify_request(self, request: Any, client_address: Any) -> bool:
+        # Before any slot or thread is spent: only the proxy, or loopback (the container's own health check).
+        # A loopback caller still meets the proxy check on POST /rpc.
+        peer = str(client_address[0])
+        address = _address(peer)
+        if (address is not None and address.is_loopback) or self.admit_peer(peer):
+            return True
+        self._note("peer_refused")
+        return False
 
     def process_request(self, request: Any, client_address: Any) -> None:
         if not self.connections.acquire(blocking=False):
-            self.core.record(method="-", outcome="connection_refused", status=0, upstream_status=None,
-                             started=self.core.clock(), bytes_in=0, bytes_out=0)
+            self._note("connection_refused")
             self.shutdown_request(request)
             return
-        super().process_request(request, client_address)
+        with self.reading_lock:
+            self.reading[request] = time.monotonic() + REQUEST_READ_SECONDS
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.request_read(request)
+            self.connections.release()  # the thread never started: its slot must not leak
+            raise
 
     def process_request_thread(self, request: Any, client_address: Any) -> None:
         try:
             super().process_request_thread(request, client_address)
         finally:
+            self.request_read(request)
             self.connections.release()
+
+    def request_read(self, request: Any) -> None:
+        with self.reading_lock:
+            self.reading.pop(request, None)
+
+    def service_actions(self) -> None:
+        # Called by serve_forever between polls: cut off callers still sending their request after the deadline.
+        now = time.monotonic()
+        with self.reading_lock:
+            late = [sock for sock, until in self.reading.items() if until <= now]
+            for sock in late:
+                self.reading.pop(sock, None)
+        for sock in late:
+            self._note("read_timeout")
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         # The default prints a traceback to stderr; only the outcome is written here.
@@ -657,6 +715,7 @@ class RelayHandler(BaseHTTPRequestHandler):
             body = self.rfile.read(length)
         except OSError:
             body = b""
+        self.server.request_read(self.request)
         if len(body) != length:
             self._refuse("body_incomplete", bytes_in=len(body))
             return

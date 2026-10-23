@@ -394,6 +394,27 @@ def test_an_upstream_reply_that_names_the_key_or_host_is_withheld(leak, where):
     assert_no_secret(reply.body, logs)
 
 
+@pytest.mark.parametrize("echo", [
+    SENTINEL_KEY[:relay.KEY_FRAGMENT_CHARS],
+    SENTINEL_KEY[-relay.KEY_FRAGMENT_CHARS:].upper(),
+    "bad token " + SENTINEL_KEY[:21],
+    "".join(f"%{ord(c):02x}" for c in SENTINEL_KEY),
+    "%71%6e" + SENTINEL_KEY[2:],
+    SENTINEL_KEY.encode().hex(),
+    SENTINEL_KEY.encode().hex().upper(),
+])
+def test_a_partial_or_encoded_key_echo_is_withheld(echo):
+    upstream = FakeUpstream(lambda r: reply_for(r, {"error": {"code": -32000, "message": echo}}))
+    reply = make_core("observer", upstream).handle(call("eth_chainId", []))
+    assert reply.status == 502 and error_of(reply)["message"] == "upstream reply withheld"
+
+
+def test_a_short_key_piece_alone_is_not_withheld():
+    piece = SENTINEL_KEY[:relay.KEY_FRAGMENT_CHARS - 1]
+    upstream = FakeUpstream(lambda r: reply_for(r, {"error": {"code": -32000, "message": piece}}))
+    assert make_core("observer", upstream).handle(call("eth_chainId", [])).status == 200
+
+
 def test_an_escaped_key_in_the_upstream_reply_is_still_withheld():
     escaped = "".join(f"\\u{ord(c):04x}" for c in SENTINEL_KEY)
     raw = ('{"jsonrpc":"2.0","id":7,"error":{"code":-1,"message":"' + escaped + '"}}').encode()
@@ -470,12 +491,15 @@ def test_the_rate_limit_refuses_after_the_burst_and_refills(role):
     assert core.handle(call("eth_chainId", [])).status == 200
 
 
-def test_refused_requests_also_spend_the_rate_limit():
+def test_refused_requests_do_not_spend_the_rate_limit():
     clock = Clock()
     core = make_core("broadcast", FakeUpstream(), clock=clock)
     _, burst = relay.RATE_LIMITS["broadcast"]
+    for _ in range(burst * 3):
+        assert core.handle(b"[]").status == 400
+        assert core.handle(call("eth_call", [CALL, "latest"])).status == 403
     for _ in range(burst):
-        core.handle(b"[]")
+        assert core.handle(call("eth_chainId", [])).status == 200
     assert core.handle(call("eth_chainId", [])).status == 429
 
 

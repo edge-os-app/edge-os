@@ -42,7 +42,7 @@ services:
     tmpfs: ["/tmp"]
     mem_limit: 128m
     mem_reservation: 32m
-    pids_limit: 64
+    pids_limit: 128
     expose: ["8545", "8546"]
     # The proxy network only: Traefik reaches the relay here and the relay reaches the provider through it.
     networks: [coolify]

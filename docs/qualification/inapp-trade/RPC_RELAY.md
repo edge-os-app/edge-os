@@ -57,8 +57,10 @@ the provider through that network's NAT.
    masqueraded by Docker to the `coolify` bridge gateway, so the range is that gateway as a `/32` (read it in deploy
    step 3). Internet callers keep their own address and are refused with `403 Forbidden` by Traefik.
 3. The relay admits a socket peer only when it is the current address of `coolify-proxy` (resolved on the shared
-   network, cached 30 s, a failed lookup is never cached). Another container on the `coolify` network, such as the API
-   or web container, cannot call port 8545 or 8546 directly (`403`, outcome `peer_refused`).
+   network, cached 30 s, a failed lookup is never cached, the lookup runs outside the request lock). The check runs at
+   accept, before a thread or connection slot is spent: any other peer is closed at once (outcome `peer_refused`).
+   Loopback is accepted for the container's own `GET /healthz`, and `POST /rpc` checks the proxy again (`403`). Another
+   container on the `coolify` network, such as the API or web container, cannot call port 8545 or 8546 directly.
 
 HTTPS is kept end to end for the worker: it verifies a Let's Encrypt certificate for each name. Traefik to the relay is
 plain HTTP on the host's own `coolify` bridge.
@@ -77,8 +79,10 @@ never follows a redirect and never retries.
 It is answered with exact framing (`Content-Length`, no `Content-Encoding`, `Cache-Control: no-store`), as the worker's
 `post_json` requires. Anything else becomes a fixed relay error. Before sending, both the raw provider body and the
 re-serialized reply are searched, case-insensitively and after JSON unescaping, for the configured URL, the provider
-host, the key path and each path segment of 8 or more characters. Any match withholds the reply (`502`,
-`upstream reply withheld`). A provider exception is dropped without its text.
+host, the key path, each path segment of 8 or more characters, every 16-character piece of such a segment and the
+segment's hex encoding; each text is also checked after percent-decoding. Any match withholds the reply (`502`,
+`upstream reply withheld`). An echo split into pieces shorter than 16 characters is not caught; this needs the
+provider itself to echo key material. A provider exception is dropped without its text.
 
 **Key containment.** The key exists only in `EDGE_OS_RPC_RELAY_UPSTREAM_URL` in the relay resource's Coolify
 environment. The configuration objects redact it in `repr`/`str`. A configuration refusal prints only its code. No
@@ -123,11 +127,12 @@ included).
 | --- | --- |
 | Request body | 32768 bytes (Traefik `buffering.maxRequestBodyBytes` and the relay) |
 | Provider reply | 2 MiB read at most; larger is refused |
-| Rate, observer | 20 requests/s, burst 60 (token bucket, all callers, refused requests included) |
+| Rate, observer | 20 requests/s, burst 60 (token bucket, all callers; only calls that would reach the provider spend it) |
 | Rate, broadcast | 2 requests/s, burst 10 |
-| Concurrent requests | observer 8, broadcast 2 |
-| Provider connect / whole call | 10 s / 15 s |
-| Caller socket | 10 s per read |
+| Concurrent provider calls | observer 8, broadcast 2 |
+| Open connections | 32 per port, each one thread; more are closed at once (`pids_limit: 128` covers both ports) |
+| Caller request | head and body within 10 s of accept (then the socket is cut, outcome `read_timeout`); 10 s per read |
+| Provider call | 10 s connect; every later socket operation gets only the time left in a 15 s budget |
 
 | Outcome | HTTP | JSON-RPC code | Message |
 | --- | --- | --- | --- |
@@ -144,8 +149,9 @@ included).
 | `upstream_unreachable`, `upstream_reply_invalid`, `upstream_reply_withheld` | 502 | -32603 | upstream unavailable / reply invalid / reply withheld |
 | `forwarded` | 200 or the provider's 4xx/5xx with its own error | provider's | provider's |
 
-The worker treats every non-200 reply and every `error` reply as a refusal (`post_json`, `RPC_REPLY_UNRECOGNIZED`), so
-a relay error never becomes a result.
+The worker refuses every reply that is not HTTP 200 in `post_json` (`CLIENT_REPLY_REFUSED`) and every `error` reply
+with HTTP 200 in `TransactionRpcClient.call` (`RPC_REPLY_UNRECOGNIZED`) or the quote client
+(`QUOTE_RESERVES_UNSUPPORTED`), so a relay or provider error never becomes a result.
 
 ## Release fill values
 
@@ -201,7 +207,11 @@ Controller steps, in order. Nothing here was run.
    Coolify 4.4.7 does not substitute every `${...}` variable (see `deploy/coolify/RUNBOOK.md`). If the deployed labels
    or image tag still show `${`, write the commit and the source range literally in the Coolify Compose editor; both
    are public values. Never write the provider URL into the Compose file.
-5. **Deploy** the resource and wait for `healthy`.
+5. **Deploy** the resource and wait for `healthy`. Confirm the relay container is on the `coolify` network only
+   (hosted check 1). If Coolify attached its own per-resource network as well, `coolify-proxy` can resolve to its
+   address on that network while Traefik connects over `coolify`, and every call is refused (`peer_refused`). Remove
+   the extra network (Coolify's "Connect to Predefined Network" for this resource, or delete the network from the
+   deployed file) and redeploy.
 6. **Egress rule.** Update `/etc/edge-os/egress.env` as in `HOSTED_RECORD_V2_RUNBOOK.md` §4.1:
 
    ```sh
@@ -233,7 +243,10 @@ is the execution worker, `$API` the API container and `$R` the relay container
 docker inspect "$R" --format '{{.State.Health.Status}}'                                          # healthy
 docker inspect "$R" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'       # coolify
 docker inspect "$R" --format '{{range .Config.Env}}{{println .}}{{end}}' | cut -d= -f1 | grep EDGE_OS_
-#   EDGE_OS_RPC_RELAY_TRUSTED_PROXY and EDGE_OS_RPC_RELAY_UPSTREAM_URL only (names, never values)
+#   EDGE_OS_RPC_RELAY_TRUSTED_PROXY and EDGE_OS_RPC_RELAY_UPSTREAM_URL (names, never values); Coolify may also inject
+#   the public EDGE_OS_RPC_RELAY_SOURCE_COMMIT and EDGE_OS_RPC_RELAY_ALLOWED_SOURCES. No other EDGE_OS_ name.
+# The provider URL is in no other resource: on the worker and API this prints nothing.
+docker inspect "$W" "$API" --format '{{range .Config.Env}}{{println .}}{{end}}' | cut -d= -f1 | grep RPC_RELAY_UPSTREAM
 
 # 2. From the worker: both names answer chain 143 (0x8f) over verified HTTPS.
 PY_RPC='import sys, urllib.error as e, urllib.request as u
@@ -289,8 +302,8 @@ count; it stays in root's `/tmp` on the VPS and is shredded at once.
 - **Shared Traefik.** The worker's relay rule admits any name Traefik serves on this host (for example
   `api.edgeos.fun`); only the relay routes check the source.
 - **Global rate limits.** All callers arrive through Traefik, so the limits are per role, not per caller. A caller
-  that passes the gates can exhaust the bucket and delay the worker; it cannot raise the provider spend above the
-  limits.
+  that passes the gates can exhaust the bucket with valid calls and delay the worker; refused requests do not spend it.
+  It cannot raise the provider spend above the limits.
 - **Provider errors pass through.** A provider `error` object (code, message, data) reaches the worker unless it names
   the key, the host or the URL.
 - **Image provenance.** Coolify builds the image on the VPS from the reviewed commit; the base is digest-pinned and

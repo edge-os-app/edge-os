@@ -360,8 +360,84 @@ def test_open_connections_are_capped(served, monkeypatch):
     finally:
         idle.close()
     for _ in range(100):
-        if request(port, method="GET", path="/healthz")[0] == 200:
-            break
+        try:
+            if request(port, method="GET", path="/healthz")[0] == 200:
+                break
+        except (OSError, http.client.HTTPException):
+            pass  # the idle connection's thread has not released its slot yet
         time.sleep(0.05)
     else:
         raise AssertionError("the slot was not released")
+
+
+def wait_for_health(port: int) -> None:
+    for _ in range(100):
+        try:
+            if request(port, method="GET", path="/healthz")[0] == 200:
+                return
+        except (OSError, http.client.HTTPException):
+            pass
+        time.sleep(0.05)
+    raise AssertionError("the relay did not recover")
+
+
+def test_a_failed_thread_start_releases_its_connection_slot(served, monkeypatch):
+    monkeypatch.setattr(relay, "MAX_CONNECTIONS", 2)
+    port, _, logs = served()
+    original = relay.ThreadingHTTPServer.process_request
+    failures = [4]
+
+    def failing(self: Any, request: Any, client_address: Any) -> None:
+        if failures[0]:
+            failures[0] -= 1
+            raise RuntimeError("can't start new thread")
+        original(self, request, client_address)
+
+    monkeypatch.setattr(relay.ThreadingHTTPServer, "process_request", failing)
+    for _ in range(4):
+        raw_request(port, b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    assert failures == [0]
+    wait_for_health(port)
+    assert any(record["outcome"] == "handler_error" for record in logs)
+
+
+def test_a_peer_that_is_not_the_proxy_gets_no_thread_or_slot():
+    peers = Peers(admit=False)
+    logs: list[dict[str, Any]] = []
+    config = relay.load_config({"EDGE_OS_RPC_RELAY_UPSTREAM_URL": SENTINEL_URL})
+    core = relay.RelayCore(role="observer", upstream=FakeUpstream(), secrets=config.upstream.secrets(), log=logs.append)
+    server = relay.build_server(core, admit_peer=peers, host="127.0.0.1", port=0)
+    try:
+        assert server.verify_request(None, ("10.0.1.9", 40000)) is False
+        assert peers.seen == ["10.0.1.9"] and logs[-1]["outcome"] == "peer_refused"
+        assert server.verify_request(None, ("127.0.0.1", 40000)) is True  # the health check; POST still checks
+        assert server.verify_request(None, ("::1", 40000)) is True
+        assert peers.seen == ["10.0.1.9"]
+        peers.admit = True
+        assert server.verify_request(None, ("10.0.1.5", 40000)) is True
+    finally:
+        server.server_close()
+
+
+def test_a_caller_that_drips_its_request_is_cut_off(served, monkeypatch):
+    monkeypatch.setattr(relay, "REQUEST_READ_SECONDS", 0.3)
+    port, upstream, logs = served()
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+        sock.sendall(b"POST /rpc HTTP/1.1\r\n")
+        started = time.monotonic()
+        closed = False
+        while time.monotonic() - started < 4:
+            try:
+                sock.sendall(b"X")
+                if sock.recv(1, socket.MSG_DONTWAIT) == b"":
+                    closed = True
+                    break
+            except BlockingIOError:
+                pass
+            except OSError:
+                closed = True
+                break
+            time.sleep(0.1)
+    assert closed
+    assert any(record["outcome"] == "read_timeout" for record in logs)
+    assert upstream.bodies == []

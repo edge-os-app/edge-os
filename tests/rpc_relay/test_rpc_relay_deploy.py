@@ -94,7 +94,9 @@ def test_the_relay_keeps_the_stack_hardening(service):
     assert service["init"] is True
     assert service["user"] == "10001:10001"
     assert service.get("tmpfs")
-    assert service["mem_limit"] and service["pids_limit"]
+    assert service["mem_limit"]
+    # Threads count against pids: 2 x MAX_CONNECTIONS handlers, 3 server threads, init, and headroom.
+    assert int(service["pids_limit"]) >= 2 * 32 + 3 + 1 + 32
     assert service["restart"] == "unless-stopped"
     assert "ports" not in service
     assert sorted(service["expose"]) == ["8545", "8546"]
