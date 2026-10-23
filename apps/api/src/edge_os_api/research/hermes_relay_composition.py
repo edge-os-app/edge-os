@@ -33,6 +33,7 @@ import hashlib
 import hmac
 import json
 import os
+import platform
 import re
 import stat
 import sys
@@ -66,7 +67,7 @@ from relay_admission import ActualRelease, RelaySubject, load_actual_release  # 
 from relay_turn_runner import RelayEndpoint, build_relay_job  # noqa: E402
 
 __all__ = ["HermesApplication", "HermesApplicationRelease", "RELEASE_DEFINITIONS", "RelayApplicationDefinition",
-           "bind_release", "compose_application", "open_hermes_application"]
+           "bind_release", "compose_application", "image_for_platform", "open_hermes_application"]
 
 SNAPSHOT_FIELDS = frozenset({"model", "provider", "prompt_usd_per_million", "completion_usd_per_million"})
 DECIMAL = re.compile(r"(0|[1-9][0-9]{0,8})(\.[0-9]{1,12})?")
@@ -79,6 +80,9 @@ MAX_HANDOFF_BYTES = 16 * 1024
 IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")  # the immutable id `docker image inspect --format {{.Id}}` reports
 IMAGE_REFERENCE = re.compile(r"[^\s]{1,200}")
 MAX_HEARTBEAT_AGE_SECONDS = 10.0
+DOCKER_PLATFORMS = ("linux/arm64", "linux/amd64")  # the only platforms a release pins; arm64 first is the Mac
+HOST_SYSTEMS = {"Darwin": "linux", "Linux": "linux"}  # Docker Desktop and the VPS both run Linux containers
+HOST_MACHINES = {"arm64": "arm64", "aarch64": "arm64", "amd64": "amd64", "x86_64": "amd64"}
 
 
 @dataclass(frozen=True)
@@ -92,7 +96,7 @@ class RelayApplicationDefinition:
     record_sha256: str
     price_snapshot: bytes  # the provider price the record names by `price_snapshot_sha256`
     response_format: Mapping[str, Any] | None  # the output schema the record names by `response_format_sha256`
-    image: str  # the pinned Hermes job image by its Docker image id `sha256:<64 hex>`, the id the operator launches
+    images: tuple[tuple[str, str], ...]  # exactly one Docker image id `sha256:<64 hex>` per admitted platform
     channel_root: str  # this application's job channel under the relay
     global_cap_usd: Decimal  # every owner together
     owner_cap_usd: Decimal  # each owner on their own
@@ -118,7 +122,8 @@ RELEASE_DEFINITIONS: tuple[RelayApplicationDefinition, ...] = (RelayApplicationD
     price_snapshot=(b'{"completion_usd_per_million":"10","model":"openai/gpt-6.1-sol","prompt_usd_per_million":"2",'
                     b'"provider":"openai"}'),
     response_format=interpretation_response_format(),
-    image="sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0",
+    images=(("linux/arm64", "sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0"),
+            ("linux/amd64", "sha256:224ede5ab50f69f4a73bcce46a054140b20e2337ead5684147df062879b2f0e1")),
     channel_root="edge-os-research",
     global_cap_usd=Decimal("2.00"),  # the one shared USD 2.00 model and data ceiling, not a Hermes allocation
     owner_cap_usd=Decimal("2.00"),
@@ -211,6 +216,45 @@ def _price(definition: RelayApplicationDefinition, actual: ActualRelease, expect
                       _rate(snapshot, "completion_usd_per_million", ceiling.get("completion")))
 
 
+def _pinned_images(definition: RelayApplicationDefinition) -> dict[str, str]:
+    """Exactly one valid Docker image id for each admitted platform, and no other key."""
+    given = definition.images
+    if not isinstance(given, tuple) or len(given) != len(DOCKER_PLATFORMS):
+        raise _Refused("the job images must name exactly linux/arm64 and linux/amd64, one Docker image id each")
+    chosen: dict[str, str] = {}
+    for entry in given:
+        if (not isinstance(entry, tuple) or len(entry) != 2 or entry[0] not in DOCKER_PLATFORMS
+                or entry[0] in chosen or not isinstance(entry[1], str) or not IMAGE_ID.fullmatch(entry[1])):
+            raise _Refused("each job image must be a Docker image id (sha256:<64 hex>) for linux/arm64 or linux/amd64")
+        chosen[entry[0]] = entry[1]
+    if set(chosen) != set(DOCKER_PLATFORMS):
+        raise _Refused("the job images must name exactly linux/arm64 and linux/amd64, one Docker image id each")
+    return chosen
+
+
+def image_for_platform(definition: RelayApplicationDefinition, target_platform: str) -> str:
+    """The Docker image id this release pins for `target_platform`; any other platform is refused."""
+    images = _pinned_images(definition)
+    if not isinstance(target_platform, str) or target_platform not in images:
+        raise _Refused(f"this release pins no job image for platform {target_platform!r}; it admits linux/arm64 and "
+                       "linux/amd64 only")
+    return images[target_platform]
+
+
+def _docker_platform(system: str, machine: str) -> str:
+    """This host's Docker platform (`linux/arm64` or `linux/amd64`); another system or architecture is refused."""
+    host_system, host_machine = HOST_SYSTEMS.get(system), HOST_MACHINES.get(machine)
+    if host_system is None or host_machine is None:
+        raise _Refused(f"this host platform {system}/{machine} is not one this release pins; it admits linux/arm64 and "
+                       "linux/amd64 only")
+    return f"{host_system}/{host_machine}"
+
+
+def _host_platform() -> str:
+    """The host platform read from code, never from an environment value or a file."""
+    return _docker_platform(platform.system(), platform.machine())
+
+
 def bind_release(definition: RelayApplicationDefinition) -> HermesApplicationRelease:
     """The one release this definition serves. Pure: reads nothing but the definition. Raises `MountRefused`.
 
@@ -236,9 +280,7 @@ def bind_release(definition: RelayApplicationDefinition) -> HermesApplicationRel
         extra["response_format"] = _owned(schema)
     elif definition.response_format is not None:
         raise _Refused("the release record sends no output schema, so the definition names none")
-    if not isinstance(definition.image, str) or not IMAGE_ID.fullmatch(definition.image):
-        raise _Refused("the job image must be named by its Docker image id (sha256:<64 hex>), not a tag or a registry "
-                       "digest reference")
+    image = image_for_platform(definition, _host_platform())  # the id for this host; arm64 stays the Mac's id
     channel = definition.channel_root
     if not isinstance(channel, str) or not relay_admission.IDENTIFIER.fullmatch(channel):
         raise _Refused("the channel root must be 1-64 letters, digits or ._:-")
@@ -256,7 +298,7 @@ def bind_release(definition: RelayApplicationDefinition) -> HermesApplicationRel
         policy=GuardPolicy(model=release.model, max_output_tokens=release.max_output_tokens,
                            max_request_bytes=release.max_request_bytes,
                            max_envelope_chars=DEFAULT_POLICY.max_envelope_chars, required_extra=extra),
-        config=config, image=definition.image, channel_root=definition.channel_root, limits=limits,
+        config=config, image=image, channel_root=definition.channel_root, limits=limits,
         required_extra_sha256=hashlib.sha256(_canonical(extra)).hexdigest())
 
 
@@ -381,7 +423,7 @@ def _handoff(path: Path, expected_sha256: str, release: HermesApplicationRelease
     image = handoff["image"]
     if (not isinstance(image, dict) or set(image) != {"reference", "id"} or not isinstance(image["reference"], str)
             or not IMAGE_REFERENCE.fullmatch(image["reference"]) or image["id"] != release.image):
-        raise _Refused("the operator handoff must start this release's exact Docker image id")
+        raise _Refused("the operator handoff image id is not this release's pinned id for this host platform")
     if handoff["shutdown_owner"] != "relay_operator":
         raise _Refused("the relay operator must own shutdown; this application never stops the relay")
     given = handoff["endpoint"]

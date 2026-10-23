@@ -307,7 +307,7 @@ def shaped(image_id: str, env, migrated, pg, run_id: str, evidence_root: Path, r
     ca = b"SYNTHETIC CA bundle"
     changes = dict(getattr(request, "param", {}))
     record_changes = changes.pop("record_fields", {})
-    given = definition(image=image_id, **changes, record_fields={
+    given = definition(images=(("linux/arm64", image_id), ("linux/amd64", image_id)), **changes, record_fields={
         "release_id": RELEASE_ID, "ca_bundle_sha256": hashlib.sha256(ca).hexdigest(),
         "prompt_cache_options": dict(CACHE), "allowed_fields": list(CACHED_FIELDS), **record_changes})
     monkeypatch.setattr(composition, "RELEASE_DEFINITIONS", (given,))

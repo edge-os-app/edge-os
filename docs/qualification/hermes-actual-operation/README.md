@@ -97,3 +97,29 @@ Shutdown: only the operator stops, restarts or removes relay, gateway, stand-in,
 ## 6. Checks
 
 Focused, no Docker: `tests/hermes_provider_relay/test_relay_operator.py -k "not test_docker_"` (stateful fake `docker`: names, ids, labels, mounts and name conflicts; synthetic key, record and CA). Docker checks need a separate capacity grant: `test_docker_the_cli_runs_the_e1_relay_from_the_handoff_restarts_and_stops_with_nothing_left` starts an owned AUTHORED E1 operation through the CLI, runs one turn from the handoff, restarts the relay through the CLI (records unchanged, no new stand-in receipt), stops it and checks that nothing labelled is left.
+
+## 7. VPS (linux/amd64) build and the platform-pinned image id
+
+The approved application release pins exactly two Docker image ids, keyed by platform. The Mac (arm64) id is
+`sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0` (tag `edge-os-p05-hermes:l1live7c0d2edb1`).
+The VPS (amd64) id is `sha256:224ede5ab50f69f4a73bcce46a054140b20e2337ead5684147df062879b2f0e1`. Binding reads the host
+platform from code and selects that platform's id. An unknown platform, a third platform, or any id outside the pair is
+refused with a named reason. The image id never comes from an environment value or a file; the operator configuration
+only names it, and the application refuses a handoff with any id other than the host's pinned id.
+
+Build the amd64 image on the VPS from tracked source only:
+
+```
+mkdir -p <context>/hermes-agent
+COPYFILE_DISABLE=1 git -C <hermes checkout> archive --format=tar 54bc5e509c985f37265c3d416bd2c64b10fc77ba | tar -x -C <context>/hermes-agent
+cp scripts/hermes_interpretation/Dockerfile scripts/hermes_interpretation/hermes_turn_job.py <context>/
+find <context> -name '._*' -delete
+docker build -t edge-os-p05-hermes:<run id> <context>
+docker image inspect edge-os-p05-hermes:<run id> --format '{{.Id}}'
+```
+
+`COPYFILE_DISABLE=1` or the `find ... -delete` step must remove the macOS `._*` files before the build; a `._*` file in
+the context changes the context the image records. The build prints `PINNED_HERMES_IMPORT_OK`. The expected id is the
+amd64 id above. Compare `/opt/p05/hermes_turn_job.py` in that image with `scripts/hermes_interpretation/hermes_turn_job.py`
+in this candidate and report any difference: the arm64 image was built on 2026-10-15, so its job file can be older. The
+image is a separate pinned field; `record_sha256`, prices, caps and every other release field stay unchanged.
