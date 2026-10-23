@@ -395,11 +395,13 @@ docker logs --tail 100 "$W" 2>&1 | grep EXECUTION_BOOTSTRAP_ || echo "no bootstr
 ```
 
 A healthy worker with no `EXECUTION_BOOTSTRAP_*` line means admission passed. Any refusal line names the failed
-condition; fix that condition and redeploy. The API service must still show none of the six execution names:
+condition; fix that condition and redeploy. The API service keeps its own pinned `EDGE_OS_EXECUTION_MODE=unavailable`
+and must show none of the five signing names:
 
 ```sh
 running "$A" && docker inspect "$A" --format '{{range .Config.Env}}{{println .}}{{end}}' \
-  | grep -E '^EDGE_OS_EXECUTION_(PRIVY_APP_SECRET|AUTHORIZATION_KEY_PATH)=' || echo "API holds no signing setting"
+  | grep -E '^EDGE_OS_EXECUTION_(PRIVY_APP_ID|PRIVY_APP_SECRET|AUTHORIZATION_KEY_PATH|SERVER_WALLET_ID|MONAD_RPC_URL)=' \
+  || echo "API holds no signing setting"
 ```
 
 ## 5. Backups and the restore drill

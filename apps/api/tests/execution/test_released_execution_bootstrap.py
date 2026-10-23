@@ -367,8 +367,8 @@ def record_v2(*, execution_id: str, execution_sha: str) -> dict:
             "h10_backup_restore": {"path": "docs/qualification/hosted-gates/H10.md", "sha256": "e" * 64},
         },
         "image_digests": {"api": "sha256:" + "f" * 64},
-        "valid_from": "2026-01-01T00:00:00Z",
-        "valid_until": "2027-01-01T00:00:00Z",
+        "valid_from": "2020-01-01T00:00:00Z",
+        "valid_until": "2099-01-01T00:00:00Z",
         "execution_release": {"release_id": execution_id, "sha256": execution_sha},
     }
 
