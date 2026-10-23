@@ -6,15 +6,10 @@ key or VPS access was used. Both registries (`APPROVED_HOSTED_DEPLOYMENTS`, `APP
 
 ## 1. What this lane is waiting for
 
-**Review:** round 5 is running on the head of `cloud/hosted-record-v2` (the commit that adds this text).
+**Review: done.** Both independent round-5 reviewers PASSED the same commit, **`056dd65`**, the final reviewed
+candidate. The commit that adds this text changes only this status file.
 
-- Round 4 at `7ca2a4f`: both reviewers FAILED it on one defect. The runbook's `must_fail` still counted a Docker CLI
-  failure (exit code 1: empty, missing or stopped container) as "blocked".
-- The repair: a pass now needs the probe's own exit code 42, which the probe returns only on a connection timeout.
-  The probe must also run in a container that was selected (`READY=1`) and is running. A refused connection, a DNS
-  error or a missing command now fails.
-
-If both new reviewers pass the same commit, the lane is done; otherwise the lane repairs and reviews again.
+The lane is not blocked.
 
 **One builder decision (it does not block this lane): the host research worker's loopback database route.**
 `core/settings.py` still refuses a loopback database host in production (`database_url: production needs a hosted
@@ -30,9 +25,9 @@ widen a production refusal without approval.
 
 ## 2. Candidate, files, tests, verdicts
 
-- **Candidate:** the head of `cloud/hosted-record-v2` that adds this text (round 5). The RED tests are commit
+- **Final reviewed candidate:** `056dd65`. The branch head after it adds only this status file. The RED tests are commit
   `46c95a5` (tests only), followed by `4897972`, `c1c67f5`, `7f450ce`, `dccb7b5` (this status file only),
-  `7ca2a4f` and the round-4 repair.
+  `7ca2a4f` and `056dd65` (the round-4 repair).
 - **Files changed (since 82290e2):**
   - `apps/api/src/edge_os_api/core/hosted_deployment.py`
   - `apps/api/src/edge_os_api/core/settings.py`: the production-gate lines only. The `wallet_provider` line and the
@@ -66,7 +61,7 @@ widen a production refusal without approval.
   | 2 | `c1c67f5` | FAIL: the firewall unit's `ConditionPathExists` let Docker start without rules | FAIL: same finding |
   | 3 | `7f450ce` | FAIL: runbook container selection and false-pass checks | PASS (non-blocking findings only) |
   | 4 | `7ca2a4f` | FAIL: `must_fail` counted a Docker CLI failure as blocked | FAIL: same finding |
-  | 5 | the round-4 repair | pending | pending |
+  | 5 | `056dd65` | **PASS** (non-blocking findings only) | **PASS** (non-blocking findings only) |
 
   After round 1 both reviewers passed, but the hardening they suggested was applied anyway, which is why round 2
   ran. Round 2's blocking finding is fixed in `7f450ce`. The round-3 repair adds runbook §1a: containers are
@@ -86,7 +81,19 @@ widen a production refusal without approval.
   - a root-owned firewall script at `/usr/local/sbin/edge-os-egress-firewall`
   - notes that reload cuts open connections and that the stack runs once per host
 
-- **Non-blocking follow-ups (not done here):**
+- **Non-blocking follow-ups (not done here).** These are the round-5 findings, all non-blocking; fixing them
+  would reopen the review of `056dd65`:
+  - Add `enable_ipv6: false` to the `private` network, matching `egress` and `hostdb`; runbook §4.1 says "both
+    networks".
+  - Also flush the `private` subnet from conntrack in `apply` (`10.203.0.64`, `--mask-src 255.255.255.192`).
+  - Probe the fixed `private` gateway `10.203.0.65` directly, or print FAIL when no gateway is reported, so the
+    check never silently skips.
+  - Make the §2 "must be equal" alias comparison print an explicit pass or FAIL.
+  - State that `SH_PROBE` takes IP literals only.
+  - Log a warning when a host resolves to no address in `refresh`.
+  - Add a local `pg_isready -h 127.0.0.1 -p 5432` check to §3.
+
+  Earlier rounds also left these:
   - Match the reserved database host on its first DNS label, so `postgres.coolify` is also refused.
   - Have `refresh` re-run `apply` if a firewall reload removed the hook, or state that firewalld must not be used.
   - Have the execution runtime check that it runs the record's bound release, and update the stale "local and test
