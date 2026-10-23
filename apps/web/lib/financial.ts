@@ -1,6 +1,9 @@
 /** Client types and calls for the connected financial journey (#58). Every call is owner-scoped on the server. */
 import { request } from "./api";
 
+/** Monad mainnet block explorer. The app trades on chain 143. */
+export const MONAD_EXPLORER_BASE = "https://monadscan.com";
+
 export interface Amount { asset_id: string; raw: string; decimals: number }
 
 export interface FundingFlow {
@@ -110,11 +113,14 @@ export interface ActionDetail {
     actual_output?: Amount | null; actual_gas?: Amount | null; source_ref?: string; [key: string]: unknown } }[];
   attempts: { attempt_id: string; state: string; outcome: string | null; detail: string | null;
     content: { original_references?: Record<string, string | null>; original_transaction?: OriginalTransaction | null } }[];
+  refusal: WalletPolicyRefusal | null;
   recovery: { state: string; blocking_reason: string | null } | null;
 }
 
 export interface Stop { stop_id: string; scope: string; mode: string; trigger: string; position_id: string | null; created_at: string }
 export interface Removal { request_id: string; state: string; reason: string; requested_at: string; updated_at: string; evidenced_signer: string | null }
+/** The newest attempt's definite refusal, when the API classifies one. */
+export interface WalletPolicyRefusal { reason: string; message: string }
 
 /** P27 LOCAL recurring operation: one explicit deployment per adopted consent and its durable projection. */
 export interface RecurringDeployment {
