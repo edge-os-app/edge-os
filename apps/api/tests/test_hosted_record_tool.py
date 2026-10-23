@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -142,6 +143,59 @@ def test_a_gate_path_outside_the_record_directory_is_refused(tmp_path: Path,
     assert code == 1
     assert output == ""
     assert "h1_egress" in error and "docs/qualification/" in error
+
+
+def test_an_absolute_gate_path_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    value = values(tmp_path)
+    value["host_gates"]["h1_egress"]["path"] = "/etc/hosts"
+    code, output, error = run(tmp_path, value, capsys)
+    assert code == 1
+    assert output == ""
+    assert "h1_egress" in error and "docs/qualification/" in error
+
+
+def test_a_gate_symlink_that_leaves_the_root_is_refused(tmp_path: Path,
+                                                        capsys: pytest.CaptureFixture[str]) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.md"
+    outside.write_bytes(b"# outside\n")
+    value = values(tmp_path)
+    link = tmp_path / f"{GATE_DIR}/h1_egress.md"
+    link.unlink()
+    os.symlink(outside, link)
+    code, output, error = run(tmp_path, value, capsys)
+    assert code == 1
+    assert output == ""
+    assert "h1_egress" in error and "leaves the repository" in error
+    assert outside.read_bytes() == b"# outside\n"
+
+
+def test_a_declared_gate_hash_that_is_not_lower_case_hex_is_refused(tmp_path: Path,
+                                                                    capsys: pytest.CaptureFixture[str]) -> None:
+    for declared in ("é" * 64, "a" * 63, "A" * 64):
+        value = values(tmp_path)
+        value["host_gates"]["h1_egress"]["sha256"] = declared
+        code, output, error = run(tmp_path, value, capsys)
+        assert code == 1
+        assert output == ""
+        assert "h1_egress" in error and "SHA-256" in error
+
+
+def test_an_oversized_values_file_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    path = tmp_path / "values.json"
+    path.write_bytes(b"{" + b" " * (hosted_deployment.MAX_RECORD_BYTES + 1))
+    code, output, error = invoke(["--values", str(path), "--root", str(tmp_path)], capsys)
+    assert code == 1
+    assert output == ""
+    assert "hosted_record_values_too_large" in error
+
+
+def test_an_oversized_gate_file_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    value = values(tmp_path)
+    (tmp_path / value["host_gates"]["h1_egress"]["path"]).write_bytes(b"x" * (hosted_record_tool.MAX_GATE_BYTES + 1))
+    code, output, error = run(tmp_path, value, capsys)
+    assert code == 1
+    assert output == ""
+    assert "h1_egress" in error and "hosted_record_gate_too_large" in error
 
 
 def test_it_never_writes_a_file_or_changes_the_registry(tmp_path: Path,

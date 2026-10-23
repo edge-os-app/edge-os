@@ -452,7 +452,8 @@ The tool writes nothing and uses no network. It:
 3. builds the canonical record and validates it with the production parser in `core.hosted_deployment`;
 4. prints three lines: the canonical record JSON, `sha256 <64 hex>`, and the exact registry line.
 
-An exit code of 1 is a refusal. The message names the code and never a field value.
+An exit code of 1 is a refusal. The message names the code and never a field value. The tool reads at most 64 KiB for
+the values file and 1 MiB for each gate file, and refuses a larger file.
 
 ### 8.3 Register
 
