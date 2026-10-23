@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -779,12 +780,14 @@ class ConnectedExecution:
                                                wallet_id=agent.wallet_id, network_id=agent.network_id,
                                                position_id=intent.position_id, operation=intent.operation)
 
+        steps = None if runtime is None else runtime.steps
         if runtime is not None:
-            clients = runtime.clients(self._factory, context, current_controls, role=self._ports.role)
+            clients = runtime.clients(self._factory, context, current_controls, role=self._ports.role,
+                                      steps=steps)
         assert clients is not None
         return OriginalTransactionTransport(context, clients, profile, controls=current_controls,
             clock=lambda: self._clock(), binding=None if runtime is None else runtime.binding,
-            synthetic_bindings=None if runtime is None else runtime.synthetic_bindings)
+            synthetic_bindings=None if runtime is None else runtime.synthetic_bindings, steps=steps)
 
     def _release_unsent(self, job: EvaluationJobRow, outcome: str, reason: str | None) -> None:
         """End a job whose admitted action was never submitted, releasing it through the accepted cancellation.
@@ -884,10 +887,11 @@ class ConnectedExecution:
     def _reconcile_original(self, owner_id: uuid.UUID, intent: IntentRow,
                             envelope: dict[str, Any]) -> ReconcileView:
         """Settle an original transaction only from an independent receipt bound to its saved identity."""
-        if envelope.get("stage") == "REFUSED_UNSENT" or (envelope.get("in_flight") and not envelope.get(
-                "transaction_hash")):
-            # A proved refusal is already settled, and an attempt still in flight has no identity to observe yet:
-            # neither gets new evidence, so nothing interrupts or rewrites the original.
+        if envelope.get("stage") == "REFUSED_UNSENT" or (envelope.get("in_flight") and (
+                "steps" in envelope or not envelope.get("transaction_hash"))):
+            # A proved refusal is already settled. An attempt still in flight has no final identity to observe yet;
+            # with steps it may also hold an approve that was sent but whose revoke is not, so no concurrent
+            # reconcile may end it. Neither gets new evidence, so nothing interrupts or rewrites the original.
             case = self._services.recovery.status(owner_id, intent.action_id)
             return ReconcileView(action_id=intent.action_id, receipt_outcome="NOT_OBSERVED", case_state=case.state,
                                  decision_status=case.decision_status, applied=False, duplicate=False,
@@ -920,7 +924,35 @@ class ConnectedExecution:
             actual_input=verdict.actual_input if outcome == "CONFIRMED" else None,
             actual_output=verdict.actual_output if outcome == "CONFIRMED" else None,
             actual_gas=verdict.actual_gas if known else None, source_ref=reading.source_ref[:200])
-        return self._apply(owner_id, intent.action_id, evidence, outcome)
+        result = self._apply(owner_id, intent.action_id, evidence, outcome)
+        if "steps" in envelope and known:
+            try:
+                from edge_os_api.recovery.allowance import read_revoke_receipt
+                proof = read_revoke_receipt(envelope, observer)
+            except Exception:  # a display proof never blocks the settled economic outcome
+                proof = None
+            if proof is not None:
+                self._save_allowance_proof(intent.owner_id, intent.action_id, proof)
+        return result
+
+    def _save_allowance_proof(self, owner_id: uuid.UUID, action_id: str, proof: dict[str, Any]) -> None:
+        """Keep the receipt-proved allowance beside the saved step records. Best effort; the saved records stay."""
+        try:
+            with self._factory() as session:
+                attempt = session.execute(select(SubmissionAttemptRow).where(
+                    SubmissionAttemptRow.owner_id == owner_id,
+                    SubmissionAttemptRow.action_id == action_id)
+                    .order_by(SubmissionAttemptRow.started_at.desc()).limit(1)).scalar_one_or_none()
+                if attempt is None:
+                    return
+                original = dict(attempt.content.get("original_transaction") or {})
+                if "steps" not in original:
+                    return
+                original["allowance_receipt"] = proof
+                attempt.content = {**attempt.content, "original_transaction": original}
+                session.commit()
+        except SQLAlchemyError:
+            return
 
 
 def build_worker_ports(settings: Settings, factory: sessionmaker[Session] | None,

@@ -45,6 +45,7 @@ from edge_os_api.execution.operating_release import (
     ReleaseRefused,
     release_sha256,
 )
+from edge_os_api.execution.original_transaction import TradeSteps
 from edge_os_api.execution.privy_signer import make_p256_authorizer
 from edge_os_api.research_history.http_clients import StdlibHttpTransport
 from edge_os_api.research_history.http_clients.http_transport import HttpTransport
@@ -86,6 +87,8 @@ class ReleaseCandidate:
 
     release: OperatingRelease
     binding: BoundRelease
+    # The exact step plan reviewed with this release. It never comes from an environment value.
+    steps: TradeSteps | None = None
 
 
 @dataclass(frozen=True)
@@ -223,6 +226,14 @@ def build_worker_execution_runtime(*, role: str, settings: Settings,
                                     approval_map, binding_map)
     identity = _check_identity(candidate.binding, worker, expected_identity)
     content = candidate.release.content()
+    if candidate.steps is not None:
+        from edge_os_api.execution.operating_release import release_steps
+
+        steps, route = candidate.steps, content["route"]
+        if (release_steps(candidate.release) != steps.order
+                or steps.input_asset_id != route["input_asset"]["asset_id"]
+                or steps.gas_limits["swap"] != content["gas"]["gas_limit"]):
+            raise ExecutionBootstrapRefused("EXECUTION_BOOTSTRAP_STEPS_MISMATCH")
     if content["quote"].get("source") != "DIRECT_V2_PROGRAM":
         # The approved release fixes every endpoint; a quote token has no worker setting, so a token-bearing
         # release cannot be composed here.
@@ -239,5 +250,5 @@ def build_worker_execution_runtime(*, role: str, settings: Settings,
 
     runtime = ControlledRuntime(binding=candidate.binding, http=StdlibHttpTransport() if http is None else http,
                                 quote_token=None, signer_access=signer_access, clock=clock,
-                                synthetic_bindings=synthetic)
+                                synthetic_bindings=synthetic, steps=candidate.steps)
     return WorkerExecutionRuntime(agent_id=identity["agent_id"], runtime=runtime)
