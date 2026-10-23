@@ -451,3 +451,83 @@ cd apps/api && .venv/bin/python -m pytest -q tests/execution/test_inapp_trade_re
 ```
 
 The recovery test needs Docker for its PostgreSQL container.
+
+## A5 server-wallet binding, local only
+
+Task `WALLET-BINDING-L4-20261023`. This section covers the local binding of the release wallet above. It grants no
+provider call, signing, trade or production authority. The base is `82290e2`.
+
+### Configuration
+
+- `wallet_provider=privy_server` is local and test only. The existing production rule still refuses every provider
+  other than `unavailable`.
+- The API uses the private Unix socket in `EDGE_OS_PRIVY_SERVER_SOCKET`. The API holds no Privy app secret.
+- The separate lookup process starts with
+  `python -m lookup_server <socket_path> --server-wallet-release docs/qualification/inapp-trade/release.authored.json`
+  and reads `PRIVY_APP_ID` and `PRIVY_APP_SECRET` only in its own environment.
+- `wallet_provider=privy_server` must not set `EDGE_OS_WALLET_LOOKUP_SOCKET`. The existing rule refuses that pair,
+  because the browser-owner lookup would replace the server-wallet provider.
+
+### Read and exact match
+
+The lookup process makes one fixed, read-only `GET https://api.privy.io/v1/wallets/{wallet_id}` with the release
+wallet id. It accepts a wallet object only when all of these hold:
+
+| Field | Required value |
+| --- | --- |
+| `id` | release `wallet_id` (`bsb2feecuxl81dl5jz4u9xxo`) |
+| `chain_type` | `ethereum` |
+| `address` | release `wallet_address`, compared without letter case |
+| `policy_ids` | exactly `[release.policy_id]` |
+| `owner_id` | release `policy_owner_id` (the builder-owned key quorum) |
+| `additional_signers` | exactly `[{"signer_id": release.signer_id, "override_policy_ids": [release.policy_id]}]` |
+
+The allowed optional fields are `created_at`, `entity`, `external_id`, `display_name`, `exported_at` and
+`imported_at`, and each must have the documented type. `exported_at` and `imported_at` must be null: an exported
+key is outside Privy policy enforcement, and this wallet was created, not imported. A missing identity field, an
+extra field, an unknown shape, a non-200 status, a redirect, a timeout or any provider error refuses the lookup.
+A refusal is never `WALLET_BOUND`; the setup stays `UNKNOWN`.
+The process also answers `lookup_embedded_wallet`; the `bind_server_wallet` operation exists only when it
+starts with `--server-wallet-release`.
+
+The `owner_id` = `policy_owner_id` and `additional_signers` =
+`[{signer_id, override_policy_ids: [policy_id]}]` mapping follows the recorded creation state in
+`ROOT/.scratch/trade-prep-20261021/PRIVY_SETUP1_RECORD.md` and `PRIVY_SETUP1.json`: wallet owner and policy owner
+`a5gwmgrsn6903ac09lphyv9a`, policy `c30racyru6duaipj815cvjce`, signer `zu1qjdfqlbcq1ct7sdxendgg` with override
+policy `c30racyru6duaipj815cvjce`. The executor signer override is the control that limits the agent signer, so a
+missing, empty or different override refuses. The first live read must confirm the mapping. A different live
+record is refused; it is not a reason to relax the check.
+
+### Release binding hash
+
+The lookup process computes one SHA-256 over this canonical JSON, with sorted keys and no spaces:
+
+```json
+{"chain_id":143,"chain_type":"ethereum","policy_id":"<policy_id>","policy_owner_id":"<policy_owner_id>","release_id":"<release_id>","signer_id":"<signer_id>","wallet_address":"<lowercase address>","wallet_id":"<wallet_id>"}
+```
+
+The `WALLET_BOUND` evidence for the server wallet carries `wallet_id`, `owner_id`, `chain_type`, `address` and
+`release_binding_sha256`. The fixture and `unavailable` providers keep their previous three evidence fields byte for
+byte. A worker path can recompute the hash from the release and compare it before it uses the address.
+
+### Limits
+
+- The provider keeps the verified owner of a created wallet in process memory. A fresh process that starts from a
+  retained wallet id has no owner and stays `UNKNOWN`. It never binds on a guessed owner.
+- The server-wallet path binds on `dispatch`; a browser completion without an initial create cannot supply the
+  owner. This is local single-builder use, not a caller allowlist. A DID allowlist is a later ticket.
+- `wallet_setup/recovery.py` is outside this task. Its `RECONCILED` event can bind the same verified wallet without
+  `release_binding_sha256`. A worker check must read both `WALLET_BOUND` and `RECONCILED`, or a later authorized
+  ticket must add the hash on that path.
+- No test makes a network, provider, credential, signing or wallet call. The fake reply shape follows the Privy
+  wallet object (`GET /v1/wallets/{id}`) from Context7.
+- Production admission needs hosted record schema v2 with `execution_release`. A4/A7 own that work.
+
+### Checks
+
+```sh
+cd apps/api && .venv/bin/python -m pytest -q \
+  tests/test_privy_server_wallet_binding.py \
+  tests/wallet_setup/test_server_wallet_evidence.py \
+  tests/execution/test_server_wallet_release_binding.py
+```
