@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 import rpc_relay as relay
-from conftest import SENTINEL_HOST, SENTINEL_KEY, SENTINEL_URL
+from relay_support import SENTINEL_HOST, SENTINEL_KEY, SENTINEL_URL
 
 SECRETS = (SENTINEL_KEY, SENTINEL_HOST, SENTINEL_URL)
 
@@ -330,7 +330,6 @@ def test_a_request_that_is_not_one_plain_call_is_refused(body):
     b"", b"{", b"\xff\xfe", b'{"jsonrpc":"2.0","id":1,"id":2,"method":"eth_chainId","params":[]}',
     b'{"jsonrpc":"2.0","id":NaN,"method":"eth_chainId","params":[]}',
     b'{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[Infinity]}',
-    b"[" * 5000 + b"]" * 5000,
 ])
 def test_unparseable_bodies_are_refused(body):
     upstream = FakeUpstream()
@@ -338,6 +337,14 @@ def test_unparseable_bodies_are_refused(body):
     assert reply.status == 400
     assert error_of(reply)["code"] == -32700
     assert upstream.bodies == []
+
+
+@pytest.mark.parametrize("body", [b"[" * 16000 + b"]" * 16000, b'{"a":' * 6000 + b"1" + b"}" * 6000,
+                                  b'{"jsonrpc":"2.0","id":1,"method":"eth_call","params":' + b"[" * 16000 + b"]" * 16000 + b"}"])
+def test_deep_nesting_is_refused_without_a_crash(body):
+    upstream = FakeUpstream()
+    reply = make_core("observer", upstream).handle(body)
+    assert reply.status in (400, 413) and upstream.bodies == []
 
 
 def test_a_string_id_is_kept():

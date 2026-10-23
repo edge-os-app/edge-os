@@ -6,13 +6,14 @@ import http.client
 import json
 import socket
 import threading
+import time
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
 
 import rpc_relay as relay
-from conftest import SENTINEL_HOST, SENTINEL_KEY, SENTINEL_URL
+from relay_support import SENTINEL_HOST, SENTINEL_KEY, SENTINEL_URL
 from test_rpc_relay_core import FakeUpstream, assert_no_secret, call
 
 
@@ -131,7 +132,7 @@ def test_chunked_bodies_are_refused(served):
     assert upstream.bodies == []
 
 
-@pytest.mark.parametrize("length", ["-1", "abc", "1e3", " 5", "99999999999999999999"])
+@pytest.mark.parametrize("length", ["-1", "abc", "1e3", "+5", "0x10", "5 5", "99999999999999999999"])
 def test_a_bad_content_length_is_refused(served, length):
     port, upstream, _ = served()
     reply = raw_request(port, (f"POST /rpc HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
@@ -346,3 +347,21 @@ def test_the_upstream_client_never_follows_a_redirect():
     finally:
         FakeConnection.__init__ = original  # type: ignore[method-assign]
     assert reply.status == 301 and len(FakeConnection.instances) == 1
+
+
+def test_open_connections_are_capped(served, monkeypatch):
+    monkeypatch.setattr(relay, "MAX_CONNECTIONS", 1)
+    port, upstream, logs = served()
+    idle = socket.create_connection(("127.0.0.1", port), timeout=5)  # holds the one slot: it never sends a request
+    try:
+        second = raw_request(port, b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        assert second == b""
+        assert logs[-1]["outcome"] == "connection_refused"
+    finally:
+        idle.close()
+    for _ in range(100):
+        if request(port, method="GET", path="/healthz")[0] == 200:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("the slot was not released")

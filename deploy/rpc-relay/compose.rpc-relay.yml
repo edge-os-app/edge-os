@@ -1,0 +1,91 @@
+# Edge OS keyless /rpc relay: its own Coolify Docker Compose resource on the builder's Contabo VPS.
+#
+# It is deliberately NOT part of compose.coolify.yml. Coolify can write every variable of a resource into one shared
+# runtime file; keeping the relay separate keeps the provider URL (which holds the key) out of the application stack
+# and out of the execution worker's environment. The worker sees only the keyless names below.
+#
+#   https://rpc-a.edgeos.fun/rpc -> port 8545, role observer  (quote, observer and dry-run reads)
+#   https://rpc-b.edgeos.fun/rpc -> port 8546, role broadcast (eth_sendRawTransaction and its two reads)
+#
+# Coolify's Traefik terminates TLS with Let's Encrypt (resolver `letsencrypt`, entrypoint `https`) and routes by these
+# labels; leave the Coolify "Domains" field of this service empty so Coolify adds no router of its own. Two gates
+# decide who may call: Traefik admits only EDGE_OS_RPC_RELAY_ALLOWED_SOURCES (the worker's hairpin source, see
+# docs/qualification/inapp-trade/RPC_RELAY.md), and the relay admits only connections from `coolify-proxy`, so no
+# other container on the `coolify` network can call the ports directly.
+#
+# Fail closed: the provider URL, the source commit and the allowed source range are required variables (`:?`).
+# The provider URL lives only in this resource's Coolify environment, never in this file.
+#
+# The image is built from this folder by Coolify (Base Directory `/deploy/rpc-relay`, Compose file
+# `/compose.rpc-relay.yml`) at the exact commit and tagged with it. Its base image is digest-pinned and it installs
+# nothing, so the commit fixes the image contents.
+
+name: edge-os-rpc-relay
+
+services:
+  rpc-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        EDGE_OS_SOURCE_COMMIT: ${EDGE_OS_RPC_RELAY_SOURCE_COMMIT:?set EDGE_OS_RPC_RELAY_SOURCE_COMMIT to the deployed source commit}
+        EDGE_OS_PROFILE: PRODUCTION
+    image: edge-os-rpc-relay:${EDGE_OS_RPC_RELAY_SOURCE_COMMIT:?set EDGE_OS_RPC_RELAY_SOURCE_COMMIT to the deployed source commit}
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    user: "10001:10001"
+    environment:
+      EDGE_OS_RPC_RELAY_UPSTREAM_URL: ${EDGE_OS_RPC_RELAY_UPSTREAM_URL:?set EDGE_OS_RPC_RELAY_UPSTREAM_URL to the provider https URL (secret)}
+      EDGE_OS_RPC_RELAY_TRUSTED_PROXY: coolify-proxy
+    tmpfs: ["/tmp"]
+    mem_limit: 128m
+    mem_reservation: 32m
+    pids_limit: 64
+    expose: ["8545", "8546"]
+    # The proxy network only: Traefik reaches the relay here and the relay reaches the provider through it.
+    networks: [coolify]
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -I
+        - -c
+        - >-
+          import urllib.request as u,sys;
+          sys.exit(0 if all(u.urlopen(url, timeout=3).status == 200 for url in
+          ('http://127.0.0.1:8545/healthz', 'http://127.0.0.1:8546/healthz')) else 1)
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${COOLIFY_NETWORK:-coolify}
+      # Observer and quote: rpc-a.
+      traefik.http.routers.edgeos-rpc-observer.rule: Host(`rpc-a.edgeos.fun`) && Path(`/rpc`) && Method(`POST`)
+      traefik.http.routers.edgeos-rpc-observer.entrypoints: https
+      traefik.http.routers.edgeos-rpc-observer.tls: "true"
+      traefik.http.routers.edgeos-rpc-observer.tls.certresolver: letsencrypt
+      traefik.http.routers.edgeos-rpc-observer.service: edgeos-rpc-observer
+      traefik.http.routers.edgeos-rpc-observer.middlewares: edgeos-rpc-allow,edgeos-rpc-body
+      traefik.http.services.edgeos-rpc-observer.loadbalancer.server.port: "8545"
+      # Broadcast: rpc-b.
+      traefik.http.routers.edgeos-rpc-broadcast.rule: Host(`rpc-b.edgeos.fun`) && Path(`/rpc`) && Method(`POST`)
+      traefik.http.routers.edgeos-rpc-broadcast.entrypoints: https
+      traefik.http.routers.edgeos-rpc-broadcast.tls: "true"
+      traefik.http.routers.edgeos-rpc-broadcast.tls.certresolver: letsencrypt
+      traefik.http.routers.edgeos-rpc-broadcast.service: edgeos-rpc-broadcast
+      traefik.http.routers.edgeos-rpc-broadcast.middlewares: edgeos-rpc-allow,edgeos-rpc-body
+      traefik.http.services.edgeos-rpc-broadcast.loadbalancer.server.port: "8546"
+      # Who may call through Traefik, and the body bound before the relay sees a byte.
+      traefik.http.middlewares.edgeos-rpc-allow.ipallowlist.sourcerange: ${EDGE_OS_RPC_RELAY_ALLOWED_SOURCES:?set EDGE_OS_RPC_RELAY_ALLOWED_SOURCES to the worker's source range}
+      traefik.http.middlewares.edgeos-rpc-body.buffering.maxRequestBodyBytes: "32768"
+
+networks:
+  # Coolify's Traefik network.
+  coolify:
+    external: true
+    name: ${COOLIFY_NETWORK:-coolify}

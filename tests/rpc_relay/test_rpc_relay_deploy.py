@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from conftest import RELAY, REPO
+from relay_support import RELAY, REPO
 
 COMPOSE = RELAY / "compose.rpc-relay.yml"
 DOCKERFILE = RELAY / "Dockerfile"
