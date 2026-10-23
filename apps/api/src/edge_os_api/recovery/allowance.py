@@ -27,7 +27,11 @@ def _reason(step: str, record: Mapping[str, Any]) -> str | None:
 
 
 def allowance_status(envelope: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    """The allowance state from the saved step records; None for an envelope without the three steps."""
+    """The allowance state from the saved step records; None for an envelope without the three steps.
+
+    A bound, final revoke receipt closes the allowance only when the approve was sent and the revoke broadcast
+    returned. Every other reading stays open, so an unproved closed state can never hide the allowance.
+    """
     if not isinstance(envelope, Mapping) or envelope.get("steps") != STEP_ORDER:
         return None
     approve, revoke = _record(envelope, "approve"), _record(envelope, "revoke")
@@ -37,6 +41,12 @@ def allowance_status(envelope: Mapping[str, Any] | None) -> dict[str, Any] | Non
         return {**view, "state": "NOT_APPROVED", "open": False, "reason": _reason("approve", approve)}
     if approve.get("stage") != "BROADCAST_RETURNED":
         return {**view, "state": "APPROVE_UNKNOWN", "open": True, "reason": _reason("approve", approve)}
+    proof = envelope.get("allowance_receipt")
+    if (revoke.get("stage") == "BROADCAST_RETURNED" and isinstance(proof, Mapping)
+            and proof.get("state") in ("CLOSED", "REVOKE_REVERTED") and isinstance(proof.get("open"), bool)):
+        reason = proof.get("reason")
+        return {**view, "state": proof["state"], "open": proof["open"],
+                "reason": reason if isinstance(reason, str) else None}
     if revoke.get("stage") in (None, "NOT_ATTEMPTED", "PREPARED", "REFUSED_UNSENT"):
         state = "REVOKE_NOT_SENT"
     elif revoke.get("stage") == "BROADCAST_RETURNED":
@@ -47,8 +57,12 @@ def allowance_status(envelope: Mapping[str, Any] | None) -> dict[str, Any] | Non
 
 
 def read_revoke_receipt(envelope: Mapping[str, Any], observer: Any) -> dict[str, Any] | None:
-    """Close an unconfirmed revoke only from its own bound receipt; every other reading leaves the allowance open."""
-    from edge_os_api.execution.original_transaction import ReplyLost, RpcError, is_hash
+    """Close an unconfirmed revoke only from its own bound, chain-143, final receipt.
+
+    Every other reading leaves the allowance open: a missing chain identity, a receipt outside the finalized
+    canonical chain, or a malformed identity can never report a closed allowance.
+    """
+    from edge_os_api.execution.original_transaction import ReplyLost, RpcError, _final_block, hex_quantity, is_hash
 
     status = allowance_status(envelope)
     if status is None or status["state"] != "REVOKE_UNCONFIRMED":
@@ -58,18 +72,23 @@ def read_revoke_receipt(envelope: Mapping[str, Any], observer: Any) -> dict[str,
     if not (is_hash(tx_hash) and isinstance(wallet, str) and isinstance(token, str)):
         return status
     try:
+        if hex_quantity(observer.call("eth_chainId", [])) != 143:
+            return status
         receipt = observer.call("eth_getTransactionReceipt", [tx_hash])
-    except (ReplyLost, TimeoutError, OSError, RpcError):
-        return status
-    if not isinstance(receipt, Mapping):
+        if not isinstance(receipt, Mapping):
+            return status
+        finalized = observer.call("eth_getBlockByNumber", ["finalized", False])
+        canonical = observer.call("eth_getBlockByNumber", [receipt["blockNumber"], False])
+    except (ReplyLost, TimeoutError, OSError, RpcError, KeyError, TypeError):
         return status
     bound = (str(receipt.get("transactionHash") or "").lower() == tx_hash.lower()
              and str(receipt.get("from") or "").lower() == wallet.lower()
              and str(receipt.get("to") or "").lower() == token.lower())
-    if not bound:
+    if not bound or not _final_block(receipt, finalized, canonical):
         return status
     if receipt.get("status") == "0x1":
         return {**status, "state": "CLOSED", "open": False}
     if receipt.get("status") == "0x0":
         return {**status, "state": "REVOKE_REVERTED", "open": True}
     return status
+

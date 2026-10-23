@@ -882,10 +882,11 @@ def read_original_receipt(envelope: Mapping[str, Any], observer: RpcClient, *,
                                         expected_tx_hash=tx_hash)
         return ReceiptReading(verdict=verdict, source_ref=source_ref)
 
-    if not valid_identity or "steps" in envelope:
-        # A step action cannot settle from the swap's receipt alone: the approve and revoke gas and the allowance
-        # are not in it. It stays unknown, with its reservations, until a step-aware reading exists.
+    if not valid_identity:
         return normalized(ObservationInput(timeout=True))
+    if "steps" in envelope:
+        return _read_step_receipts(envelope, observer, normalized, wallet, binding=binding,
+                                   synthetic_bindings=synthetic_bindings)
 
     controlled = binding is not None or "binding_sha256" in envelope or "release_sha256" in envelope
     if controlled:
@@ -968,6 +969,115 @@ def read_original_receipt(envelope: Mapping[str, Any], observer: RpcClient, *,
         actual_gas=(AssetAmount(asset_id=gas_asset, raw=charge.raw, decimals=18) if charge is not None else
                     None if gas_used is None or gas_price is None else AssetAmount(
                         asset_id=gas_asset, raw=str(gas_used * gas_price), decimals=18))))
+
+
+# Approve stages that prove the approve was never signed or sent. Anything else after the signer call may have been.
+_NOT_SENT_APPROVE = frozenset({None, "PREPARED", "REFUSED_UNSENT"})
+_NOT_SENT_REVOKE = frozenset({None, "NOT_ATTEMPTED", "PREPARED", "REFUSED_UNSENT"})
+
+
+def _step_sent(step: str, record: Mapping[str, Any]) -> bool:
+    """Whether this step may have reached the signer or the chain and therefore needs its own receipt."""
+    return record.get("stage") not in (_NOT_SENT_REVOKE if step == "revoke" else _NOT_SENT_APPROVE)
+
+
+def _final_block(receipt: Mapping[str, Any], finalized: Any, canonical: Any) -> bool:
+    """The receipt's block is canonical and at or below the finalized boundary, exactly as the charge reader checks."""
+    if not isinstance(finalized, Mapping) or not isinstance(canonical, Mapping):
+        return False
+    number, boundary = hex_quantity(receipt.get("blockNumber")), hex_quantity(finalized.get("number"))
+    block_hash, canonical_hash, finalized_hash = (receipt.get("blockHash"), canonical.get("hash"),
+                                                  finalized.get("hash"))
+    return (is_hash(block_hash) and is_hash(canonical_hash) and is_hash(finalized_hash)
+            and number is not None and boundary is not None and number == hex_quantity(canonical.get("number"))
+            and number <= boundary and block_hash == canonical_hash
+            and (number != boundary or block_hash == finalized_hash))
+
+
+def _read_step_charge(record: Mapping[str, Any], envelope: Mapping[str, Any], observer: RpcClient,
+                      *, route: Mapping[str, Any]) -> int | None:
+    """The full Monad gas charge for one sent approve or revoke, or None when no bound final receipt proves it."""
+    step, unsigned = record.get("step"), record.get("unsigned")
+    tx_hash, wallet = record.get("transaction_hash"), envelope.get("wallet_address")
+    sell = envelope.get("sell") or {}
+    token = sell.get("token") if isinstance(sell, Mapping) else None
+    expected = str(sell.get("raw")) if step == "approve" else "0"
+    if not expected.isdigit():
+        return None
+    if not (step in ("approve", "revoke") and is_hash(tx_hash)
+            and isinstance(wallet, str) and _ADDRESS.fullmatch(wallet) is not None
+            and isinstance(unsigned, Mapping) and isinstance(token, str) and isinstance(sell, Mapping)
+            and str(record.get("token", "")).lower() == token.lower()
+            and str(record.get("amount_raw")) == expected and unsigned.get("chain_id") == 143
+            and str(unsigned.get("to", "")).lower() == token.lower()
+            and str(unsigned.get("data", "")).lower() == approve_calldata(str(record.get("spender", "")),
+                                                                          int(expected))
+            and str(record.get("spender", "")).lower() == str(route["entrypoint_address"]).lower()):
+        return None
+    signed_hash, reasons = validate_signed(record.get("signed_bytes"), unsigned, wallet)
+    if reasons or signed_hash != tx_hash:
+        return None
+    try:
+        receipt = observer.call("eth_getTransactionReceipt", [tx_hash])
+        if not isinstance(receipt, Mapping) or str(receipt.get("transactionHash") or "").lower() != tx_hash.lower():
+            return None
+        if (str(receipt.get("from") or "").lower() != wallet.lower()
+                or str(receipt.get("to") or "").lower() != token.lower()):
+            return None
+        finalized = observer.call("eth_getBlockByNumber", ["finalized", False])
+        canonical = observer.call("eth_getBlockByNumber", [receipt["blockNumber"], False])
+    except (ReplyLost, TimeoutError, OSError, RpcError, KeyError):
+        return None
+    if not _final_block(receipt, finalized, canonical) or receipt.get("status") not in ("0x0", "0x1"):
+        return None
+    limit, cap, priority = (unsigned.get(name) for name in (
+        "gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas"))
+    price, used, base = (hex_quantity(receipt.get("effectiveGasPrice")), hex_quantity(receipt.get("gasUsed")),
+                         hex_quantity(canonical.get("baseFeePerGas")))
+    if (any(type(value) is not int for value in (limit, cap, priority)) or limit <= 0
+            or price is None or used is None or used > limit or base is None or base > cap or priority > cap
+            or price != min(base + priority, cap)):
+        return None
+    return limit * price
+
+
+def _read_step_receipts(envelope: Mapping[str, Any], observer: RpcClient, normalized: Callable[..., ReceiptReading],
+                        wallet: str, *, binding: "BoundRelease | None",
+                        synthetic_bindings: Mapping[str, str] | None) -> ReceiptReading:
+    """Settle a step action only from a bound, final, chain-143 receipt for every sent step and all their gas."""
+    if (binding is None or not isinstance(envelope.get("gas_asset_id"), str)
+            or not isinstance(envelope.get("sell"), Mapping)):
+        return normalized(ObservationInput(timeout=True))
+    try:
+        binding.qualify_original(envelope, synthetic_bindings=synthetic_bindings)
+    except Exception:  # malformed or mismatched saved evidence cannot establish a step receipt identity
+        return normalized(ObservationInput(timeout=True))
+    try:
+        chain_id = hex_quantity(observer.call("eth_chainId", []))
+    except (ReplyLost, TimeoutError, OSError, RpcError):
+        return normalized(ObservationInput(timeout=True))
+    if chain_id != 143:
+        return normalized(ObservationInput(timeout=True))
+    route = binding.release.content()["route"]
+    step_gas = 0
+    for step in ("approve", "revoke"):
+        record = envelope.get(step)
+        record = record if isinstance(record, Mapping) else {}
+        if not _step_sent(step, record):
+            continue
+        gas = _read_step_charge(record, envelope, observer, route=route)
+        if gas is None:
+            return normalized(ObservationInput(timeout=True))
+        step_gas += gas
+    # The swap stays the top-level envelope: its own bound receipt proves the economic effect.
+    swap = {key: value for key, value in envelope.items() if key not in ("steps", "approve", "revoke", "swap")}
+    reading = read_original_receipt(swap, observer, binding=binding, synthetic_bindings=synthetic_bindings)
+    if reading.outcome not in ("CONFIRMED", "REVERTED") or reading.verdict.actual_gas is None:
+        return reading
+    verdict = reading.verdict
+    verdict.actual_gas = AssetAmount(asset_id=str(envelope["gas_asset_id"]),
+                                    raw=str(int(verdict.actual_gas.raw) + step_gas), decimals=18)
+    return ReceiptReading(verdict=verdict, source_ref=reading.source_ref)
 
 
 def _transfers(receipt: Mapping[str, Any], token: str, *, source: str | None = None,

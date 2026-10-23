@@ -443,6 +443,39 @@ to `steps`. `release_steps(release)` returns the named order, or `None` for a si
   at most once, in order. A second run is refused with `ACTION_ALREADY_STARTED`. A step outside the release is
   never prepared.
 
+### Worker step plan wiring (`STEPS-WIRE-L3`)
+
+Task `STEPS-WIRE-L3`, 2026-10-23. This section records how the accepted transport is wired into the bounded worker.
+It adds no authority and registers nothing.
+
+- **The plan travels with the admitted release.** `ReleaseCandidate` carries the exact `TradeSteps` reviewed with
+  its release. `build_worker_execution_runtime` refuses `EXECUTION_BOOTSTRAP_STEPS_MISMATCH` when the plan's order,
+  start asset or swap gas differs from the bound release. The plan never comes from an environment value.
+- **The worker passes the plan to both seams.** `ConnectedExecution._original_transport` gives the same plan to
+  `ControlledRuntime.clients` and `OriginalTransactionTransport`. The client layer refuses a plan that does not
+  match the binding before it mounts any signer or broadcast client.
+- **Each client reads its own step.** With a plan, the signer reads the `APPROVE_SIGN_REQUESTED` or
+  `REVOKE_SIGN_REQUESTED` record that names the exact prefixed request id. The broadcast client reads the record
+  whose stage is `BROADCAST_REQUESTED` for the step that is sending now, then validates its own signed bytes and
+  hash. The swap keeps the top-level records, so a single-action release is unchanged.
+- **Reconcile never ends an attempt with steps in flight.** While an attempt is `IN_FLIGHT`, a step action is
+  reported as `ORIGINAL_IN_FLIGHT`, even after the swap hash exists. A concurrent reconcile therefore cannot end
+  the attempt between the swap and the revoke and leave the allowance open but unrevoked.
+- **Settlement needs every sent step.** A step action settles only from a bound, final, chain-143 receipt for every
+  step that may have been signed or sent. The approve and revoke receipts bind their own signed bytes, token,
+  spender and amount. The swap keeps the accepted bound receipt checks. Settlement charges the full gas limit of
+  every sent step, not only the swap.
+- **Unknown keeps liability.** A missing step hash, a missing receipt, a wrong chain or a receipt outside the
+  finalized canonical chain keeps the action `SUBMISSION_UNKNOWN` with its reservations and allowance held. A
+  reconcile never signs, re-signs, rebroadcasts or replaces a step.
+- **The allowance is always reported.** `allowance_status` derives the state from the saved step records. A
+  receipt-proved `CLOSED` or `REVOKE_REVERTED` state is used only when the approve was sent and the revoke broadcast
+  returned. Every other reading, including a missing proof, stays open. `read_revoke_receipt` checks the chain id
+  `143` and the finalized canonical block before it closes or reports a reverted revoke.
+
+Tests: `tests/execution/test_worker_step_plan.py`, `tests/recovery/test_steps_settlement.py`, and the extended
+allowance tests in `tests/execution/test_approve_swap_revoke.py`. All external replies are local doubles.
+
 ## Checks
 
 ```sh
