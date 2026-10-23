@@ -263,7 +263,8 @@ wallet id. It accepts a wallet object only when all of these hold:
 The allowed optional fields are `created_at`, `entity`, `external_id` and `display_name`, and each must have the
 documented type. A missing identity field, an extra field, an unknown shape, a non-200 status, a redirect, a
 timeout or any provider error refuses the lookup. A refusal is never `WALLET_BOUND`; the setup stays `UNKNOWN`.
-The process also accepts `lookup_embedded_wallet` only when it starts without a release.
+The process also answers `lookup_embedded_wallet`; the `bind_server_wallet` operation exists only when it
+starts with `--server-wallet-release`.
 
 The `owner_id` = `policy_owner_id` and `additional_signers` = `[{signer_id}]` mapping follows the A2 release's single
 builder-owned key quorum and signer. The repository has no live `GET /v1/wallets/{id}` reply for this wallet. The first
@@ -287,6 +288,9 @@ byte. A worker path can recompute the hash from the release and compare it befor
   retained wallet id has no owner and stays `UNKNOWN`. It never binds on a guessed owner.
 - The server-wallet path binds on `dispatch`; a browser completion without an initial create cannot supply the
   owner. This is local single-builder use, not a caller allowlist. A DID allowlist is a later ticket.
+- `wallet_setup/recovery.py` is outside this task. Its `RECONCILED` event can bind the same verified wallet without
+  `release_binding_sha256`. A worker check must read both `WALLET_BOUND` and `RECONCILED`, or a later authorized
+  ticket must add the hash on that path.
 - No test makes a network, provider, credential, signing or wallet call. The fake reply shape follows the Privy
   wallet object (`GET /v1/wallets/{id}`) from Context7.
 - Production admission needs hosted record schema v2 with `execution_release`. A4/A7 own that work.
