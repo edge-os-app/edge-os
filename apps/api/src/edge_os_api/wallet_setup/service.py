@@ -133,7 +133,10 @@ def _creation_request(row: WalletSetupRow) -> CreationRequest:
 
 
 def _evidence_dict(evidence: WalletEvidence) -> dict[str, Any]:
-    return {"owner_id": str(evidence.owner_id), "chain_type": evidence.chain_type, "address": evidence.address}
+    content = {"owner_id": str(evidence.owner_id), "chain_type": evidence.chain_type, "address": evidence.address}
+    if evidence.release_binding_sha256 is not None:
+        content["release_binding_sha256"] = evidence.release_binding_sha256
+    return content
 
 
 def _create_after_intent(session: Any, principal: Principal, row: WalletSetupRow,

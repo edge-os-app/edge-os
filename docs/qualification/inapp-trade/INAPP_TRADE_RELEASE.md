@@ -229,3 +229,73 @@ These items are outside this task and are owned by other lanes:
 ```sh
 cd apps/api && .venv/bin/python -m pytest -q tests/execution/test_inapp_trade_release.py
 ```
+
+## A5 server-wallet binding, local only
+
+Task `WALLET-BINDING-L4-20261023`. This section covers the local binding of the release wallet above. It grants no
+provider call, signing, trade or production authority. The base is `82290e2`.
+
+### Configuration
+
+- `wallet_provider=privy_server` is local and test only. The existing production rule still refuses every provider
+  other than `unavailable`.
+- The API uses the private Unix socket in `EDGE_OS_PRIVY_SERVER_SOCKET`. The API holds no Privy app secret.
+- The separate lookup process starts with
+  `python -m lookup_server <socket_path> --server-wallet-release docs/qualification/inapp-trade/release.authored.json`
+  and reads `PRIVY_APP_ID` and `PRIVY_APP_SECRET` only in its own environment.
+- `wallet_provider=privy_server` must not set `EDGE_OS_WALLET_LOOKUP_SOCKET`. The existing rule refuses that pair,
+  because the browser-owner lookup would replace the server-wallet provider.
+
+### Read and exact match
+
+The lookup process makes one fixed, read-only `GET https://api.privy.io/v1/wallets/{wallet_id}` with the release
+wallet id. It accepts a wallet object only when all of these hold:
+
+| Field | Required value |
+| --- | --- |
+| `id` | release `wallet_id` (`bsb2feecuxl81dl5jz4u9xxo`) |
+| `chain_type` | `ethereum` |
+| `address` | release `wallet_address`, compared without letter case |
+| `policy_ids` | exactly `[release.policy_id]` |
+| `owner_id` | release `policy_owner_id` (the builder-owned key quorum) |
+| `additional_signers` | exactly `[{"signer_id": release.signer_id}]` |
+
+The allowed optional fields are `created_at`, `entity`, `external_id` and `display_name`, and each must have the
+documented type. A missing identity field, an extra field, an unknown shape, a non-200 status, a redirect, a
+timeout or any provider error refuses the lookup. A refusal is never `WALLET_BOUND`; the setup stays `UNKNOWN`.
+The process also accepts `lookup_embedded_wallet` only when it starts without a release.
+
+The `owner_id` = `policy_owner_id` and `additional_signers` = `[{signer_id}]` mapping follows the A2 release's single
+builder-owned key quorum and signer. The repository has no live `GET /v1/wallets/{id}` reply for this wallet. The first
+live read must confirm the mapping. A different live record is refused; it is not a reason to relax the check.
+
+### Release binding hash
+
+The lookup process computes one SHA-256 over this canonical JSON, with sorted keys and no spaces:
+
+```json
+{"chain_id":143,"chain_type":"ethereum","policy_id":"<policy_id>","policy_owner_id":"<policy_owner_id>","release_id":"<release_id>","signer_id":"<signer_id>","wallet_address":"<lowercase address>","wallet_id":"<wallet_id>"}
+```
+
+The `WALLET_BOUND` evidence for the server wallet carries `wallet_id`, `owner_id`, `chain_type`, `address` and
+`release_binding_sha256`. The fixture and `unavailable` providers keep their previous three evidence fields byte for
+byte. A worker path can recompute the hash from the release and compare it before it uses the address.
+
+### Limits
+
+- The provider keeps the verified owner of a created wallet in process memory. A fresh process that starts from a
+  retained wallet id has no owner and stays `UNKNOWN`. It never binds on a guessed owner.
+- The server-wallet path binds on `dispatch`; a browser completion without an initial create cannot supply the
+  owner. This is local single-builder use, not a caller allowlist. A DID allowlist is a later ticket.
+- No test makes a network, provider, credential, signing or wallet call. The fake reply shape follows the Privy
+  wallet object (`GET /v1/wallets/{id}`) from Context7.
+- Production admission needs hosted record schema v2 with `execution_release`. A4/A7 own that work.
+
+### Checks
+
+```sh
+cd apps/api && .venv/bin/python -m pytest -q \
+  tests/test_privy_server_wallet_binding.py \
+  tests/wallet_setup/test_server_wallet_evidence.py \
+  tests/execution/test_server_wallet_release_binding.py
+```

@@ -49,9 +49,10 @@ class Settings(BaseSettings):
     # `fixture` answers scripted requests only. `hermes_local` runs the pinned Hermes against a local fake provider and
     # needs a runner handed to the application factory. No setting reaches a real provider (decision D7).
     interpreter: Literal["fixture", "hermes_local"] = "fixture"
-    # `fixture` uses the authored local wallet-creation fixture. Production refuses it and uses the
-    # fail-closed `unavailable` provider, so no real wallet provider is configured yet.
-    wallet_provider: Literal["fixture", "unavailable"] = "unavailable"
+    # `fixture` uses the authored local wallet-creation fixture. `privy_server` binds the builder's
+    # already-created Privy server wallet through the separate lookup process; it is local-only.
+    # Production refuses both and uses the fail-closed `unavailable` provider.
+    wallet_provider: Literal["fixture", "unavailable", "privy_server"] = "unavailable"
     # Optional absolute path of the private Unix socket served by the separate trusted wallet-lookup process
     # (scripts/privy_wallet_lookup). It is not a credential. Only with `wallet_provider=unavailable`: the browser
     # creates and the socket answers one owner-bound lookup. Unset keeps the fixture/unavailable behavior.
