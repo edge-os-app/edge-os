@@ -5,7 +5,7 @@ import datetime as dt
 import socket
 import pytest
 from edge_os_api.execution.operating_release import OperatingRelease, check_release, release_sha256
-from edge_os_api.execution.operating_release import CONTROLS, ReleaseRefused
+from edge_os_api.execution.operating_release import CONTROLS, ReleaseRefused, release_steps
 
 
 
@@ -185,3 +185,90 @@ def test_bound_release_requires_independent_inventory_market_and_finality_proofs
     with pytest.raises(ReleaseRefused):
         BoundRelease(OperatingRelease(definition()), {}, position_inventory_proof_sha256=None,
                      market_proof_sha256="7" * 64, finality_proof_sha256="8" * 64)
+
+
+# ------------------------------------------------------------------------------------------- step limits (CLOUD-A6B)
+
+# The canonical hash of `definition()` before step limits existed (base c0d59cae). A single-action release keeps it.
+SINGLE_ACTION_SHA256 = "7fee779da86b253cb67370b1f13d77c27e1f9abc6025cd809cacd74de0063b30"
+STEPS = ["approve", "swap", "revoke"]
+
+
+def step_definition():
+    """A release that names its three steps, each with its own single signer request and broadcast."""
+    source = definition()
+    limits = source["limits"]
+    del limits["signer_requests"], limits["broadcasts"]
+    limits["steps"] = [{"step": name, "signer_requests": 1, "broadcasts": 1} for name in STEPS]
+    return source
+
+
+def test_a_single_action_release_is_admitted_byte_identically():
+    release = OperatingRelease(definition())
+    assert release_sha256(release) == SINGLE_ACTION_SHA256
+    assert release.content()["limits"] == definition()["limits"]
+    assert release_steps(release) is None
+    assert check_release(release, expected_sha256=SINGLE_ACTION_SHA256, now=NOW,
+                         synthetic_approvals={"synthetic-release-a": SINGLE_ACTION_SHA256}) == SINGLE_ACTION_SHA256
+
+
+def test_a_release_naming_approve_swap_revoke_with_per_step_limits_is_admitted():
+    release = OperatingRelease(step_definition())
+    digest = release_sha256(release)
+    assert digest != SINGLE_ACTION_SHA256
+    assert release_steps(release) == ("approve", "swap", "revoke")
+    assert release.content()["limits"]["steps"] == [
+        {"step": "approve", "signer_requests": 1, "broadcasts": 1},
+        {"step": "swap", "signer_requests": 1, "broadcasts": 1},
+        {"step": "revoke", "signer_requests": 1, "broadcasts": 1}]
+    assert check_release(release, expected_sha256=digest, now=NOW,
+                         synthetic_approvals={"synthetic-release-a": digest}) == digest
+
+
+def _step(index: int, **changes):
+    def change(d):
+        d["limits"]["steps"][index].update(changes)
+    return change
+
+
+@pytest.mark.parametrize("change", [
+    lambda d: d["limits"].update(steps=[]),
+    lambda d: d["limits"].update(steps=d["limits"]["steps"][::-1]),
+    lambda d: d["limits"].update(steps=d["limits"]["steps"][:2]),
+    lambda d: d["limits"].update(steps=d["limits"]["steps"][1:]),
+    lambda d: d["limits"].update(steps=[d["limits"]["steps"][1]]),
+    lambda d: d["limits"]["steps"].append({"step": "revoke", "signer_requests": 1, "broadcasts": 1}),
+    lambda d: d["limits"]["steps"].insert(0, {"step": "wrap", "signer_requests": 1, "broadcasts": 1}),
+    lambda d: d["limits"]["steps"].__setitem__(1, {"step": "approve", "signer_requests": 1, "broadcasts": 1}),
+    lambda d: d["limits"].update(steps={"approve": 1, "swap": 1, "revoke": 1}),
+    lambda d: d["limits"].update(steps=STEPS),
+    lambda d: d["limits"].update(steps=None),
+    _step(0, signer_requests=2), _step(1, broadcasts=2), _step(2, signer_requests=0), _step(2, broadcasts=0),
+    _step(0, signer_requests=True), _step(1, broadcasts=1.0), _step(1, broadcasts="1"), _step(0, step="APPROVE"),
+    _step(1, gas_limit=700000), _step(2, step=None),
+    lambda d: d["limits"]["steps"][0].pop("broadcasts"), lambda d: d["limits"]["steps"][2].pop("signer_requests"),
+    lambda d: d["limits"]["steps"][1].pop("step"),
+    lambda d: d["limits"].update(signer_requests=1), lambda d: d["limits"].update(broadcasts=1),
+    lambda d: d["limits"].update(signer_requests=3, broadcasts=3),
+    lambda d: d["limits"].update(attempts=3), lambda d: d["limits"].update(quote_requests=2),
+    lambda d: d["limits"].update(actions=0), lambda d: d["limits"].pop("observer_requests"),
+    lambda d: d["limits"].update(deadline_seconds=True),
+])
+def test_any_other_step_limit_shape_is_refused(change):
+    source = step_definition()
+    change(source)
+    with pytest.raises(ReleaseRefused, match="EXECUTION_RELEASE_INVALID"):
+        OperatingRelease(source)
+
+
+@pytest.mark.parametrize("change", [
+    lambda d: d["limits"].update(signer_requests=3), lambda d: d["limits"].update(broadcasts=3),
+    lambda d: d["limits"].pop("signer_requests"), lambda d: d["limits"].pop("broadcasts"),
+    lambda d: d["limits"].update(steps=None),
+    lambda d: d["limits"].update(steps=[{"step": n, "signer_requests": 1, "broadcasts": 1} for n in STEPS]),
+])
+def test_a_single_action_release_keeps_its_exact_limits(change):
+    source = definition()
+    change(source)
+    with pytest.raises(ReleaseRefused, match="EXECUTION_RELEASE_INVALID"):
+        OperatingRelease(source)
