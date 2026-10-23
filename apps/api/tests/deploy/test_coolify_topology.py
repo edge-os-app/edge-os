@@ -33,11 +33,19 @@ WEB_MASKS = {"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "EDGE_OS_ENV",
              "EDGE_OS_BUILD_SHA"}
 # The execution worker has its own block: only the settings `load_settings()` requires and the worker reads. It never
 # shares the API block, so no research, budget or interpreter value and no future API-only name reaches it.
+# Worker-only signing values. The API block and the API service must never name one of them.
+WORKER_EXECUTION_SETTINGS = {
+    "EDGE_OS_EXECUTION_PRIVY_APP_ID", "EDGE_OS_EXECUTION_PRIVY_APP_SECRET",
+    "EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH", "EDGE_OS_EXECUTION_SERVER_WALLET_ID",
+    "EDGE_OS_EXECUTION_MONAD_RPC_URL",
+}
 WORKER_SETTINGS = {
     "EDGE_OS_ENV", "EDGE_OS_DATABASE_URL", "EDGE_OS_PRIVY_APP_ID", "EDGE_OS_PRIVY_VERIFICATION_KEY",
     "EDGE_OS_CORS_ALLOWED_ORIGINS", "EDGE_OS_BUILD_SHA", "EDGE_OS_EXECUTION_MODE",
-    "EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS",
+    "EDGE_OS_DATABASE_STATEMENT_TIMEOUT_MS", *WORKER_EXECUTION_SETTINGS,
 }
+WORKER_KEY_DIR = "/etc/edge-os/execution"
+WORKER_KEY_PATH = f"{WORKER_KEY_DIR}/agent-authorization.pem"
 POSTGRES_ALIAS = "edge-os-postgres"
 EGRESS_BRIDGE = "edgeos-egress"
 ENV_ALLOW = {
@@ -240,7 +248,51 @@ def test_production_modes_are_pinned(compose):
     assert values["EDGE_OS_NANSEN_RESEARCH_MODE"] == "unavailable"
     worker = support.environment_values(compose["services"]["execution-worker"])
     assert worker["EDGE_OS_ENV"] == "production"
-    assert worker["EDGE_OS_EXECUTION_MODE"] == "unavailable"
+    assert worker["EDGE_OS_EXECUTION_MODE"] == "${EDGE_OS_EXECUTION_MODE:-unavailable}"
+
+
+def test_only_the_execution_worker_names_the_signing_settings(compose):
+    worker = support.environment_names(compose["services"]["execution-worker"])
+    assert WORKER_EXECUTION_SETTINGS <= worker
+    for name, service in compose["services"].items():
+        if name == "execution-worker":
+            continue
+        assert not (WORKER_EXECUTION_SETTINGS & support.environment_names(service)), name
+    text = support.COMPOSE_COOLIFY.read_text(encoding="utf-8")
+    api_block = text.split("x-api-environment: &api-environment", 1)[1].split("x-worker-environment:", 1)[0]
+    for name in WORKER_EXECUTION_SETTINGS:
+        assert name not in api_block
+
+
+def test_the_api_service_and_its_compose_block_never_name_the_secret_or_key_path(compose):
+    api = compose["services"]["api"]
+    names = support.environment_names(api)
+    assert "EDGE_OS_EXECUTION_PRIVY_APP_SECRET" not in names
+    assert "EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH" not in names
+    assert WORKER_KEY_PATH not in json.dumps(api)
+    assert not any("agent-authorization" in str(mount) for mount in support.mounts(api))
+
+
+def test_the_execution_worker_mounts_the_key_directory_read_only_as_its_owner(compose):
+    worker = compose["services"]["execution-worker"]
+    mounts = [mount for mount in support.mounts(worker) if mount["target"] == WORKER_KEY_DIR]
+    assert len(mounts) == 1
+    assert mounts[0]["type"] == "bind"
+    assert mounts[0]["source"] == WORKER_KEY_DIR
+    assert mounts[0]["read_only"] is True
+    # The API image runs as uid 10001; the operator gives that user the key file with mode 0600.
+    assert worker["user"] == "10001:10001"
+    key_setting = support.environment_values(worker)["EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH"]
+    assert key_setting == f"${{EDGE_OS_EXECUTION_AUTHORIZATION_KEY_PATH:-{WORKER_KEY_PATH}}}"
+
+
+def test_no_service_mounts_the_key_file_so_a_deploy_without_it_starts(compose):
+    """A deploy with execution off has no key file. Only the parent directory may be a mount source or target."""
+    for name, service in compose["services"].items():
+        for mount in support.mounts(service):
+            assert mount["source"] != WORKER_KEY_PATH, name
+            assert mount["target"] != WORKER_KEY_PATH, name
+    assert WORKER_KEY_PATH.startswith(WORKER_KEY_DIR + "/")
 
 
 def test_the_workers_use_a_heartbeat_command(compose):
