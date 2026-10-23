@@ -11,11 +11,13 @@ import pytest
 
 from edge_os_api.execution.direct_route_quote_client import (
     DIRECT_QUOTE_SOURCE,
+    MAX_PRE_SIGN_TOLERANCE_BPS,
     RESERVES_SELECTOR,
     DirectRoutePins,
     DirectRouteQuoteClient,
     build_calldata_hex,
     build_program_hex,
+    quote_meets_release_minimum,
 )
 from edge_os_api.execution.operating_release import OperatingRelease, ReleaseRefused
 from edge_os_api.kuru_flow.flow_calldata import decode_flow_call
@@ -67,6 +69,7 @@ def direct_definition() -> dict:
     source["route"]["approved_min_output_raw"] = str(MINIMUM)
     source["quote"] = {
         "source": DIRECT_QUOTE_SOURCE, "endpoint": "https://quote.invalid/rpc", "slippage_bps": 500,
+        "pre_sign_tolerance_bps": MAX_PRE_SIGN_TOLERANCE_BPS,
         "pool_address": POOL, "token0_address": INPUT, "token1_address": OUTPUT,
         "direction": 0, "program_fee_ppm": FEE_PPM,
     }
@@ -148,6 +151,11 @@ def test_direct_release_accepts_only_the_pinned_program():
     lambda d: d["quote"].update(extra="value"),
     lambda d: d["quote"].pop("pool_address"),
     lambda d: d["quote"].update(slippage_bps=0),
+    lambda d: d["quote"].update(pre_sign_tolerance_bps=51),
+    lambda d: d["quote"].update(pre_sign_tolerance_bps=-1),
+    lambda d: d["quote"].update(pre_sign_tolerance_bps=50.0),
+    lambda d: d["quote"].update(pre_sign_tolerance_bps="50"),
+    lambda d: d["quote"].update(pre_sign_tolerance_bps=True),
     lambda d: d["quote"].update(endpoint="https://quote.invalid/api/quote"),
     lambda d: d["quote"].update(program_fee_ppm=True),
     lambda d: d["quote"].update(source="DIRECT_UNKNOWN"),
@@ -175,6 +183,10 @@ def test_release_refuses_amounts_above_uint256(change):
 def test_the_existing_kuru_api_release_stays_valid():
     release = OperatingRelease(definition())
     assert "source" not in release.content()["quote"]
+    source = definition()
+    source["quote"]["pre_sign_tolerance_bps"] = 50
+    with pytest.raises(ReleaseRefused):
+        OperatingRelease(source)
 
 
 def test_calldata_matches_the_independent_evidence_example_byte_for_byte():
@@ -264,6 +276,69 @@ def test_slippage_refusal_never_returns_calldata_or_an_observation():
     assert quote.observation is None
 
 
+def test_pre_sign_tolerance_boundary_is_fifty_bps_worse_than_the_release_minimum():
+    minimum = 1_000_000
+    # floor(output * 9900 / 10000): 49 bps worse = 995100, 50 bps = 995000, 51 bps = 994900.
+    worse_49 = 1_005_152
+    at_50 = 1_005_051
+    worse_51 = 1_004_950
+    assert quote_meets_release_minimum(output=worse_49, slippage_bps=100,
+                                       approved_min_output_raw=minimum, pre_sign_tolerance_bps=50)
+    assert quote_meets_release_minimum(output=at_50, slippage_bps=100,
+                                       approved_min_output_raw=minimum, pre_sign_tolerance_bps=50)
+    assert not quote_meets_release_minimum(output=worse_51, slippage_bps=100,
+                                           approved_min_output_raw=minimum, pre_sign_tolerance_bps=50)
+
+
+def test_a_better_price_and_the_exact_release_floor_always_pass():
+    minimum = 1_000_000
+    assert quote_meets_release_minimum(output=1_020_000, slippage_bps=100,
+                                       approved_min_output_raw=minimum, pre_sign_tolerance_bps=50)
+    assert quote_meets_release_minimum(output=1_020_000, slippage_bps=100,
+                                       approved_min_output_raw=minimum, pre_sign_tolerance_bps=0)
+
+
+def test_tolerance_zero_keeps_todays_exact_rule():
+    minimum = 1_000_000
+    exact_floor = 1_010_102  # floor(exact_floor * 9900 / 10000) == minimum
+    one_unit_worse = 1_010_101  # floor(...) == minimum - 1
+    assert quote_meets_release_minimum(output=exact_floor, slippage_bps=100,
+                                       approved_min_output_raw=minimum, pre_sign_tolerance_bps=0)
+    assert not quote_meets_release_minimum(output=one_unit_worse, slippage_bps=100,
+                                           approved_min_output_raw=minimum, pre_sign_tolerance_bps=0)
+
+
+def test_fifty_bps_tolerance_accepts_a_live_floor_below_the_release_minimum_and_keeps_it():
+    # The live floor is 934799, about 30 bps below the 937612 release minimum, and inside the 50 bps tolerance.
+    pins = direct_pins(approved_input_raw=str(10**6), approved_min_output_raw="937612",
+                       pre_sign_tolerance_bps=50)
+    accepted = {"chain_id": 143, "sell_token": INPUT, "buy_token": OUTPUT, "amount": str(10**6), "user": USER}
+
+    def quote(reserve_out: int) -> dict:
+        client = DirectRouteQuoteClient(pins, accepted_request=accepted, slippage_bps=500,
+            http=Http(reserves_reply(10**18, reserve_out)), deadline_monotonic=40.0,
+            connect_timeout_seconds=2, max_request_bytes=4096, max_response_bytes=4096,
+            evidence_class="SYNTHETIC_FIXTURE", monotonic=lambda: 10.0)
+        return client.quote(accepted)
+
+    live_floor = expected_output(10**18, 10**18, amount=10**6) * 9500 // 10000
+    assert live_floor == 934_799 and live_floor < 937_612
+    reply = quote(10**18)
+    assert reply["minOut"] == "937612"
+    call = decode_flow_call(data_hex=reply["transaction"]["calldata"], method="EXECUTE_SWAP")
+    assert call.intent.min_amount_user_buys == "937612"
+    assert reply["transaction"]["calldata"] == build_calldata_hex(pins)
+    with pytest.raises(Exception, match="QUOTE_SLIPPAGE_EXCEEDED"):
+        quote(10**18 - 10**18 * 60 // 10000)
+
+
+def test_a_direct_release_without_the_field_stays_at_tolerance_zero():
+    source = direct_definition()
+    source["quote"].pop("pre_sign_tolerance_bps", None)
+    release = OperatingRelease(source)
+    assert DirectRoutePins.from_release(release.content()).pre_sign_tolerance_bps == 0
+
+
 def test_a_wrong_accepted_request_costs_no_read():
     http = Http()
     quote = client(http)
@@ -308,6 +383,9 @@ def test_oversized_or_mismatched_replies_are_refused():
     lambda p: p.update(approved_min_output_raw="0"),
     lambda p: p.update(approved_input_raw=str(2**256)),
     lambda p: p.update(approved_min_output_raw=str(2**256)),
+    lambda p: p.update(pre_sign_tolerance_bps=51),
+    lambda p: p.update(pre_sign_tolerance_bps=-1),
+    lambda p: p.update(pre_sign_tolerance_bps=50.0),
     lambda p: p.update(input_token=OUTPUT),
 ])
 def test_direct_pins_refuse_inconsistent_values(change):

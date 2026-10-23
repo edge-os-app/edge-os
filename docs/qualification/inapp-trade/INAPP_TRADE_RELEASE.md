@@ -26,7 +26,7 @@ budget" below). `APPROVED_ACTUAL_RELEASES` and `APPROVED_ACTUAL_BINDINGS` stay e
 | Policy | `c30racyru6duaipj815cvjce`, owner `a5gwmgrsn6903ac09lphyv9a` (held only by the builder), normalized rules SHA-256 `61860d20…0892b` | Same |
 | Route | `executeSwap` (`0xce1e7030`) on entrypoint `0xb3e6778480b2E488385E8205eA05E20060B813cb` | Task facts |
 | Pair | sell WMON `0x3bd3…433a`, buy MOE `0xd8e0…7777`, 18 decimals each | Task facts; MOE decimals from Probe A (`qualified-actual-demo/QUALIFICATION_GAPS.md`) |
-| Quote | `DIRECT_V2_PROGRAM`, pool `0x9719…5aad`, token0 WMON, token1 MOE, direction `0`, program fee `16000` ppm, slippage `100` bps | Task facts |
+| Quote | `DIRECT_V2_PROGRAM`, pool `0x9719…5aad`, token0 WMON, token1 MOE, direction `0`, program fee `16000` ppm, slippage `100` bps, pre-sign tolerance `50` bps | Task facts; pre-sign tolerance: builder decision 2026-10-23 |
 | Program | `0x023bd3…3e80`, built by the merged `build_program_hex` | Code |
 | Input | `10000000000000000000` (10 WMON), allowance the same, value `0` | Authoring choice (see the USD section) |
 | Fees | all zero, `is_in_token_fee` false (what `build_calldata_hex` encodes) | Code |
@@ -150,13 +150,12 @@ in the authored file.
 
    The minimum output is never supplied by hand. It is computed as
    `floor(floor(x * 984000 * R_moe / (R_wmon * 10**6 + x * 984000)) * 9900 / 10000)`, which is the quote client's own
-   floor. **Expect a refusal on an active pool.** Before signing there is no tolerance against the recorded read.
-   If the pool moves even one unit against the trade after that read, the app's quote is refused
-   (`QUOTE_SLIPPAGE_EXCEEDED`) before signing. The 100 bps protects only on-chain execution. The time between the
-   read and the run covers the fill, the hash, approval and the registry commit, so this is the likely outcome. A new
-   read then needs a new fill and a new hash. A builder decision could add an explicit tolerance against the
-   recorded read. That would be a separate reviewed change, because the quote client compares the live floor with
-   the release minimum.
+   floor. The release pins `pre_sign_tolerance_bps` = `50`. The app may sign when the live floor is at most 50 bps
+   below this recorded minimum, using integer math: it refuses only when
+   `floor(output * 9900 / 10000) * 10000 < approved_min_output_raw * 9950`. A live floor 51 bps or more below the
+   recorded minimum is refused (`QUOTE_SLIPPAGE_EXCEEDED`) before signing. The on-chain minimum written into the swap stays
+   `approved_min_output_raw`; the 100 bps slippage still protects the swap itself. The time between the read and the
+   run covers the fill, the hash, approval and the registry commit. A new read needs a new fill and a new hash.
 5. **Sign-in (builder).** Sign in to the local app. Confirm the agent wallet `bsb2feecuxl81dl5jz4u9xxo`, publish
    the MOE strategy revision and adopt the `connected-one-action/1` consent. `owner_id`, `agent_id` and
    `consent_adoption_id` exist only after this step. No value is authored for them.
@@ -388,7 +387,7 @@ stay empty until the builder approves the exact hashes (pending step 8).
 
 ### New release content
 
-**SHA-256 of `release.authored.json`: `d3b4be5a84a674a67fe3947300ba8d57b2c74f6e7308ff0567f2fea3df054e38`**
+**SHA-256 of `release.authored.json`: `05d3be00c8c2f5ca0862d587f696ab8b0a28aabec45ce8399a76b25bba60aa1a`**
 (`sha256sum docs/qualification/inapp-trade/release.authored.json`; a test checks that this document prints it).
 
 The release still carries `{"$fill": name}` markers. Its `release_sha256`, the hash the builder registers, exists

@@ -122,8 +122,13 @@ def _validate(value: dict[str, Any]) -> None:
         _require(_text(quote["credential_slot"]))
         _require(urlsplit(quote["endpoint"]).path == "/api/quote")
     else:
-        _require(set(quote) == {"source", "endpoint", "slippage_bps", "pool_address", "token0_address",
-                                "token1_address", "direction", "program_fee_ppm"})
+        fields = {"source", "endpoint", "slippage_bps", "pool_address", "token0_address",
+                  "token1_address", "direction", "program_fee_ppm"}
+        _require(set(quote) == fields or set(quote) == fields | {"pre_sign_tolerance_bps"})
+        if "pre_sign_tolerance_bps" in quote:
+            from edge_os_api.execution.direct_route_quote_client import MAX_PRE_SIGN_TOLERANCE_BPS
+            _require(type(quote["pre_sign_tolerance_bps"]) is int
+                     and 0 <= quote["pre_sign_tolerance_bps"] <= MAX_PRE_SIGN_TOLERANCE_BPS)
         _require(all(type(quote[x]) is str and re.fullmatch(r"0x[0-9a-fA-F]{40}", quote[x])
                      for x in ("pool_address", "token0_address", "token1_address")))
         _require(type(quote["direction"]) is int and quote["direction"] in (0, 1))

@@ -22,6 +22,7 @@ from edge_os_api.execution import inapp_trade_release as inapp
 from edge_os_api.execution import operating_release
 from edge_os_api.execution.direct_route_quote_client import DirectRoutePins, DirectRouteQuoteClient, build_program_hex
 from edge_os_api.execution.operating_release import CONTROLS, ReleaseRefused, check_release, release_sha256, release_steps
+from edge_os_api.kuru_flow.flow_calldata import decode_flow_call
 from scripts.privy_unfunded_proof import actual_packet
 
 from execution.test_direct_route_quote_client import Http, reserves_reply
@@ -114,8 +115,9 @@ def test_authored_release_names_the_one_builder_wallet_policy_and_pinned_route()
     assert (route["input_asset"]["token_address"], route["output_asset"]["token_address"]) == (WMON, MOE)
     assert route["entrypoint_address"] == ENTRYPOINT and route["selector"] == "0xce1e7030"
     assert (quote["source"], quote["pool_address"], quote["token0_address"], quote["token1_address"],
-            quote["direction"], quote["program_fee_ppm"], quote["slippage_bps"]) == (
-        "DIRECT_V2_PROGRAM", POOL, WMON, MOE, 0, 16000, 100)
+            quote["direction"], quote["program_fee_ppm"], quote["slippage_bps"],
+            quote["pre_sign_tolerance_bps"]) == (
+        "DIRECT_V2_PROGRAM", POOL, WMON, MOE, 0, 16000, 100, 50)
     assert route["approved_program_hex"] == build_program_hex(input_token=WMON, pool_address=POOL, direction=0,
                                                               fee_ppm=16000)
     assert route["approved_input_raw"] == route["approved_allowance_raw"] == str(10 * 10**18)
@@ -333,8 +335,43 @@ def test_minimum_output_matches_the_direct_quote_floor_and_a_worse_pool_refuses_
         return client.quote(dict(accepted))
 
     assert quote(RESERVE_MOE)["minOut"] == content["route"]["approved_min_output_raw"]
+    assert DirectRoutePins.from_release(content).pre_sign_tolerance_bps == 50
+    # 40 bps worse than the recorded read is inside the release's 50 bps pre-sign tolerance.
+    inside = quote(RESERVE_MOE - RESERVE_MOE * 40 // 10000)
+    assert inside["minOut"] == content["route"]["approved_min_output_raw"]
+    call = decode_flow_call(data_hex=inside["transaction"]["calldata"], method="EXECUTE_SWAP")
+    assert call.intent.min_amount_user_buys == content["route"]["approved_min_output_raw"]
+    # 60 bps worse is outside it and refuses before signing.
+    with pytest.raises(Exception, match="QUOTE_SLIPPAGE_EXCEEDED"):
+        quote(RESERVE_MOE - RESERVE_MOE * 60 // 10000)
     with pytest.raises(Exception, match="QUOTE_SLIPPAGE_EXCEEDED"):
         quote(RESERVE_MOE - RESERVE_MOE // 100)
+
+
+@pytest.mark.parametrize("value", [51, -1, 50.0, "50", True, None])
+def test_a_pre_sign_tolerance_outside_the_integer_range_refuses(value):
+    source = authored()
+    source["release"]["quote"]["pre_sign_tolerance_bps"] = value
+    with pytest.raises(ReleaseRefused, match="INAPP_AUTHORED_INVALID"):
+        inapp.complete_release(source, fill())
+
+
+def test_the_in_app_shape_requires_the_pre_sign_tolerance_field():
+    source = authored()
+    source["release"]["quote"].pop("pre_sign_tolerance_bps")
+    with pytest.raises(ReleaseRefused, match="INAPP_AUTHORED_INVALID"):
+        inapp.complete_release(source, fill())
+
+
+@pytest.mark.parametrize("value", [0, 49, 50])
+def test_an_integer_pre_sign_tolerance_from_zero_to_fifty_completes(value):
+    source = authored()
+    source["release"]["quote"]["pre_sign_tolerance_bps"] = value
+    assert inapp.complete_release(source, fill()).content()["quote"]["pre_sign_tolerance_bps"] == value
+
+
+def test_the_completed_release_carries_exactly_fifty_bps():
+    assert inapp.complete_release(authored(), fill()).content()["quote"]["pre_sign_tolerance_bps"] == 50
 
 
 @pytest.mark.parametrize("change", [
