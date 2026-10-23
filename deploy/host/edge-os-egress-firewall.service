@@ -13,8 +13,8 @@ Before=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/opt/edge-os/deploy/host/edge-os-egress-firewall.sh apply
-ExecReload=/opt/edge-os/deploy/host/edge-os-egress-firewall.sh apply
+ExecStart=/usr/local/sbin/edge-os-egress-firewall apply
+ExecReload=/usr/local/sbin/edge-os-egress-firewall apply
 
 [Install]
 WantedBy=multi-user.target

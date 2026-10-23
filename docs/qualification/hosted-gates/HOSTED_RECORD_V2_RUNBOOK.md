@@ -50,6 +50,34 @@ The API process never holds the Privy app secret: `load_settings()` refuses any 
 environment value or request adds an approval; registering a record or a release is a reviewed code change that cites
 the builder's approval of that exact hash.
 
+## 1a. Selecting this stack's containers (every host command below)
+
+Coolify's own database is also a Compose service named `postgres` (container `coolify-db`), so a container chosen by
+the service label alone can be Coolify's. Every command below finds this stack's Compose project from the unique
+bridge `edgeos-hostdb`, then requires exactly one container per service. A negative check passes only when the
+connection itself fails, never when `docker exec` fails (exit codes 125 to 127).
+
+```sh
+PROJECT=$(docker network ls -q --filter driver=bridge | xargs docker network inspect --format \
+  '{{index .Options "com.docker.network.bridge.name"}} {{index .Labels "com.docker.compose.project"}}' \
+  | awk '$1 == "edgeos-hostdb" {print $2}')
+[ -n "$PROJECT" ] || echo "STOP: no edgeos-hostdb network; this stack is not deployed"
+one() {  # one() <compose service>: the single container of this stack for that service, or a failure
+  ids=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" --filter "label=com.docker.compose.service=$1")
+  [ "$(printf '%s\n' "$ids" | grep -c .)" -eq 1 ] || { echo "STOP: expected one $1 in $PROJECT" >&2; return 1; }
+  echo "$ids"
+}
+must_fail() {  # must_fail <command...>: passes only when the command ran inside the container and failed
+  "$@"; rc=$?
+  if [ "$rc" -eq 0 ]; then echo "FAIL: open"; elif [ "$rc" -ge 125 ]; then echo "FAIL: check did not run ($rc)";
+  else echo "pass: blocked ($rc)"; fi
+}
+API=$(one api); W=$(one execution-worker); PG=$(one postgres)
+```
+
+The stack is one per host: the bridge names and subnets are fixed, so a second copy (for example a Coolify preview
+deployment) cannot create its networks. Do not enable previews for this resource.
+
 ## 2. Database alias: never `postgres`
 
 In the live Coolify deployment the API joins the `coolify` network. On that network Coolify's own database answers to
@@ -65,10 +93,14 @@ the alias `postgres`, and our API resolved `postgres` to it.
 Host check after the deploy (expect an address from the `private` network, never Coolify's database):
 
 ```sh
-API=$(docker ps --filter label=com.docker.compose.service=api --format '{{.Names}}' | head -1)
+# §1a first (PROJECT, one, must_fail, API, PG).
 docker exec "$API" python -c "import socket; print(socket.gethostbyname('edge-os-postgres'))"
-docker network inspect coolify --format '{{range .Containers}}{{.Name}} {{end}}' | tr ' ' '\n' | grep -i edge-os-postgres \
-  && echo "COLLISION: rename" || echo "no edge-os-postgres on coolify"
+docker inspect "$PG" --format '{{(index .NetworkSettings.Networks "'"$PROJECT"'_private").IPAddress}}'  # must be equal
+# No container on Coolify's network may carry the name or alias edge-os-postgres.
+NET=${COOLIFY_NETWORK:-coolify}
+for c in $(docker network inspect "$NET" --format '{{range $id, $e := .Containers}}{{$id}} {{end}}'); do
+  docker inspect "$c" --format '{{.Name}} {{range .NetworkSettings.Networks}}{{.Aliases}} {{.DNSNames}} {{end}}'
+done | grep -i edge-os-postgres && echo "FAIL: collision on $NET" || echo "pass: no edge-os-postgres on $NET"
 ```
 
 ## 3. Loopback route for the host research worker
@@ -90,14 +122,21 @@ Requirements and checks:
 Recreate the server certificate (deploy/coolify/RUNBOOK.md §4) with both names the clients use:
 
 ```sh
+install -d -m 0750 -o 999 -g 999 /etc/edge-os/postgres-tls
+cd /etc/edge-os/postgres-tls
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 825 \
   -keyout server.key -out server.crt -subj "/CN=edge-os-postgres" \
   -addext "subjectAltName=DNS:edge-os-postgres,IP:127.0.0.1" \
   -addext "basicConstraints=critical,CA:FALSE" \
   -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
   -addext "extendedKeyUsage=serverAuth"
+chown 999:999 server.crt server.key
+chmod 0644 server.crt
+chmod 0600 server.key
 openssl x509 -in server.crt -noout -ext subjectAltName   # DNS:edge-os-postgres, IP Address:127.0.0.1
 ```
+
+PostgreSQL reads the new certificate on its next restart (redeploy the stack, or `docker restart "$PG"` after §1a).
 
 `DNS:edge-os-postgres` serves the Coolify services; `IP:127.0.0.1` serves the host research worker. With
 `sslmode=require` the connection is encrypted but the name is not verified; the SANs make a later `verify-full`
@@ -173,6 +212,8 @@ cat > /etc/edge-os/egress.env <<'ENV'
 EDGE_OS_EGRESS_HOSTS="api.privy.io <the Monad RPC host name in the approved execution release>"
 EDGE_OS_EGRESS_PORTS="443"
 ENV
+# Root-owned copy: the unit never runs a script from the git checkout, which other steps switch between commits.
+install -m 0755 -o root -g root /opt/edge-os/deploy/host/edge-os-egress-firewall.sh /usr/local/sbin/edge-os-egress-firewall
 install -m 0644 /opt/edge-os/deploy/host/edge-os-egress-firewall.service \
   /opt/edge-os/deploy/host/edge-os-egress-refresh.service \
   /opt/edge-os/deploy/host/edge-os-egress-refresh.timer /etc/systemd/system/
@@ -190,7 +231,10 @@ failed condition would skip it as a success and let Docker start without rules.
 To re-apply after editing `egress.env`, run `systemctl reload edge-os-egress-firewall` (it runs `apply` without
 touching Docker). Do not `restart` the unit: `RequiredBy=docker.service` also restarts Docker and every container. A
 host removed from `EDGE_OS_EGRESS_HOSTS` keeps its addresses allowed until their 900-second entries expire; to cut it
-off at once, `ipset flush edgeos-egress-allow` and then `systemctl start edge-os-egress-refresh`.
+off at once, `ipset flush edgeos-egress-allow` and then `systemctl start edge-os-egress-refresh`. Every `apply`
+(including `reload`) deletes the conntrack entries of both subnets, so the worker's open connections, allowed ones
+included, are cut and reconnect; the loopback database sessions recover on their next packet. After changing the
+script in the repository, install it again to `/usr/local/sbin/edge-os-egress-firewall` and reload.
 
 Limits:
 
@@ -205,19 +249,24 @@ Limits:
 Checks (record the output; repeat after a reboot):
 
 ```sh
+# §1a first (PROJECT, one, must_fail, W, PG).
 ip link show edgeos-egress && ip link show edgeos-hostdb    # both bridges carry their fixed names
 iptables -S DOCKER-USER | head -3; iptables -S INPUT | head -3; ipset list edgeos-egress-allow | head
-W=$(docker ps --filter label=com.docker.compose.service=execution-worker --format '{{.Names}}' | head -1)
+# Coolify must not have attached another network (one with NAT would bypass these rules).
+docker inspect "$W" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'   # exactly <PROJECT>_private <PROJECT>_egress
+docker inspect "$PG" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'  # exactly <PROJECT>_private <PROJECT>_hostdb
 docker exec "$W" python -c "
 import urllib.error as e, urllib.request as u
 try: print(u.urlopen('https://api.privy.io', timeout=5).status)
-except e.HTTPError as error: print(error.code)"                                                     # any HTTP status
-docker exec "$W" python -c "import urllib.request as u; u.urlopen('https://example.com', timeout=5)"   # must time out
-docker exec "$W" python -c "import socket; socket.create_connection(('10.203.0.1', 22), 3)"         # must fail
-PG=$(docker ps --filter label=com.docker.compose.service=postgres --format '{{.Names}}' | head -1)
-docker exec "$PG" bash -c 'timeout 5 bash -c "exec 3<>/dev/tcp/10.203.0.17/22"' && echo "OPEN: fix" || echo "host closed to postgres"
-docker exec "$PG" bash -c 'timeout 5 bash -c "exec 3<>/dev/tcp/1.1.1.1/443"' && echo "OPEN: fix" || echo "no route out"
+except e.HTTPError as error: print(error.code)"                                                       # any HTTP status
+must_fail docker exec "$W" python -c "import urllib.request as u; u.urlopen('https://example.com', timeout=5)"
+must_fail docker exec "$W" python -c "import socket; socket.create_connection(('10.203.0.1', 22), 3)"
+must_fail docker exec "$PG" bash -c 'timeout 5 bash -c "exec 3<>/dev/tcp/10.203.0.17/22"'
+must_fail docker exec "$PG" bash -c 'timeout 5 bash -c "exec 3<>/dev/tcp/1.1.1.1/443"'
 ```
+
+Every `must_fail` line must print `pass: blocked`. `FAIL: check did not run` means the container or its command was
+not found; fix the selection, do not record it as blocked.
 
 ## 5. Backups and the restore drill
 
@@ -234,12 +283,14 @@ rolled back over; it is not the only copy of the data.
 ### 5.2 Logical dump (`pg_dump`)
 
 ```sh
+# §1a first (PROJECT, one, PG).
 install -d -m 0700 -o root -g root /var/backups/edge-os
-PG=$(docker ps --filter label=com.docker.compose.service=postgres --format '{{.Names}}' | head -1)
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-docker exec "$PG" pg_dump -Fc -U edge_os -d edge_os > /var/backups/edge-os/edge_os-$STAMP.dump
-chmod 0600 /var/backups/edge-os/edge_os-$STAMP.dump
-sha256sum /var/backups/edge-os/edge_os-$STAMP.dump
+DUMP=/var/backups/edge-os/edge_os-$STAMP.dump
+docker exec "$PG" pg_dump -Fc -U edge_os -d edge_os > "$DUMP" || { echo "FAIL: pg_dump"; rm -f "$DUMP"; }
+chmod 0600 "$DUMP"
+docker exec -i "$PG" pg_restore -l < "$DUMP" > /dev/null && echo "pass: dump readable" || echo "FAIL: dump unreadable"
+sha256sum "$DUMP"
 ```
 
 The dump sits on the VPS disk, so the next Contabo snapshot carries it. An encrypted copy off the VPS
@@ -251,7 +302,7 @@ The scratch container has no network and no published port. It uses the same Pos
 
 ```sh
 IMAGE=<the deployed postgres image, by digest>
-DUMP=/var/backups/edge-os/edge_os-<STAMP>.dump
+DUMP=/var/backups/edge-os/edge_os-<STAMP>.dump   # and §1a first (PG)
 docker run -d --name edge-os-restore-drill --network none \
   -e POSTGRES_PASSWORD="$(openssl rand -hex 16)" -e POSTGRES_DB=edge_os_restore "$IMAGE"
 # Over TCP: the image's temporary init server listens on the Unix socket only, so this waits for the real server.
@@ -263,7 +314,7 @@ docker exec edge-os-restore-drill psql -U postgres -d edge_os_restore -tAc 'sele
 docker exec "$PG" psql -U edge_os -d edge_os -tAc 'select version_num from alembic_version'
 docker exec edge-os-restore-drill psql -U postgres -d edge_os_restore -tAc \
   "select relname, n_live_tup from pg_stat_user_tables order by relname"
-docker rm -f edge-os-restore-drill
+docker rm -fv edge-os-restore-drill   # -v also removes the anonymous data volume holding the restored copy
 ```
 
 Pass: `pg_restore` exits 0, both `alembic_version` values are equal, the expected tables exist, and one known row

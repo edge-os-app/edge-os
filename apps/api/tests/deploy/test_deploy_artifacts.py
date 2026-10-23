@@ -112,6 +112,11 @@ def test_the_hosted_record_v2_runbook_covers_every_host_step():
                   "EDGE_OS_PRIVY_APP_SECRET"):
         assert topic in text, topic
     assert "This candidate registers no hosted deployment" in text
+    # Containers are chosen within this stack's Compose project, never by the service label alone: Coolify's own
+    # database is also a Compose service named `postgres`.
+    assert "docker ps --filter label=com.docker.compose.service" not in text
+    assert "head -1" not in text
+    assert "label=com.docker.compose.project=$PROJECT" in text
 
 
 def test_the_coolify_runbook_uses_the_unique_database_alias():
@@ -138,6 +143,9 @@ def test_the_egress_firewall_is_fail_closed_and_starts_before_docker():
     assert "Before=docker.service" in unit and "RequiredBy=docker.service" in unit
     # A failed Condition* skips the unit as a success, so Docker would start without rules.
     assert not re.search(r"(?m)^Condition", unit)
-    assert "ExecReload=/opt/edge-os/deploy/host/edge-os-egress-firewall.sh apply" in unit
+    # The unit runs a root-owned installed copy, never the git checkout.
+    assert "ExecStart=/usr/local/sbin/edge-os-egress-firewall apply" in unit
+    assert "ExecReload=/usr/local/sbin/edge-os-egress-firewall apply" in unit
+    assert "/opt/edge-os" not in "".join(line for line in unit.splitlines() if line.startswith("Exec"))
     timer = (host / "edge-os-egress-refresh.timer").read_text(encoding="utf-8")
     assert "OnUnitActiveSec=5min" in timer
