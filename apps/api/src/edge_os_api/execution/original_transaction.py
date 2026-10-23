@@ -199,6 +199,7 @@ class TradeSteps:
     gas_limits: Mapping[str, int]
     usd_ceiling: Decimal
     mon_usd_price: Decimal
+    input_asset_id: str  # the release's WMON start: the ceiling values its raw amount 1:1 as MON wei
     order: tuple[str, ...] = STEP_ORDER
 
     def __post_init__(self) -> None:
@@ -207,7 +208,8 @@ class TradeSteps:
                 or self.order != STEP_ORDER or not isinstance(self.usd_ceiling, Decimal)
                 or not isinstance(self.mon_usd_price, Decimal) or not self.usd_ceiling.is_finite()
                 or not self.mon_usd_price.is_finite() or not 0 < self.usd_ceiling <= MAX_USD_CEILING
-                or self.mon_usd_price <= 0):
+                or self.mon_usd_price <= 0 or type(self.input_asset_id) is not str
+                or token_of(self.input_asset_id) is None):
             raise ValueError("TRADE_STEPS_INVALID")
         object.__setattr__(self, "gas_limits", MappingProxyType(limits))
 
@@ -217,9 +219,11 @@ class TradeSteps:
         from edge_os_api.execution import inapp_trade_release
 
         inapp_trade_release.worst_case_usd(authored)  # raises ReleaseRefused (a ValueError) for invalid facts
-        facts = authored["facts"]
+        facts, route = authored["facts"], authored["release"]["route"]
+        if route["input_asset"]["decimals"] != 18:
+            raise ValueError("TRADE_STEPS_INVALID")
         return cls(gas_limits=dict(facts["gas_limits"]), usd_ceiling=Decimal(facts["usd_ceiling"]),
-                   mon_usd_price=Decimal(facts["mon_usd_price"]))
+                   mon_usd_price=Decimal(facts["mon_usd_price"]), input_asset_id=route["input_asset"]["asset_id"])
 
 
 def approve_calldata(spender: str, amount: int) -> str:
@@ -441,16 +445,23 @@ class OriginalTransactionTransport:
         except JournalError:
             return TransportOutcome(outcome="DEFINITELY_UNSENT", detail="PERSISTENCE_FAILED_BEFORE_SIGNING")
 
-        result = self._send(_Stages(journal, "approve", approve), self._step_prepared(prepared, "approve"), approve,
+        approve_stages = _Stages(journal, "approve", approve)
+        result = self._send(approve_stages, self._step_prepared(prepared, "approve"), approve,
                             self._quote_requested_at)
         if result.outcome == "DEFINITELY_UNSENT":
-            return self._unsent(journal, f"APPROVE:{result.detail}")  # nothing of this action was sent
-        if result.detail != "BROADCAST_RETURNED":
+            # Nothing of this action was sent. The top-level reason is the approve's own refusal code.
+            self._unsent(journal, result.detail)
+            return TransportOutcome(outcome="DEFINITELY_UNSENT", detail=f"APPROVE:{result.detail}")
+        if result.detail != "BROADCAST_RETURNED" or not approve_stages.saved:
             self._revoke_not_attempted(journal, "APPROVE_OUTCOME_UNKNOWN")
             return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail=f"APPROVE:{result.detail}")
 
-        result = self._send(_Stages(journal, "swap", {"step": "swap"}), prepared, swap_values,
-                            self._quote_requested_at)
+        swap_stages = _Stages(journal, "swap", {"step": "swap"})
+        result = self._send(swap_stages, prepared, swap_values, self._quote_requested_at)
+        if not swap_stages.saved:
+            # A failed save stops the sequence before the next call; the allowance stays reported open.
+            self._revoke_not_attempted(journal, "SWAP_STAGE_UNSAVED")
+            return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail=f"{result.detail};REVOKE:NOT_ATTEMPTED")
         if result.outcome == "DEFINITELY_UNSENT":
             # The swap was never signed or sent, so its nonce is unused and the revoke takes it.
             swap_detail, revoke_nonce = f"SWAP:{result.detail}", swap_nonce
@@ -469,21 +480,26 @@ class OriginalTransactionTransport:
             revoked = "PERSISTENCE_FAILED_BEFORE_SIGNING"
         else:
             revoked = self._send(_Stages(journal, "revoke", revoke), self._step_prepared(prepared, "revoke"), revoke,
-                                 None).detail
+                                 None, revoke=True).detail
         # The approve was sent, so its liability stays whatever the swap and the revoke did.
         return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail=f"{swap_detail};REVOKE:{revoked}")
 
     def _send(self, stages: "_Stages", prepared: PreparedSubmission, values: Mapping[str, Any],
-              quote_requested_at: dt.datetime | None) -> TransportOutcome:
-        """Sign request saved -> recheck -> signer -> validate -> SIGNED -> BROADCAST_REQUESTED -> recheck -> send once."""
+              quote_requested_at: dt.datetime | None, *, revoke: bool = False) -> TransportOutcome:
+        """Sign request saved -> recheck -> signer -> validate -> SIGNED -> BROADCAST_REQUESTED -> recheck -> send once.
+
+        The revoke only lowers the allowance to zero, so its rechecks keep the release admission but not the swap
+        stops or the intent and mandate expiry: a stop that refused the swap must not leave the approve open.
+        """
         context = self._context
+        recheck = self._release_problem if revoke else (lambda: self._recheck(quote_requested_at))
         unsigned = values["unsigned"]
         try:
             stages.save("SIGN_REQUESTED", {})
         except JournalError:
             return TransportOutcome(outcome="DEFINITELY_UNSENT", detail="PERSISTENCE_FAILED_BEFORE_SIGNING")
         # After the save, immediately before the signer call: a slow save never grants a grace interval.
-        stop = self._recheck(quote_requested_at)
+        stop = recheck()
         if stop is not None:
             return stages.unsent(stop)
 
@@ -521,7 +537,7 @@ class OriginalTransactionTransport:
         except JournalError:
             return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail="PERSISTENCE_FAILED_AFTER_SIGNING")
         # After the save, immediately before the send: a slow save never grants a grace interval.
-        stop = self._recheck(quote_requested_at)
+        stop = recheck()
         if stop is not None:
             return stages.possible(f"STOPPED_AFTER_SIGNING:{stop}")
 
@@ -701,6 +717,8 @@ class OriginalTransactionTransport:
         if self._steps is None:
             return None
         context, profile, limits = self._context, self._profile, self._steps.gas_limits
+        if (context.sell.asset_id.lower(), context.sell.decimals) != (self._steps.input_asset_id.lower(), 18):
+            return "STEP_INPUT_NOT_RELEASE_START"
         if limits["swap"] != profile.gas_limit:
             return "STEP_GAS_MISMATCH"
         if sum(limits[step] for step in self._steps.order) * profile.max_fee_per_gas > context.gas_cap_raw:
@@ -763,15 +781,6 @@ class OriginalTransactionTransport:
             pass  # nothing was sent; the attempt outcome still records the reason
         return TransportOutcome(outcome="DEFINITELY_UNSENT", detail=reason)
 
-    @staticmethod
-    def _possible(journal: Callable[[str, dict[str, Any]], None], stage: str,
-                  values: dict[str, Any] | None = None) -> TransportOutcome:
-        try:
-            journal(stage.split(":", 1)[0], {**(values or {}), "reason": stage})
-        except JournalError:
-            pass  # the liability stays; the attempt outcome still records the stage
-        return TransportOutcome(outcome="SUBMISSION_POSSIBLE", detail=stage)
-
 
 class _Stages:
     """Where one step saves its stages.
@@ -784,15 +793,25 @@ class _Stages:
     def __init__(self, journal: Callable[[str, dict[str, Any]], None], step: str | None = None,
                  record: dict[str, Any] | None = None) -> None:
         self._journal, self._step, self._record = journal, step, record if record is not None else {}
+        self.saved = True  # False once a save failed: the action then stops before its next call
 
     def save(self, stage: str, values: dict[str, Any]) -> None:
+        try:
+            self._save(stage, values)
+        except JournalError:
+            self.saved = False
+            raise
+
+    def _save(self, stage: str, values: dict[str, Any]) -> None:
         if self._step is None:
             self._journal(stage, values)
             return
         if self._step == "swap":
+            # The swap's reason stays in its own record: a top-level reason is read as the action's refusal.
             self._record.update({key: values[key] for key in ("reason",) if key in values}, stage=stage)
             self._journal("SWAP_REFUSED_UNSENT" if stage == "REFUSED_UNSENT" else stage,
-                          {**values, "swap": dict(self._record)})
+                          {**{key: value for key, value in values.items() if key != "reason"},
+                           "swap": dict(self._record)})
             return
         self._record.update(values)
         self._record["stage"] = stage
@@ -852,7 +871,9 @@ def read_original_receipt(envelope: Mapping[str, Any], observer: RpcClient, *,
                                         expected_tx_hash=tx_hash)
         return ReceiptReading(verdict=verdict, source_ref=source_ref)
 
-    if not valid_identity:
+    if not valid_identity or "steps" in envelope:
+        # A step action cannot settle from the swap's receipt alone: the approve and revoke gas and the allowance
+        # are not in it. It stays unknown, with its reservations, until a step-aware reading exists.
         return normalized(ObservationInput(timeout=True))
 
     controlled = binding is not None or "binding_sha256" in envelope or "release_sha256" in envelope

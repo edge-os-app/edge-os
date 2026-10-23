@@ -29,7 +29,7 @@ from edge_os_api.execution.original_transaction import (
 )
 from edge_os_api.execution.transport import PreparedSubmission
 from edge_os_api.recovery.allowance import allowance_status, read_revoke_receipt
-from execution.test_privy_signer import NOW, PUBLISHED_TEST_KEY, PUBLISHED_WALLET, original
+from execution.test_privy_signer import NOW, PUBLISHED_TEST_KEY, PUBLISHED_WALLET, SELL_TOKEN, original
 
 AUTHORED = Path(__file__).resolve().parents[4] / "docs" / "qualification" / "inapp-trade" / "release.authored.json"
 BASE_NONCE = 5
@@ -37,7 +37,8 @@ BASE_NONCE = 5
 
 def steps(**changes: Any) -> TradeSteps:
     values: dict[str, Any] = dict(gas_limits={"wrap": 60000, "approve": 70000, "swap": 300000, "revoke": 70000},
-                                  usd_ceiling=Decimal("2.00"), mon_usd_price=Decimal("0.02"))
+                                  usd_ceiling=Decimal("2.00"), mon_usd_price=Decimal("0.02"),
+                                  input_asset_id=f"monad:143/{SELL_TOKEN}")
     values.update(changes)
     return TradeSteps(**values)
 
@@ -104,7 +105,9 @@ def multi(tmp_path, *, signer: Signer | None = None, chain: Chain | None = None,
           **context_changes: Any):
     tmp_path.mkdir(parents=True, exist_ok=True)
     transport, recordings, stages = original(tmp_path, signer or Signer())
-    context = dataclasses.replace(transport._context, **context_changes)
+    # The release start is WMON: an 18-decimal input whose raw amount the ceiling values 1:1 as MON wei.
+    context = dataclasses.replace(transport._context, sell=dataclasses.replace(transport._context.sell, decimals=18))
+    context = dataclasses.replace(context, **context_changes)
     clients = dataclasses.replace(transport._clients, broadcast=chain or Chain())
     built = OriginalTransactionTransport(context, clients, transport._profile, controls=lambda: [],
                                          clock=lambda: NOW, steps=plan or steps())
@@ -134,6 +137,7 @@ def test_the_release_names_approve_swap_revoke_with_its_fixed_gas_and_ceiling():
     assert plan.order == ("approve", "swap", "revoke")
     assert dict(plan.gas_limits) == {"wrap": 60000, "approve": 70000, "swap": 700000, "revoke": 70000}
     assert (plan.usd_ceiling, plan.mon_usd_price) == (Decimal("2.00"), Decimal("0.02"))
+    assert plan.input_asset_id == "monad:143/0x3bd359c1119da7da1d913d1c4d2b7c461115433a"
 
 
 def test_an_authored_file_with_other_steps_is_refused():
@@ -302,7 +306,7 @@ def test_a_definitely_refused_swap_is_followed_by_one_revoke_at_the_unused_swap_
     assert "REFUSED_UNSENT" not in [stage for stage, _ in stages]
 
 
-def test_a_stop_after_the_approve_refuses_the_swap_and_still_revokes(tmp_path):
+def test_a_one_off_stop_after_the_approve_refuses_the_swap_and_still_revokes(tmp_path):
     signer, chain = Signer(), Chain()
     transport, _, stages = multi(tmp_path, signer=signer, chain=chain)
     calls = {"count": 0}
@@ -488,3 +492,108 @@ def test_a_bound_release_runs_the_steps_and_its_swap_envelope_still_qualifies_fo
         steps=steps(gas_limits={"wrap": 60000, "approve": 70000, "swap": other.gas_limit, "revoke": 70000}))
     assert run(mismatched, []).detail == "RELEASE_GAS_MISMATCH"
     assert len(signer.calls) == 3
+
+
+# ------------------------------------------------------------------------------------------- review repairs
+
+def test_a_lasting_stop_after_the_approve_refuses_the_swap_but_never_the_revoke(tmp_path):
+    signer, chain = Signer(), Chain()
+    transport, _, stages = multi(tmp_path, signer=signer, chain=chain)
+    calls = {"count": 0}
+
+    def controls():
+        calls["count"] += 1
+        return ["STOPPED_HALT_ALL_SWAPS"] if calls["count"] >= 4 else []  # on from the swap's pre-sign recheck
+
+    transport._controls = controls
+    outcome = run(transport, stages)
+    assert outcome.detail == "SWAP:STOPPED_HALT_ALL_SWAPS;REVOKE:BROADCAST_RETURNED"
+    assert chain.sent == [("approve", 5), ("revoke", 6)]
+
+
+def test_an_intent_expiring_after_the_approve_still_lets_the_revoke_run(tmp_path):
+    now = [NOW]
+
+    class ExpiringChain(Chain):
+        def call(self, method, params):
+            result = super().call(method, params)
+            if method == "eth_sendRawTransaction" and self.sent[-1][0] == "approve":
+                now[0] = transport._context.intent_expires_at  # the intent and the quote end after the approve
+            return result
+
+    signer, chain = Signer(), ExpiringChain()
+    transport, _, stages = multi(tmp_path, signer=signer, chain=chain)
+    transport._clock = lambda: now[0]
+    outcome = run(transport, stages)
+    assert outcome.detail.startswith("SWAP:") and outcome.detail.endswith(";REVOKE:BROADCAST_RETURNED")
+    assert chain.sent == [("approve", 5), ("revoke", 6)]
+
+
+@pytest.mark.parametrize("change", [
+    {"decimals": 6},
+    {"asset_id": "monad:143/0x3333333333333333333333333333333333333333",
+     "token": "0x3333333333333333333333333333333333333333"},
+])
+def test_an_input_other_than_the_release_start_is_refused_before_any_call(tmp_path, change):
+    signer = Signer()
+    transport, recordings, stages = multi(tmp_path, signer=signer)
+    transport._context = dataclasses.replace(transport._context,
+                                             sell=dataclasses.replace(transport._context.sell, **change))
+    outcome = run(transport, stages)
+    assert (outcome.outcome, outcome.detail) == ("DEFINITELY_UNSENT", "STEP_INPUT_NOT_RELEASE_START")
+    assert signer.calls == [] and recordings.call_counts() == {}
+
+
+def _refusal(saved):
+    from types import SimpleNamespace
+    from edge_os_api.execution.routes import refusal_view
+    return refusal_view([SimpleNamespace(content={"original_transaction": saved})])
+
+
+def test_the_owner_sees_a_definite_policy_refusal_only_when_nothing_was_sent(tmp_path):
+    transport, _, stages = multi(tmp_path / "approve", signer=Signer({"approve": "policy"}))
+    run(transport, stages)
+    assert _refusal(envelope(stages)) == {"reason": "WALLET_POLICY_REFUSED", "message": "Refused by the wallet policy."}
+    for step in ("swap", "revoke"):
+        transport, _, stages = multi(tmp_path / step, signer=Signer({step: "policy"}))
+        assert run(transport, stages).outcome == "SUBMISSION_POSSIBLE"
+        saved = envelope(stages)
+        assert _refusal(saved) is None and "reason" not in saved
+        assert saved[step]["reason"] == "WALLET_POLICY_REFUSED"
+
+
+def test_a_step_action_never_settles_from_the_swap_receipt_alone(tmp_path):
+    from edge_os_api.execution.original_transaction import read_original_receipt
+    transport, _, stages = multi(tmp_path)
+    run(transport, stages)
+    saved = envelope(stages)
+
+    class Observer:
+        calls = 0
+
+        def call(self, method, params):
+            self.calls += 1
+            raise AssertionError("no reading is made")
+
+    observer = Observer()
+    assert read_original_receipt(saved, observer).outcome == "SUBMISSION_UNKNOWN"
+    assert observer.calls == 0
+
+
+@pytest.mark.parametrize("failing", ["APPROVE_BROADCAST_RETURNED", "BROADCAST_RETURNED", "SWAP_REFUSED_UNSENT"])
+def test_a_failed_save_of_a_steps_last_stage_stops_the_action(tmp_path, failing):
+    signer = Signer({"swap": "policy"} if failing == "SWAP_REFUSED_UNSENT" else {})
+    chain = Chain()
+    transport, _, stages = multi(tmp_path, signer=signer, chain=chain)
+
+    def journal(stage, values):
+        if stage == failing:
+            raise JournalError("save failed")
+        stages.append((stage, values))
+
+    outcome = run(transport, stages, journal)
+    assert outcome.outcome == "SUBMISSION_POSSIBLE"
+    expected = {"APPROVE_BROADCAST_RETURNED": ["approve"], "BROADCAST_RETURNED": ["approve", "swap"],
+                "SWAP_REFUSED_UNSENT": ["approve"]}[failing]
+    assert [step for step, _ in chain.sent] == expected
+    assert allowance_status(envelope(stages))["open"] is True

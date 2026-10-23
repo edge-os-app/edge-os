@@ -243,8 +243,9 @@ Kuru Flow entrypoint") and the operator path (`OPERATOR_TRADE.md`) use the same 
 
 With a step plan, `OriginalTransactionTransport.submit_original` runs one action as follows:
 
-1. Checks before step 1. The existing release, route, network and expiry refusals run first. Then the swap gas limit
-   must equal the route's (`STEP_GAS_MISMATCH`). The total of the approve, swap and revoke limits at the fixed
+1. Checks before step 1. The existing release, route, network and expiry refusals run first. Then the input must be
+   the release's 18-decimal WMON start (`STEP_INPUT_NOT_RELEASE_START`), because the ceiling values its raw amount
+   1:1 as MON wei. The swap gas limit must equal the route's (`STEP_GAS_MISMATCH`). The total of the approve, swap and revoke limits at the fixed
    maximum fee must fit the approved gas reservation (`FEE_EXCEEDS_GAS_RESERVATION`). The input plus the full limit
    of all four release steps at that fee, at the release MON price, must not exceed the USD ceiling
    (`USD_CEILING_EXCEEDED`). This is the release's own ceiling arithmetic above, and it includes the wrap.
@@ -256,11 +257,18 @@ With a step plan, `OriginalTransactionTransport.submit_original` runs one action
    nonce `N+1` after a definite swap refusal, because the swap's nonce is then unused.
 
 Each step goes through the single-swap stages once: sign request saved, recheck, signer, validation of the signed
-bytes, `SIGNED`, `BROADCAST_REQUESTED`, recheck, one `eth_sendRawTransaction`. The approve and revoke save each stage
+bytes, `SIGNED`, `BROADCAST_REQUESTED`, recheck, one `eth_sendRawTransaction`. The approve and the swap use the
+full single-swap recheck: release admission, stop controls, quote and input age, and intent and mandate expiry. The
+revoke only lowers the allowance to zero. Its recheck therefore keeps the release admission but skips the stops and
+the expiries. A stop that refused the swap must not leave the approve open. A failed save of any step stage stops
+the action before its next call. The approve and revoke save each stage
 in their own record (`approve`, `revoke`; journal stages `APPROVE_*`, `REVOKE_*`). The swap keeps the single-swap
-envelope at the top level, plus a `swap` record. Its receipt reconciliation and `qualify_original` therefore do not
-change. The approve and revoke sign with their own request ids, `<attempt_id>:approve` and `<attempt_id>:revoke`.
+envelope at the top level, plus a `swap` record, so `qualify_original` still verifies it. Its receipt does not settle
+the action (see "Outcomes and recovery"). The approve and revoke sign with their own request ids, `<attempt_id>:approve` and `<attempt_id>:revoke`.
 A Privy policy denial on any step maps to `WALLET_POLICY_REFUSED` through the existing `SignerPolicyDenied` path.
+The top-level `reason`, which the action view shows as a definite refusal, is written only when nothing of the
+action was sent. A policy-refused approve therefore shows "Refused by the wallet policy.". A refused swap or revoke
+keeps its reason in its own record.
 
 ### Outcomes and recovery
 
@@ -269,28 +277,41 @@ A Privy policy denial on any step maps to `WALLET_POLICY_REFUSED` through the ex
 | Refused before step 1, or the approve definitely refused | `DEFINITELY_UNSENT` (`APPROVE:<reason>` for the approve) | none | `NOT_APPROVED`, not open |
 | Approve unknown (signing or broadcast unknown, error, mismatch, stop after signing, save failure after signing) | `SUBMISSION_POSSIBLE` | `NOT_ATTEMPTED` | `APPROVE_UNKNOWN`, open |
 | Swap unknown | `SUBMISSION_POSSIBLE` | `NOT_ATTEMPTED` | `REVOKE_NOT_SENT`, open |
-| Swap hash returned, or swap definitely refused (`SWAP:<reason>`) | `SUBMISSION_POSSIBLE` (the approve was sent) | sent once | see below |
+| Swap hash returned, or swap definitely refused (`SWAP:<reason>`, including a stop or an expiry) | `SUBMISSION_POSSIBLE` (the approve was sent) | signed and sent once, unless its release admission refuses it or a save fails | see below |
 | Revoke refused or not saved | same | `REFUSED_UNSENT` / `PREPARED` | `REVOKE_NOT_SENT`, open |
 | Revoke unknown | same | unknown stage | `REVOKE_UNKNOWN`, open |
 | Revoke hash returned | same | `BROADCAST_RETURNED` | `REVOKE_UNCONFIRMED`, open until `read_revoke_receipt` reads its bound status-1 receipt (`CLOSED`) |
 
-No step is resent. The transport refuses a second run (`ACTION_ALREADY_STARTED`). After a crash, the saved attempt
+No step is resent. The transport refuses a second run with `ACTION_ALREADY_STARTED`. That refusal is
+`SUBMISSION_POSSIBLE`, not `DEFINITELY_UNSENT`: the first run of the same action may have sent steps, so its
+reservations must not be released. After a crash, the saved attempt
 keeps the action's claim, and a later tick makes no call. The recovery case view (`RecoveryCaseView.allowance`)
 and the owner projection (`allowance`) report the allowance from the saved records. Liability follows the existing
-rule: after the approve was sent, the action stays `SUBMISSION_POSSIBLE`. If the swap never got a hash, nothing can
-settle the action from a receipt. It then stays unknown, with its reservations held, until an operator resolves it.
+rule: after the approve was sent, the action stays `SUBMISSION_POSSIBLE`. `read_original_receipt` does not settle an
+envelope with `steps`. It returns `SUBMISSION_UNKNOWN` without a read, because the swap receipt carries neither the
+approve and revoke gas nor the allowance. A step action therefore stays unknown, with its reservations held, until
+a step-aware reading exists or an operator resolves it.
 
 ### Not done here (other lanes or a builder decision)
 
 - **Wiring.** `worker.py` and `ControlledRuntime.clients` (`provider_ports.py`) do not pass a step plan yet. The
-  mounted path still runs the single swap.
+  mounted path still runs the single swap. The mounted clients would also refuse the steps as they stand. The
+  signer requires the top-level stage `SIGN_REQUESTED`, but the approve saves `APPROVE_SIGN_REQUESTED`.
+  `original_bytes()` reads the swap's top-level signed bytes. Each approve would end as `SIGNING_UNKNOWN`, with
+  its liability kept, and nothing would be signed.
+- **Gas reservation.** The worker sets the action's gas cap from the release's `gas.budget_raw`, which is
+  `141400000000000000` (the swap alone, 700000 x 202 gwei). Approve, swap and revoke need 840000 x 202 gwei =
+  `169680000000000000`. With this release the step path therefore refuses `FEE_EXCEEDS_GAS_RESERVATION` before
+  step 1. A release with a larger budget, and a new hash, is needed first.
+- **Step-aware settlement.** Settling a step action needs bound receipts for every sent step, with the gas of every
+  step charged. It is not built yet. Until then these actions stay unknown (see above).
 - **Release limits.** The release fixes `signer_requests` `1` and `broadcasts` `1`, and `operating_release.py`
   requires those values. The mounted signer and broadcast clients also allow one request each. One action with three
   steps makes three signer requests and three broadcasts. Before a runtime can mount this path, the builder must
   decide whether these limits count per step, or change the release rule. Either choice is a reviewed change and
   produces a new release hash.
-- **Revoke confirmation.** The worker's reconciliation reads only the swap receipt. `read_revoke_receipt` exists,
-  but no worker path calls it yet.
+- **Revoke confirmation.** `read_revoke_receipt` exists, but no worker path calls it yet. The recovery view
+  therefore reports a sent revoke as `REVOKE_UNCONFIRMED` (open).
 - **Ceiling price.** The USD check uses the release's documented MON price (`0.02`, an unapproved example). The
   builder still confirms the current price before the run (see above).
 
