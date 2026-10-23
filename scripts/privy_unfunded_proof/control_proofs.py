@@ -7,7 +7,7 @@ the authored release, the Privy outcome records of the sealed control-proof pack
 credential; the command reads three local paths and writes one new directory.
 
 A control is proven only when every rule below holds. Anything else leaves it in ``unproven`` with a fixed
-reason, and no state is produced for it. Two controls are ``decision_required`` even when their evidence is
+reason, and no state is produced for it. Three controls are ``decision_required`` even when their evidence is
 complete, because the provider covers only part of the control: their artifact and hash are produced, but no
 state, until the builder decides. ``opaque_program`` is never proven here: neither the Privy policy nor the
 entrypoint bounds the program bytes. See ``docs/qualification/inapp-trade/CONTROL_PROOFS_PLAN.md``.
@@ -58,8 +58,8 @@ _CLAIMS: Mapping[str, tuple[str, ...]] = {
     "raw_input": (
         "The release swap's output equals the pool formula for the approved input at the pinned reserves, which "
         "is consistent with exactly that input being swapped.",
-        "With an allowance of exactly the approved input, an intent one unit above it reverts: the entrypoint "
-        "pulls the full intent amount and the allowance bounds it.",
+        "With an allowance of exactly the approved input, an intent one unit above it reverts, which is "
+        "consistent with the entrypoint pulling the full intent amount through the allowance.",
     ),
     "recipient": (
         "A call trace of the release swap shows that the whole MOE output reaches the wallet (msg.sender) and "
@@ -73,8 +73,9 @@ _CLAIMS: Mapping[str, tuple[str, ...]] = {
     ),
     "fees": (
         "With the release's zero fees the output equals the pool formula, so no fee is taken.",
-        "A fee of 10001 bps reverts, a fee of 5000 bps plus a referrer fee of 5001 bps reverts, and a 100 bps "
-        "fee lowers the output: the deployed entrypoint reads the fee fields and bounds their sum.",
+        "A fee of 10001 bps reverts where 100 bps succeeds, and a fee of 5000 bps plus a referrer fee of 5001 "
+        "bps reverts where 5000 plus 4999 succeeds: the deployed entrypoint reads the fee fields and bounds "
+        "their sum at 10000 bps; the 100 bps fee lowers the output.",
     ),
     "gas_action_capacity": (
         "At the pinned block each step's gas limit is at least ceil(1.2 x eth_estimateGas), the swap succeeds "
@@ -92,6 +93,8 @@ _LIMITS: Mapping[str, tuple[str, ...]] = {
         "The Privy policy does not bind tokenUserBuys or tokenUserSells. The output token has no provider "
         "bound: the host names it, and the test shows only that the entrypoint refuses the input token as "
         "output, not that it refuses every other token.",
+        "The Privy row covers new approvals only; an allowance on another token granted before the policy is "
+        "not covered.",
         "The simulation shows one block; the router is mutable by its owner, so the release's router recheck "
         "still applies before the run.",
     ),
@@ -104,7 +107,9 @@ _LIMITS: Mapping[str, tuple[str, ...]] = {
         "The trace depends on the node's debug_traceCall with state overrides; it is one block.",
         "The trace covers the release's zero-fee calldata. The Privy policy does not bind the fee fields, so a "
         "host-encoded fee collector could take up to 100% of the output; only the host's zero-fee encoding "
-        "(control fees) prevents it.",
+        "(control fees, itself a builder decision) prevents it.",
+        "Only WMON and MOE Transfer logs are counted; the trace check also refuses any frame that moves native "
+        "value.",
         "A different program could route value elsewhere; that is the opaque_program control.",
     ),
     "minimum_output": (
@@ -113,8 +118,9 @@ _LIMITS: Mapping[str, tuple[str, ...]] = {
         "The boundary is tested with the release's zero fees only.",
     ),
     "fees": (
-        "The Privy policy does not bind the fee fields; the host encodes zero fees. A nonzero fee up to 10000 "
-        "bps, with any collector, would be signed and would execute.",
+        "The control also requires the fee values, collector and referrer to equal the adopted (zero) values. "
+        "No provider enforces that: the Privy policy does not bind the fee fields, and a nonzero fee up to "
+        "10000 bps with any collector would be signed and would execute. Only the host encodes zero fees.",
     ),
     "gas_action_capacity": (
         "The estimate is for the pinned block; a later state change is covered only by the 1.2 margin.",
@@ -125,6 +131,9 @@ _LIMITS: Mapping[str, tuple[str, ...]] = {
         "covers the provider-side signing cutoff only.",
         "The quote age (30 s) and input age (60 s) are host checks; the provider cannot see the quote time.",
         "The Flow intent has no on-chain deadline; after signing, the minimum output is the on-chain protection.",
+        "The expiry row has no same-calldata allow twin in this packet; that its body is in policy rests on rule "
+        "R3 and the v3 row raw.allow_swap_zero_value, and the refusal is read from the distinct request_expired "
+        "code.",
     ),
 }
 
@@ -132,6 +141,7 @@ _LIMITS: Mapping[str, tuple[str, ...]] = {
 # Complete evidence that covers only part of the control. Adopting it as the control's proof is a builder decision.
 DECISION_REQUIRED: Mapping[str, str] = {
     "input_output_assets": "OUTPUT_TOKEN_NOT_PROVIDER_BOUND",
+    "fees": "FEE_VALUES_NOT_PROVIDER_BOUND",
     "expiry_freshness": "PROVIDER_COVERS_SIGNING_CUTOFF_ONLY",
 }
 
@@ -323,7 +333,8 @@ def _trace_findings(trace: Any, output: int) -> dict[str, Any]:
     frames, transfers = [trace], 0
     while frames:
         frame = frames.pop()
-        if not isinstance(frame, Mapping) or "error" in frame or type(frame.get("to")) is not str:
+        if (not isinstance(frame, Mapping) or "error" in frame or type(frame.get("to")) is not str
+                or frame.get("value", "0x0") not in ("0x0", None)):
             raise _Unproven("TRACE_TRANSFERS_INVALID")
         touched.add(frame["to"].lower())
         for log in frame.get("logs") or []:
@@ -444,13 +455,16 @@ def _fees(chain: _Chain, privy: _Privy, base: dict[str, Any]) -> dict[str, Any]:
         raise _Unproven("CHAIN_RESULT_CONTRARY")
     chain.reverted("chain.swap_fee_over_bound")
     chain.reverted("chain.swap_fee_sum_over_bound")
+    if chain.success("chain.swap_fee_sum_at_bound") <= 0:
+        raise _Unproven("CHAIN_RESULT_CONTRARY")
     charged = chain.success("chain.swap_fee_charged")
     if not 0 < charged < base["baseline_output"]:
         raise _Unproven("CHAIN_RESULT_CONTRARY")
     return {"zero_fee_output_raw": str(base["baseline_output"]), "formula_output_raw": str(base["formula_output"]),
             "fee_bps_charged": chain_proof.FEE_CHARGED_BPS, "charged_output_raw": str(charged),
             "fee_bps_refused": chain_proof.FEE_OVER_BOUND_BPS,
-            "fee_and_referrer_bps_refused": list(chain_proof.FEE_SUM_SPLIT_BPS)}
+            "fee_and_referrer_bps_refused": list(chain_proof.FEE_SUM_SPLIT_BPS),
+            "fee_and_referrer_bps_accepted": list(chain_proof.FEE_SUM_AT_BOUND_BPS)}
 
 
 def _gas_action_capacity(chain: _Chain, privy: _Privy, base: dict[str, Any], authored: Mapping[str, Any]
@@ -638,14 +652,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"status": "REFUSED", "code": "OUT_ALREADY_EXISTS"}))
         return 2
     for name, proof in {**result["proven"], **result["decision_required"]}.items():
-        (args.out / f"{name}.proof.json").write_bytes(canonical_json(proof["artifact"]))
+        chain_proof.write_new(args.out / f"{name}.proof.json", canonical_json(proof["artifact"]))
     for name, support in result["supporting"].items():
-        (args.out / f"{name}.support.json").write_bytes(canonical_json(support["artifact"]))
+        chain_proof.write_new(args.out / f"{name}.support.json", canonical_json(support["artifact"]))
     summary = {"status": "BUILT", "controls": result["controls"],
                "decision_required": {name: {"reason": entry["reason"], "proof_sha256": entry["proof_sha256"]}
                                      for name, entry in result["decision_required"].items()},
                "unproven": result["unproven"]}
-    (args.out / "controls.json").write_bytes(canonical_json(summary))
+    chain_proof.write_new(args.out / "controls.json", canonical_json(summary))
     print(json.dumps(summary, sort_keys=True))
     return 0
 

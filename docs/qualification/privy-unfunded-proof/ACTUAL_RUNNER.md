@@ -21,7 +21,7 @@ This document describes the successor of the accepted synthetic driver. Exactly 
 
 ## Default refusal
 
-The code-owned registries hold exactly one frozen policy-layer packet, one raw profile and one actual table manifest. Every other packet, profile or table refuses before any credential read, socket or file effect. An unknown packet refuses with `ACTUAL_PACKET_NOT_APPROVED`.
+The code-owned registries hold two sealed packets (the v3 policy-layer packet and the control-proof packet of `docs/qualification/inapp-trade/CONTROL_PROOFS_PLAN.md`), one raw profile and their two actual table manifests. Every other packet, profile or table refuses before any credential read, socket or file effect. An unknown packet refuses with `ACTUAL_PACKET_NOT_APPROVED`.
 
 A caller cannot approve a packet with a Boolean, function argument, flag or environment setting. `run_actual_specimen` takes no approval, profile or authority mapping. Resolution reads only `CODE_OWNED_PACKET_APPROVALS`, `QUALIFIED_ACTUAL_PROFILES`, `CODE_OWNED_TYPE4_AUTHORITIES` and `CODE_OWNED_ACTUAL_MANIFESTS`. The same rule applies to every entry.
 

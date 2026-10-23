@@ -950,7 +950,7 @@
         "controls": [
           "precondition",
           "raw_input",
-          "fees"
+          "fees (decision required)"
         ]
       },
       {
@@ -977,7 +977,7 @@
           "precondition",
           "input_output_assets (decision required)",
           "raw_input",
-          "fees"
+          "fees (decision required)"
         ]
       },
       {
@@ -1025,7 +1025,7 @@
         "method": "eth_call",
         "expect": "REVERT",
         "controls": [
-          "fees"
+          "fees (decision required)"
         ]
       },
       {
@@ -1033,7 +1033,15 @@
         "method": "eth_call",
         "expect": "REVERT",
         "controls": [
-          "fees"
+          "fees (decision required)"
+        ]
+      },
+      {
+        "op_id": "chain.swap_fee_sum_at_bound",
+        "method": "eth_call",
+        "expect": "SUCCESS",
+        "controls": [
+          "fees (decision required)"
         ]
       },
       {
@@ -1041,7 +1049,7 @@
         "method": "eth_call",
         "expect": "SUCCESS",
         "controls": [
-          "fees"
+          "fees (decision required)"
         ]
       },
       {

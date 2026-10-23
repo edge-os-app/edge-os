@@ -1,4 +1,7 @@
-"""Operator entry point for the frozen unfunded packets: the v3 policy packet and the control-proof packet.
+"""Operator entry point for the frozen unfunded packets.
+
+The registered packets are the v3 policy packet (default) and the control-proof
+packet (``--packet control-proofs``).
 
 This command never reads ``.env``. It reads exactly three environment values
 (``PRIVY_APP_ID``, ``PRIVY_APP_SECRET``, ``PRIVY_AGENT_KEY_FILE``) and one P-256
@@ -6,8 +9,8 @@ PEM file, and only for a live run. ``--dry-run`` reads nothing and sends nothing
 
 The live path runs the packet's specimens one at a time in the frozen order. It
 stops on the first ``BREACH``, unexpected outcome or ``UNKNOWN`` other than an
-expected ``EXPIRY_REFUSAL``, and never retries. The runner has no broadcast path; the wallet must be unfunded, and the
-operator must pass ``--confirm-unfunded`` after an independent balance read.
+expected ``EXPIRY_REFUSAL``, and never retries. The runner has no broadcast
+path; the wallet must be unfunded, and the operator must pass ``--confirm-unfunded`` after an independent balance read.
 """
 
 from __future__ import annotations

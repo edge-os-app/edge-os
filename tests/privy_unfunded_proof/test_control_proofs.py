@@ -26,8 +26,8 @@ from tests.privy_unfunded_proof._control_support import (
     replaced,
 )
 
-PROVEN = ("raw_input", "recipient", "minimum_output", "fees", "gas_action_capacity")
-DECISION = ("input_output_assets", "expiry_freshness")
+PROVEN = ("raw_input", "recipient", "minimum_output", "gas_action_capacity")
+DECISION = ("input_output_assets", "fees", "expiry_freshness")
 
 
 def _build(**changes):  # noqa: ANN003, ANN202
@@ -40,7 +40,7 @@ def _build(**changes):  # noqa: ANN003, ANN202
 # ---------------------------------------------------------------- full recorded run
 
 
-def test_a_matching_recorded_run_proves_five_controls_leaves_two_to_the_builder_and_never_the_program() -> None:
+def test_a_matching_recorded_run_proves_four_controls_leaves_three_to_the_builder_and_never_the_program() -> None:
     result = _build()
     assert set(result["proven"]) == set(PROVEN)
     assert set(result["unproven"]) == {"opaque_program"}
@@ -50,7 +50,7 @@ def test_a_matching_recorded_run_proves_five_controls_leaves_two_to_the_builder_
     assert support["sha256"] == hashlib.sha256(canonical_json(support["artifact"])).hexdigest()
     assert support["artifact"]["evidence_class"] is None and support["artifact"]["state"] == "UNPROVEN_SUPPORT"
     assert {name: entry["reason"] for name, entry in result["decision_required"].items()} == {
-        "input_output_assets": "OUTPUT_TOKEN_NOT_PROVIDER_BOUND",
+        "input_output_assets": "OUTPUT_TOKEN_NOT_PROVIDER_BOUND", "fees": "FEE_VALUES_NOT_PROVIDER_BOUND",
         "expiry_freshness": "PROVIDER_COVERS_SIGNING_CUTOFF_ONLY"}
     for name in DECISION:
         entry = result["decision_required"][name]
@@ -90,7 +90,8 @@ def test_each_artifact_cites_its_operations() -> None:
     assert {"chain.swap_probe", "chain.pool_reserves", "chain.swap_input_above_allowance"} <= cited["raw_input"]
     assert {"chain.swap_trace", "raw.ctl_deny_swap_receiver_wallet",
             "raw.ctl_deny_moe_transfer_sink"} <= cited["recipient"]
-    assert {"chain.swap_fee_over_bound", "chain.swap_fee_sum_over_bound", "chain.swap_fee_charged"} <= cited["fees"]
+    assert {"chain.swap_fee_over_bound", "chain.swap_fee_sum_over_bound", "chain.swap_fee_sum_at_bound",
+            "chain.swap_fee_charged"} <= cited["fees"]
     assert {"chain.estimate_approve", "chain.estimate_swap", "chain.estimate_revoke", "chain.block",
             "chain.swap_at_release_gas"} <= cited["gas_action_capacity"]
     assert cited["expiry_freshness"] >= {"raw.ctl_allow_revoke_zero", "raw.ctl_deny_expired_request"}
@@ -123,7 +124,7 @@ def test_produced_controls_drop_in_to_the_release_shape() -> None:
     release = inapp.complete_release(value, fill)
     # Controls 1-3 and 9 wait on the recorded v3 result, 4 and 11 on a builder decision, 12 stays unproven.
     assert inapp.unqualified_controls(release) == ["approvals", "chain", "entrypoint_method", "expiry_freshness",
-                                                   "input_output_assets", "opaque_program",
+                                                   "fees", "input_output_assets", "opaque_program",
                                                    "wallet_signer_binding"]
     digest = release_sha256(release)
     import datetime as dt
@@ -151,6 +152,9 @@ def test_produced_controls_drop_in_to_the_release_shape() -> None:
     ("chain.swap_fee_over_bound", "fees", {"status": "RESULT", "result": "0x" + "00" * 31 + "01", "error": None}),
     ("chain.swap_fee_sum_over_bound", "fees", {"status": "RESULT", "result": "0x" + "00" * 31 + "01",
                                                "error": None}),
+    ("chain.swap_fee_sum_at_bound", "fees", {"status": "RPC_ERROR", "result": None,
+                                             "error": {"code": 3, "reverted": True, "data": None,
+                                                       "message_sha256": None}}),
     ("chain.estimate_swap", "gas_action_capacity", {"result": hex(600_000)}),
     ("chain.swap_at_release_gas", "gas_action_capacity", {"status": "RPC_ERROR", "result": None,
                                                           "error": {"code": 3, "reverted": True, "data": None,
@@ -168,7 +172,8 @@ def test_a_contrary_chain_result_leaves_its_control_unproven(op_id: str, control
 def test_a_fee_that_takes_nothing_is_not_proof_that_fee_fields_are_honoured() -> None:
     probe = next(r for r in recorded_chain() if r["op_id"] == "chain.swap_probe")
     result = _build(chain_records=replaced(recorded_chain(), "chain.swap_fee_charged", result=probe["result"]))
-    assert "fees" not in result["proven"]
+    assert "fees" not in result["decision_required"]
+    assert result["unproven"]["fees"]["reason"] == "CHAIN_RESULT_CONTRARY"
 
 
 def test_an_output_that_differs_from_the_formula_proves_neither_input_nor_fees() -> None:
@@ -200,6 +205,15 @@ def test_a_missing_trace_leaves_only_the_recipient_unproven() -> None:
 
 def test_a_trace_without_logs_leaves_the_recipient_unproven() -> None:
     result = _build(chain_records=recorded_chain(trace_logs=False))
+    assert result["unproven"]["recipient"]["reason"] == "TRACE_TRANSFERS_INVALID"
+
+
+def test_a_trace_that_moves_native_value_leaves_the_recipient_unproven() -> None:
+    records = recorded_chain()
+    trace = next(r for r in records if r["op_id"] == "chain.swap_trace")["result"]
+    changed = copy.deepcopy(trace)
+    changed["calls"][1]["calls"][0]["value"] = "0x1"
+    result = _build(chain_records=replaced(records, "chain.swap_trace", result=changed))
     assert result["unproven"]["recipient"]["reason"] == "TRACE_TRANSFERS_INVALID"
 
 
@@ -291,7 +305,8 @@ def test_without_the_positive_control_no_privy_refusal_counts() -> None:
     result = _build(privy_records=records)
     for name in ("input_output_assets", "recipient", "expiry_freshness"):
         assert result["unproven"][name]["reason"] == "PRIVY_RECORD_INVALID"
-    assert {"raw_input", "minimum_output", "fees", "gas_action_capacity"} <= set(result["proven"])
+    assert {"raw_input", "minimum_output", "gas_action_capacity"} <= set(result["proven"])
+    assert "fees" in result["decision_required"]
 
 
 def test_a_changed_gas_limit_in_the_authored_release_is_judged_against_the_estimate() -> None:

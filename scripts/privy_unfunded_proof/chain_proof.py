@@ -7,8 +7,11 @@ simulate the release's exact swap against the deployed entrypoint at one pinned 
 storage overrides for the wallet's WMON balance and entrypoint allowance (WMON slots ``3`` and ``4``, as in
 ``scripts/operator_trade/dry_run.py``); the approve estimate overrides only the balance. An override changes only the simulation; nothing is signed or sent.
 
-Each negative simulation changes exactly one intent or fee word of the baseline swap. Its positive twin
-runs at the same block with the same overrides. ``control_proofs`` turns the saved records into control
+Each negative simulation differs in exactly one word from a positive twin that runs at the same block with
+the same overrides: ``swap_min_above`` from ``swap_min_equal``; ``swap_input_above_allowance``,
+``swap_wrong_output`` and ``swap_wrong_input`` from ``swap_probe``; ``swap_fee_over_bound`` (10001 bps) from
+``swap_fee_charged`` (100 bps, same collector); ``swap_fee_sum_over_bound`` (5000 + 5001 bps) from
+``swap_fee_sum_at_bound`` (5000 + 4999 bps, same recipients). ``control_proofs`` turns the saved records into control
 proofs. See ``docs/qualification/inapp-trade/CONTROL_PROOFS_PLAN.md``.
 
 Provider error text and the endpoint are never saved or printed.
@@ -61,8 +64,9 @@ BALANCE_SLOT = 3
 ALLOWANCE_SLOT = 4
 FEE_CHARGED_BPS = 100
 FEE_OVER_BOUND_BPS = 10001
-# feeBps + referrerFeeBps = 10001: the sum bound, with both fee recipients set.
+# feeBps + referrerFeeBps = 10001 (refused) and 9999 (its twin, accepted), both fee recipients set.
 FEE_SUM_SPLIT_BPS = (5000, 5001)
+FEE_SUM_AT_BOUND_BPS = (5000, 4999)
 
 RPC_URL_ENV = "EDGE_OS_CONTROL_PROOF_RPC_URL"
 RESULTS_FILE = "chain_results.json"
@@ -171,6 +175,7 @@ _OPERATIONS = (
     ChainOperation("chain.swap_wrong_input", "eth_call", "REVERT"),
     ChainOperation("chain.swap_fee_over_bound", "eth_call", "REVERT"),
     ChainOperation("chain.swap_fee_sum_over_bound", "eth_call", "REVERT"),
+    ChainOperation("chain.swap_fee_sum_at_bound", "eth_call", "SUCCESS"),
     ChainOperation("chain.swap_fee_charged", "eth_call", "SUCCESS"),
     ChainOperation("chain.swap_trace", "debug_traceCall", "SUCCESS"),
     ChainOperation("chain.estimate_approve", "eth_estimateGas", "RESULT"),
@@ -225,6 +230,9 @@ def operation_params(op_id: str, *, block_tag: str, baseline_output: int | None)
         "chain.swap_fee_sum_over_bound": [swap(min_output_raw=1, fee_bps=FEE_SUM_SPLIT_BPS[0], fee_collector=SINK,
                                                referrer_fee_bps=FEE_SUM_SPLIT_BPS[1], referrer=SINK),
                                           block_tag, overrides],
+        "chain.swap_fee_sum_at_bound": [swap(min_output_raw=1, fee_bps=FEE_SUM_AT_BOUND_BPS[0], fee_collector=SINK,
+                                             referrer_fee_bps=FEE_SUM_AT_BOUND_BPS[1], referrer=SINK),
+                                        block_tag, overrides],
         "chain.swap_fee_charged": [swap(min_output_raw=1, fee_bps=FEE_CHARGED_BPS, fee_collector=SINK),
                                    block_tag, overrides],
         "chain.swap_trace": [swap(min_output_raw=r), block_tag, _fresh(_SEALED_TRACE_CONFIG)],
@@ -421,7 +429,8 @@ def _clock() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _write_new(path: Path, data: bytes) -> None:
+def write_new(path: Path, data: bytes) -> None:
+    """Create one file exclusively, write it whole and fsync it."""
     descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     try:
         view = memoryview(data)
@@ -459,9 +468,13 @@ def main(argv: list[str] | None = None) -> int:
     except ChainRefused as refused:
         print(f"REFUSED {refused.code}")
         return 2
+    try:
+        args.store.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        print("STORE_ALREADY_EXISTS: one run uses one new store")
+        return 2
     records = run_chain_operations(client, clock=_clock)
-    args.store.mkdir(parents=True, exist_ok=False)
-    _write_new(args.store / RESULTS_FILE,
+    write_new(args.store / RESULTS_FILE,
                json.dumps({"schema": RESULTS_SCHEMA, "operations": records}, sort_keys=True,
                           separators=(",", ":")).encode("utf-8"))
     for record in records:

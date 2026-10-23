@@ -8,7 +8,8 @@ credential and holds no transport.
 A packet is admitted only when the *code* registers it in
 ``CODE_OWNED_PACKET_APPROVALS``; no caller argument, flag, environment value or
 Boolean can approve one. The registry holds two sealed packets, the v3
-policy-layer packet and the control-proof packet, so every other packet refuses with ``ACTUAL_PACKET_NOT_APPROVED``. The packet binds the app, the
+policy-layer packet and the control-proof packet, so every other packet
+refuses with ``ACTUAL_PACKET_NOT_APPROVED``. The packet binds the app, the
 owner, a policy-resource owner outside executor control, the wallet, the
 network, the signing route, the per-profile policy identities and content
 hashes, the source and deployed code identities, expiry, the auth-header

@@ -17,7 +17,7 @@ pending step 1 of `INAPP_TRADE_RELEASE.md`). This plan covers the other eight.
 | 5 | `raw_input` | Provable | Chain simulations |
 | 6 | `recipient` | Provable if the node supports `debug_traceCall` | Chain trace + two Privy refusals |
 | 7 | `minimum_output` | Provable | Chain simulations |
-| 8 | `fees` | Provable | Chain simulations |
+| 8 | `fees` | **Builder decision** (sum bound only; fee values and recipients have no provider bound) | Chain simulations |
 | 10 | `gas_action_capacity` | Provable for the native gas budget | Chain estimates and base fee |
 | 11 | `expiry_freshness` | **Builder decision** (provider signing cutoff only; the control is HOST-layer) | One Privy refusal |
 | 12 | `opaque_program` | **Not provable this way** | See "Control 12" |
@@ -48,7 +48,11 @@ current evidence is `SOURCE_INSPECTED`, and the deployed source is not reproduci
 (`kuru-deployed-source/SOURCE_IDENTITY.md`). Provider-actual evidence of a contract check is the deployed code's
 behaviour on the chain. Read-only `eth_call` runs the deployed bytecode at a pinned block. Each negative
 simulation changes exactly one word of the release swap. Its positive twin runs at the same block with the
-same overrides and succeeds. Only that one change explains the revert.
+same overrides and succeeds, differing in that one word: `swap_min_above` from `swap_min_equal`;
+`swap_input_above_allowance`, `swap_wrong_output` and `swap_wrong_input` from `swap_probe`;
+`swap_fee_over_bound` (10001 bps) from `swap_fee_charged` (100 bps, same collector); `swap_fee_sum_over_bound`
+(5000 + 5001 bps) from `swap_fee_sum_at_bound` (5000 + 4999 bps, same recipients). Only that one change
+explains the revert.
 
 The wallet holds no WMON allowance, so a plain `eth_call` of the swap would revert for every input. The calls
 therefore carry temporary storage overrides on WMON: wallet balance `2 x 10 WMON` (slot 3) and entrypoint
@@ -107,6 +111,7 @@ program.
 | `chain.swap_wrong_input` | swap, `tokenUserSells` = MOE, minimum 1 | revert |
 | `chain.swap_fee_over_bound` | swap, `feeBps` 10001, collector `0x…dead` | revert |
 | `chain.swap_fee_sum_over_bound` | swap, `feeBps` 5000 and `referrerFeeBps` 5001, both to `0x…dead` | revert |
+| `chain.swap_fee_sum_at_bound` | swap, `feeBps` 5000 and `referrerFeeBps` 4999, both to `0x…dead` | success |
 | `chain.swap_fee_charged` | swap, `feeBps` 100, collector `0x…dead`, minimum 1 | success, `0 < output < R` |
 | `chain.swap_trace` * | `debug_traceCall` of swap with minimum `R`, `callTracer` with logs | trace with Transfer logs |
 | `chain.estimate_approve` | `eth_estimateGas` WMON `approve(entrypoint, 10e18)`, balance override only (allowance 0, as live) | estimate |
@@ -128,7 +133,8 @@ tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherw
   `POLICY_DENY`.
 - Why it proves the input side: Privy refuses approving the entrypoint on a non-WMON token, so the agent cannot
   create an input allowance on another asset (with v3 row `raw.deny_approve_wrong_to` and R3's `value` 0, which
-  rules out native input), and the entrypoint pulls the named input token.
+  rules out native input), and the entrypoint pulls the named input token. The Privy row covers new approvals
+  only; an allowance granted on another token before the policy is not covered.
 - Why it is not proven: the control also limits the output token, at the `INDEPENDENT_POLICY` layer. Privy does
   not bind `tokenUserBuys`; a host could name any token with a matching program. The wrong-output case shows
   only that the input token is refused as output, not that every other token is. So the builder emits the
@@ -160,7 +166,8 @@ tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherw
   argument) without a trace. A different program could route value elsewhere; that is control 12.
 - Not proven either: the trace covers the release's zero-fee calldata. Privy does not bind the fee fields, so a
   host-encoded fee collector could take up to 100% of the output in one signed swap. Only the host's zero-fee
-  encoding prevents that (control 8's host side).
+  encoding prevents that (control 8, itself a builder decision). The trace check also refuses any frame that
+  moves native value.
 
 ### 7 `minimum_output`
 
@@ -169,14 +176,20 @@ tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherw
 - Not proven: Privy does not bind `minAmountUserBuys`; the host computes the minimum from its reserves read.
   The boundary is tested with the release's zero fees only.
 
-### 8 `fees`
+### 8 `fees` (builder decision: `FEE_VALUES_NOT_PROVIDER_BOUND`)
 
-- Evidence: `R` equals the pool formula (zero fees take nothing); `chain.swap_fee_over_bound` and
-  `chain.swap_fee_sum_over_bound` revert; `chain.swap_fee_charged` returns less than `R`.
-- Why: the deployed code reads the fee fields, refuses a fee of 10001 bps and a fee-plus-referrer sum of 10001
-  bps, and deducts a nonzero fee; with the release's all-zero fees no fee is taken.
-- Not proven: Privy does not bind the fee fields; the host encodes zero fees. A fee up to 10000 bps with any
-  collector would be signed and would execute.
+- Evidence: `R` equals the pool formula (zero fees take nothing); `chain.swap_fee_over_bound` reverts where
+  `chain.swap_fee_charged` succeeds; `chain.swap_fee_sum_over_bound` reverts where `chain.swap_fee_sum_at_bound`
+  succeeds; `chain.swap_fee_charged` returns less than `R`.
+- Why it proves the sum bound: the deployed code reads the fee fields, bounds `feeBps + referrerFeeBps` at
+  10000 bps, and deducts a nonzero fee; with the release's all-zero fees no fee is taken.
+- Why it is not proven: the control also requires the fee values, collector and referrer to equal the adopted
+  (zero) values (`CONTROL_RESTRICTIONS.md`, layer `CONTRACT`). No provider enforces that: Privy does not bind the
+  fee fields, and a fee up to 10000 bps with any collector would be signed and would execute. Only the host
+  encodes zero fees. So the artifact goes under `decision_required`.
+- Smallest alternatives: the builder accepts the sum-bound proof plus the host's zero-fee encoding; or a Privy
+  R3 condition binding `executeSwap.fees.feeBps` and `fees.referrerFeeBps` to 0 (a policy edit with the
+  builder's key; nested tuple paths are unqualified) plus an allow/deny row pair.
 
 ### 10 `gas_action_capacity`
 
@@ -204,7 +217,8 @@ tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherw
   The smallest alternative is that decision; no provider can see the quote time.
 - Not proven: the quote age (30 s) and input age (60 s) are host checks. The Flow intent has no on-chain
   deadline; after signing, the minimum output (7) is the on-chain protection. The Privy reply code
-  `request_expired` is documented, not yet observed. A different code stops the run (`UNRECOGNIZED_REPLY`)
+  `request_expired` is documented, not yet observed. The expiry row has no same-calldata allow twin in this
+  packet; that its body is in policy rests on R3 and the v3 row `raw.allow_swap_zero_value`. A different code stops the run (`UNRECOGNIZED_REPLY`)
   and needs a reviewed profile update.
 
 ### 12 `opaque_program`: not provable this way
