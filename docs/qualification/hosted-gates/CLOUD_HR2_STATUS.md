@@ -95,7 +95,10 @@ until the builder's record is registered. The research worker unit stays disable
     These were already admitted before this lane, and still are, with or without a record.
   - **What option A added:** exactly one admitted case, `127.0.0.1` with a registered record and its TLS mode.
     Both reviewers confirmed this by comparing `056dd65` against `555353e`.
-  - **Recommended follow-up (it widens a production refusal, so the builder decides):**
+  - **Resolved in lane `cloud/loopback-strict` (builder-approved 2026-10-23):** production now refuses every loopback,
+    unspecified or multi-host database host, record or not, except option A's literal `127.0.0.1` with a registered
+    record and matching `sslmode`; the comment and both passages state that rule (`HOSTED_RECORD_V2_RUNBOOK.md` §3.2, `CONTRACT.md` §5.5).
+  - **Original recommended follow-up (it widens a production refusal, so the builder decides):**
     - normalise the host (`rstrip(".").lower()`) and refuse any loopback or unspecified address
       (`ipaddress.ip_address`, plus short IPv4 forms);
     - refuse multi-host URLs;

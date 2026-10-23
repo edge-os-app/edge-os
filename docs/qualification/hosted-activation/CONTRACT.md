@@ -141,7 +141,10 @@ environment. See `docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md`.
 
 Production refuses a loopback database host, except `127.0.0.1` when a registered record is named and the URL's
 `sslmode` equals the record's `database_tls_mode` (builder decision, option A, 2026-10-23). This route is for the
-host research worker. `localhost`, a host-less URL and every unregistered case keep the refusal.
+host research worker. Only that literal host qualifies. Every unregistered case keeps the refusal, and so does every
+other loopback, unspecified or multi-host form, record or not: a host-less URL, a multi-host list, `localhost` or
+`*.localhost` in any case with or without a trailing dot, the rest of `127.0.0.0/8` in any IPv4 spelling, `[::1]`,
+IPv4-mapped loopback, `0.0.0.0` and `[::]`. The check uses no DNS lookup.
 
 ## 6. Refusal codes
 

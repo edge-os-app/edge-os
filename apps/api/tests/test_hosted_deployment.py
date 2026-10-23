@@ -655,3 +655,44 @@ def test_a_non_loopback_production_database_is_unchanged_by_the_loopback_route(
     approve(monkeypatch, record(), sha)
     named = production_env(EDGE_OS_HOSTED_DEPLOYMENT_ID=DEPLOYMENT, EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH=str(path))
     assert load_settings(named).database_url == named["EDGE_OS_DATABASE_URL"]
+
+
+# --- Every loopback, unspecified or multi-host database host is refused in production ------------------------------
+
+OTHER_LOOPBACK_HOSTS = [
+    "", "localhost", "LOCALHOST", "LocalHost", "localhost.", "LOCALHOST.", "db.localhost", "DB.LOCALHOST.",
+    "127.0.0.1.", "127.0.0.2", "127.1.2.3", "127.255.255.254", "127.1", "2130706433", "0x7f000001", "0177.0.0.1",
+    "[::1]", "[0:0:0:0:0:0:0:1]", "[::0001]", "[::1%25lo]", "[::ffff:127.0.0.1]", "[::ffff:7f00:2]",
+    "0.0.0.0", "0", "[::]", "[::ffff:0.0.0.0]",
+    "127.0.0.1,db.example", "db.example,127.0.0.1", "db.example,db2.example", " 127.0.0.1", "127.0.0.1%09",
+]
+
+
+@pytest.mark.parametrize("host", OTHER_LOOPBACK_HOSTS)
+def test_production_refuses_every_other_loopback_unspecified_or_multi_host_form(host: str) -> None:
+    with pytest.raises(ConfigError, match=LOOPBACK_REFUSAL):
+        load_settings(loopback_env(host=host))
+
+
+@pytest.mark.parametrize("host", OTHER_LOOPBACK_HOSTS)
+def test_a_registered_record_admits_none_of_the_other_loopback_forms(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str) -> None:
+    path, sha = write_record(tmp_path, record())
+    approve(monkeypatch, record(), sha)
+    with pytest.raises(ConfigError, match=LOOPBACK_REFUSAL):
+        load_settings(loopback_env(path, host=host))
+
+
+@pytest.mark.parametrize("host", ["edge-os-postgres", "db.example", "localhost.example", "mylocalhost",
+                                  "127.example", "10.0.0.5", "128.0.0.1", "1.2.3.4", "[2001:db8::1]",
+                                  "[::ffff:10.0.0.5]"])
+def test_production_admits_non_loopback_hosts_as_before(host: str) -> None:
+    settings = load_settings(loopback_env(host=host))
+    assert settings.database_url == LOOPBACK_URL.format(mode="verify-full").replace("127.0.0.1", host)
+
+
+@pytest.mark.parametrize("host", ["localhost", "LOCALHOST", "[::1]", "127.0.0.2", "0.0.0.0", "127.0.0.1,db.example"])
+def test_local_keeps_accepting_loopback_forms(host: str) -> None:
+    url = f"postgresql+psycopg://app@{host}:5432/edge_os"
+    settings = load_settings(production_env(EDGE_OS_ENV="local", EDGE_OS_DATABASE_URL=url))
+    assert settings.database_url == url
