@@ -230,6 +230,25 @@ def test_the_proxy_gate_refuses_when_the_proxy_cannot_be_resolved(answer):
     assert gate("10.0.1.5") is False
 
 
+def test_a_failed_proxy_lookup_is_retried_only_after_a_short_pause():
+    lookups: list[str] = []
+    answers: list[Any] = [OSError("down"), ["10.0.1.5"]]
+
+    def resolve(name: str) -> list[str]:
+        lookups.append(name)
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    clock = [0.0]
+    gate = relay.ProxyGate("coolify-proxy", resolve=resolve, clock=lambda: clock[0])
+    assert gate("10.0.1.5") is False
+    assert gate("10.0.1.5") is False and len(lookups) == 1  # no new lookup during the pause
+    clock[0] += relay.PROXY_FAILURE_SECONDS + 0.1
+    assert gate("10.0.1.5") is True and len(lookups) == 2
+
+
 def test_the_proxy_gate_compares_normalized_addresses():
     gate = relay.ProxyGate("p", resolve=lambda name: ["10.0.1.5"], clock=lambda: 0.0)
     assert gate("::ffff:10.0.1.5") is True

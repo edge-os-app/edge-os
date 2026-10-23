@@ -203,6 +203,14 @@ def test_the_firewall_admits_the_worker_to_the_relay_through_traefik_only():
             '-i edgeos-egress -s "$EGRESS_SUBNET" -p tcp -m connmark --mark "$RELAY_MARK" '
             '-m conntrack --ctstate DNAT --ctorigdstport 443 -j ACCEPT'):
         assert rule in text, rule
+    # The docker-proxy path (Docker's default userland proxy): INPUT accepts new TCP 443 to a local relay address.
+    assert ('-i "$2" -s "$3" -p tcp --dport 443 -m set --match-set "$RELAY_SET" dst -m addrtype --dst-type LOCAL '
+            '-m conntrack --ctstate NEW -j ACCEPT') in text
+    assert 'replies_only EDGE_OS_IN edgeos-egress "$EGRESS_SUBNET" relay' in text
+    assert 'replies_only EDGE_OS_IN_DB edgeos-hostdb "$HOSTDB_SUBNET"\n' in text
+    assert 'replies_only EDGE_OS_IN_PRIVATE edgeos-private "$PRIVATE_SUBNET"\n' in text
+    function = text.split("replies_only() {", 1)[1].split("\n}\n", 1)[0]
+    assert function.index("--dst-type LOCAL") < function.index('-A "$chain" -j DROP')
     # The relay accept comes before the final drop of the forward chain.
     assert text.index("--ctorigdstport 443 -j ACCEPT") < text.index('iptables -A "$fwd" -j DROP')
 

@@ -25,7 +25,8 @@ configuration only. The execution worker sees two keyless `https://<host>/rpc` U
 ```text
 execution worker (edgeos-egress, 10.203.0.0/28)
   │ https://rpc-a.edgeos.fun/rpc  or  https://rpc-b.edgeos.fun/rpc   (keyless; no credential header)
-  │ DNS -> this VPS's public IPv4; Docker DNATs :443 to Traefik; host rule admits only this marked flow
+  │ DNS -> this VPS's public IPv4 :443; Docker hands it to Traefik via docker-proxy (default) or DNAT;
+  │ the host rule admits only TCP 443 to the relay addresses, on either path
   ▼
 Coolify Traefik (coolify-proxy, network `coolify`)  TLS: Let's Encrypt (`letsencrypt`), entrypoint `https`
   │ router per host: Host(..) && Path(`/rpc`) && Method(`POST`)
@@ -51,13 +52,15 @@ the provider through that network's NAT.
 
 **Who may call.** Three gates, all required:
 
-1. The host egress rule lets the worker open TCP 443 to the relay names only as a flow that Docker DNATs to a container
-   (Traefik). The provider host is not in the worker's allowlist, so the worker cannot reach the provider directly.
-2. Traefik's `ipallowlist` admits only `EDGE_OS_RPC_RELAY_ALLOWED_SOURCES`. The worker's hairpin connection is
-   masqueraded by Docker to the `coolify` bridge gateway, so the range is that gateway as a `/32` (read it in deploy
-   step 3). Internet callers keep their own address and are refused with `403 Forbidden` by Traefik.
+1. The host egress rule lets the worker open TCP 443 to the relay addresses only, on this host. With Docker's default
+   `userland-proxy: true` the connection is not DNATed and reaches `docker-proxy` through `INPUT`; with
+   `userland-proxy: false` Docker DNATs it to Traefik. The rule admits each path for TCP 443 to a relay address and
+   nothing else. The provider host is not in the worker's allowlist, so the worker cannot reach the provider directly.
+2. Traefik's `ipallowlist` admits only `EDGE_OS_RPC_RELAY_ALLOWED_SOURCES`. The worker's connection reaches Traefik from
+   the `coolify` bridge gateway on both paths (docker-proxy connects from it; Docker's masquerade rewrites to it), so
+   the range is that gateway as a `/32` (read it in deploy step 3). Internet callers keep their own address and are refused with `403 Forbidden` by Traefik.
 3. The relay admits a socket peer only when it is the current address of `coolify-proxy` (resolved on the shared
-   network, cached 30 s, a failed lookup is never cached, the lookup runs outside the request lock). The check runs at
+   network, cached 30 s, a failed lookup cached for 2 s, the lookup runs outside the request lock). The check runs at
    accept, before a thread or connection slot is spent: any other peer is closed at once (outcome `peer_refused`).
    Loopback is accepted for the container's own `GET /healthz`, and `POST /rpc` checks the proxy again (`403`). Another
    container on the `coolify` network, such as the API or web container, cannot call port 8545 or 8546 directly.
@@ -208,10 +211,10 @@ Controller steps, in order. Nothing here was run.
    or image tag still show `${`, write the commit and the source range literally in the Coolify Compose editor; both
    are public values. Never write the provider URL into the Compose file.
 5. **Deploy** the resource and wait for `healthy`. Confirm the relay container is on the `coolify` network only
-   (hosted check 1). If Coolify attached its own per-resource network as well, `coolify-proxy` can resolve to its
-   address on that network while Traefik connects over `coolify`, and every call is refused (`peer_refused`). Remove
-   the extra network (Coolify's "Connect to Predefined Network" for this resource, or delete the network from the
-   deployed file) and redeploy.
+   (hosted check 1). If Coolify attached its own per-resource network as well, calls still work (the gate admits every
+   address `coolify-proxy` resolves to), but the relay then shares a network with more peers. Remove the extra network
+   (Coolify's "Connect to Predefined Network" for this resource, or delete the network from the deployed file) and
+   redeploy.
 6. **Egress rule.** Update `/etc/edge-os/egress.env` as in `HOSTED_RECORD_V2_RUNBOOK.md` §4.1:
 
    ```sh
@@ -221,7 +224,9 @@ Controller steps, in order. Nothing here was run.
    ```
 
    Install the script again to `/usr/local/sbin/edge-os-egress-firewall` and run
-   `systemctl reload edge-os-egress-firewall`.
+   `systemctl reload edge-os-egress-firewall`. Record which path Docker uses (both are admitted):
+   `docker info --format '{{json .}}' | grep -o '"userland-proxy[^,]*' ; iptables -t nat -S DOCKER | grep -- '-i edgeos-egress -j RETURN'`
+   (a line from the second command means the docker-proxy path).
 7. **Worker and release.** Set `EDGE_OS_EXECUTION_MONAD_RPC_URL=https://rpc-a.edgeos.fun/rpc` when the execution lane
    activates the worker settings, and use the fill values above. Both belong to other lanes.
 

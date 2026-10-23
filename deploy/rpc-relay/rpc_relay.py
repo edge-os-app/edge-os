@@ -62,6 +62,7 @@ UPSTREAM_CONNECT_SECONDS = 10.0
 UPSTREAM_DEADLINE_SECONDS = 15.0
 CLIENT_SOCKET_SECONDS = 10.0
 PROXY_CACHE_SECONDS = 30.0
+PROXY_FAILURE_SECONDS = 2.0  # a failed lookup is retried after this, so an outage cannot stall the accept loop
 DEFAULT_TRUSTED_PROXY = "coolify-proxy"
 UPSTREAM_ENV, PROXY_ENV = "EDGE_OS_RPC_RELAY_UPSTREAM_URL", "EDGE_OS_RPC_RELAY_TRUSTED_PROXY"
 
@@ -538,6 +539,7 @@ class ProxyGate:
         self.name, self.resolve, self.clock = name, resolve, clock
         self.addresses: frozenset[Any] = frozenset()
         self.resolved_at: float | None = None
+        self.failed_at: float | None = None
         self.lock = threading.Lock()
 
     def _current(self) -> frozenset[Any]:
@@ -545,6 +547,8 @@ class ProxyGate:
             now = self.clock()
             if self.resolved_at is not None and now - self.resolved_at <= PROXY_CACHE_SECONDS:
                 return self.addresses
+            if self.failed_at is not None and now - self.failed_at <= PROXY_FAILURE_SECONDS:
+                return frozenset()
         # The lookup runs outside the lock, so one slow answer never stalls requests that use a fresh cache.
         found: frozenset[Any] = frozenset()
         try:
@@ -553,9 +557,11 @@ class ProxyGate:
                 found = frozenset(answers)
         except Exception:
             found = frozenset()
-        if found:  # a failed lookup is never cached: the next request asks again
-            with self.lock:
-                self.addresses, self.resolved_at = found, now
+        with self.lock:  # a failure refuses for PROXY_FAILURE_SECONDS only, never longer
+            if found:
+                self.addresses, self.resolved_at, self.failed_at = found, now, None
+            else:
+                self.failed_at = now
         return found
 
     def __call__(self, peer: str) -> bool:

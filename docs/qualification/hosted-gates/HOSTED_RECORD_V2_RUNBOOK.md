@@ -239,18 +239,23 @@ What `apply` installs:
 | `EDGE_OS_FWD_A/B` (first rule of `DOCKER-USER`) | `-i edgeos-hostdb`, `-o edgeos-hostdb`, `-s 10.203.0.16/28` and `-d 10.203.0.16/28` `-j DROP`; `! -i edgeos-egress ! -s 10.203.0.0/28 -j RETURN`; `ESTABLISHED,RELATED -j RETURN`; UDP and TCP 53 to each upstream resolver `-j RETURN`; TCP to `EDGE_OS_EGRESS_PORTS` (default 443) with `--match-set edgeos-egress-allow dst -j RETURN`; `-j DROP` |
 | `EDGE_OS_RELAY_MARK_A/B` (first rule of mangle `PREROUTING`) | `-i edgeos-egress -s 10.203.0.0/28 -p tcp --dport 443 --match-set edgeos-egress-relay dst --ctstate NEW -j CONNMARK --set-mark 0x2031` |
 | `EDGE_OS_FWD_A/B`, relay rules (after the hostdb drops) | `-o edgeos-egress -d 10.203.0.0/28` and `-i edgeos-egress -s 10.203.0.0/28` with `--mark 0x2031 --ctstate ESTABLISHED,RELATED -j ACCEPT`; `-i edgeos-egress -s 10.203.0.0/28 -p tcp --mark 0x2031 --ctstate DNAT --ctorigdstport 443 -j ACCEPT` |
-| `EDGE_OS_IN_A/B` (first rule of `INPUT`) | `! -i edgeos-egress ! -s 10.203.0.0/28 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
+| `EDGE_OS_IN_A/B` (first rule of `INPUT`) | `! -i edgeos-egress ! -s 10.203.0.0/28 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-i edgeos-egress -s 10.203.0.0/28 -p tcp --dport 443 --match-set edgeos-egress-relay dst --dst-type LOCAL --ctstate NEW -j ACCEPT` (the relay through docker-proxy); `-j DROP` |
 | `EDGE_OS_IN_DB_A/B` (first rule of `INPUT`) | `! -i edgeos-hostdb ! -s 10.203.0.16/28 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
 | `EDGE_OS_IN_PRIVATE_A/B` (first rule of `INPUT`) | `! -i edgeos-private ! -s 10.203.0.64/26 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
 
 - The upstream resolvers are every IPv4 `nameserver` in the file Docker uses (below), without loopback stubs.
   Docker's embedded resolver forwards from the container's namespace, so these queries cross `edgeos-egress`.
-- The relay names (`EDGE_OS_EGRESS_RELAY_HOSTS`) resolve to this host's own public address, where Docker DNATs port
-  443 to Coolify's Traefik on another bridge. They fill their own set, `edgeos-egress-relay`, never
-  `edgeos-egress-allow`. A worker connection is marked in mangle `PREROUTING` while its destination is still a relay
-  address; only that marked, DNATed flow from original port 443 is accepted, in both directions, ahead of Docker's
-  inter-bridge isolation. Traefik then sees the Coolify bridge gateway as the source (Docker's masquerade), which is
-  what the relay's `ipallowlist` admits. A relay name that stops resolving to this host is not DNATed and is dropped.
+- The relay names (`EDGE_OS_EGRESS_RELAY_HOSTS`) resolve to this host's own public address, where Coolify's Traefik
+  publishes port 443. They fill their own set, `edgeos-egress-relay`, never `edgeos-egress-allow`. Docker delivers a
+  worker connection there one of two ways, and the rule admits both for TCP 443 only:
+  - With Docker's default `userland-proxy: true`, Docker's per-bridge "skip DNAT" rule leaves it un-DNATed; it
+    reaches `docker-proxy` through `INPUT`, where `EDGE_OS_IN` accepts new TCP 443 to a local relay address.
+  - With `userland-proxy: false`, Docker DNATs it to Traefik on another bridge. It is marked in mangle `PREROUTING`
+    while its destination is still a relay address; only that marked, DNATed flow from original port 443 is accepted,
+    in both directions, ahead of Docker's inter-bridge isolation.
+
+  Either way Traefik sees the Coolify bridge gateway as the source (docker-proxy's connection or Docker's masquerade),
+  which is what the relay's `ipallowlist` admits. A relay name that stops resolving to this host is dropped.
 - `edgeos-egress-allow` is a `hash:ip` set with a 900-second entry timeout. `refresh` resolves
   `EDGE_OS_EGRESS_HOSTS` on the host and only adds addresses; an empty answer never clears the set, and an address
   the providers stop using expires. A missing address fails closed (dropped), never open.

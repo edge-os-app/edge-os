@@ -16,10 +16,14 @@
 # `refresh` only adds addresses with a timeout; an empty answer never clears the set (it fails closed when entries
 # expire).
 #
-# The relay names resolve to this host's own public address, so a worker connection to them is DNATed by Docker to
-# Traefik on Coolify's bridge and never matches the address set. `apply` marks such a connection in mangle PREROUTING
-# while its destination is still a relay address, then accepts exactly the marked, DNATed TCP 443 flow (both
-# directions) in DOCKER-USER, ahead of Docker's inter-bridge isolation. The relay names never enter the general set.
+# The relay names resolve to this host's own public address, where Traefik's port 443 is published. Docker delivers a
+# worker connection there one of two ways, and both are admitted for TCP 443 to a relay address only:
+#   docker-proxy (Docker's default, `userland-proxy: true`): not DNATed; it reaches the host through INPUT, where the
+#     EDGE_OS_IN chain accepts it before its drop.
+#   DNAT (`userland-proxy: false`): rewritten to Traefik on Coolify's bridge, so it never matches the address set.
+#     `apply` marks it in mangle PREROUTING while its destination is still a relay address and accepts exactly the
+#     marked, DNATed flow (both directions) in DOCKER-USER, ahead of Docker's inter-bridge isolation.
+# The relay names never enter the general set.
 #
 # Configuration: /etc/edge-os/egress.env (root:root 0600), for example
 #   EDGE_OS_EGRESS_HOSTS="api.privy.io"
@@ -93,10 +97,16 @@ hook() {
 }
 
 replies_only() {
-  # replies_only <chain name> <bridge> <subnet>: INPUT from that bridge or subnet accepts replies and drops the rest.
+  # replies_only <chain name> <bridge> <subnet> [relay]: INPUT from that bridge or subnet accepts replies and drops the
+  # rest. With `relay`, it also accepts new TCP 443 to a relay address of this host: with Docker's default
+  # `userland-proxy: true` a container's connection to a published port is not DNATed (Docker's per-bridge "skip DNAT"
+  # rule) and reaches docker-proxy, which forwards it to Traefik.
   chain=$(build INPUT "$1")
   iptables -A "$chain" ! -i "$2" ! -s "$3" -j RETURN
   iptables -A "$chain" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  if [ "${4:-}" = relay ]; then
+    iptables -A "$chain" -i "$2" -s "$3" -p tcp --dport 443 -m set --match-set "$RELAY_SET" dst -m addrtype --dst-type LOCAL -m conntrack --ctstate NEW -j ACCEPT
+  fi
   iptables -A "$chain" -j DROP
   hook INPUT "$1" "$chain"
 }
@@ -137,7 +147,7 @@ apply() {
   hook DOCKER-USER EDGE_OS_FWD "$fwd"
 
   # Traffic to the host itself (SSH, Coolify, the loopback database) from each bridge: replies only.
-  replies_only EDGE_OS_IN edgeos-egress "$EGRESS_SUBNET"
+  replies_only EDGE_OS_IN edgeos-egress "$EGRESS_SUBNET" relay
   replies_only EDGE_OS_IN_DB edgeos-hostdb "$HOSTDB_SUBNET"
   replies_only EDGE_OS_IN_PRIVATE edgeos-private "$PRIVATE_SUBNET"
 
