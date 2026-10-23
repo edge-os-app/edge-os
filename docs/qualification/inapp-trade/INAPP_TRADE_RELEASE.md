@@ -13,7 +13,8 @@ local app, later on the public site.
 | `apps/api/src/edge_os_api/execution/inapp_trade_release.py` | A pure completion step. It checks the fill, the gas rule and the USD ceiling, computes the minimum output, builds the `OperatingRelease` and the `BoundRelease`, and prints the exact registry lines. |
 | `apps/api/tests/execution/test_inapp_trade_release.py` | Tests for the authored file and the completion step. |
 
-`operating_release.py` is unchanged. `APPROVED_ACTUAL_RELEASES` and `APPROVED_ACTUAL_BINDINGS` stay empty.
+`operating_release.py` changed only its release shape and admission (`CLOUD-A6B`, see "Release steps and gas
+budget" below). `APPROVED_ACTUAL_RELEASES` and `APPROVED_ACTUAL_BINDINGS` stay empty.
 
 ## What the release fixes
 
@@ -30,8 +31,8 @@ local app, later on the public site.
 | Input | `10000000000000000000` (10 WMON), allowance the same, value `0` | Authoring choice (see the USD section) |
 | Fees | all zero, `is_in_token_fee` false (what `build_calldata_hex` encodes) | Code |
 | Deployment | source commit `70bc0c93c073f78697b99848eedefbf5dbe698c7`, entrypoint code `da214086…e1cf`, router `0x2f84fb8982073f39ba47c7fcc29119af074abbcb` with code `9cf6f5c8…c649` | `kuru-deployed-source/SOURCE_IDENTITY.md` (read at block `0x6c1db44`, 2026-10-14) |
-| Gas | swap `gas_limit` `700000`, `max_fee_per_gas` `202000000000` (202 gwei), priority `2000000000`, `budget_raw` `141400000000000000` | Task gas rule; fee = 2 x the 100-gwei minimum base fee + 2-gwei priority (`controlled-action-feasibility`, M-GAS; operator rule `2 * base_fee + priority_fee`) |
-| Limits | actions, attempts, broadcasts, quote requests and signer requests `1`; observer requests `20`; 4096/16384 bytes; 60 s deadline | The module requires the five `1`s. The other values are authoring choices. |
+| Gas | swap `gas_limit` `700000`, `max_fee_per_gas` `202000000000` (202 gwei), priority `2000000000`, `budget_raw` `169680000000000000` (approve + swap + revoke) | Task gas rule; fee = 2 x the 100-gwei minimum base fee + 2-gwei priority (`controlled-action-feasibility`, M-GAS; operator rule `2 * base_fee + priority_fee`); budget: builder decision 2026-10-23 |
+| Limits | actions, attempts and quote requests `1`; steps approve, swap, revoke in that order, each with signer requests `1` and broadcasts `1`; observer requests `20`; 4096/16384 bytes; 60 s deadline | The module requires the `1`s and the step order (builder decision 2026-10-23). The other values are authoring choices. |
 | Freshness | quote age 30 s, input age 60 s | Authoring choice (same as the accepted synthetic release) |
 
 The WMON and pool code hashes (`1ba3ee06…d187`, `aae0c275…644d`) have no field in the release schema. They are kept
@@ -69,6 +70,9 @@ the M-GAS figure, where 0.02 MON is about USD 0.0005, so MON is about USD 0.025)
 worst    = 10.1818 x 0.02 = USD 0.203636  <=  USD 2.00
 ```
 
+The gas budget, `169680000000000000` wei (0.16968 MON), is smaller than the 0.1818 MON counted here, because it
+leaves out the wrap. Input plus budget is `10.16968 x 0.02 = USD 0.2033936`. Both are inside the ceiling.
+
 The ceiling is still met at any MON price up to `2.00 / 10.1818 = USD 0.19643`. `complete_release` refuses
 `USD_CEILING_EXCEEDED` above the ceiling. It also refuses a ceiling above `2.00`. The builder must confirm the current
 MON price before the run. If the price is above 0.1964, the input must become smaller, and the release gets a new
@@ -87,6 +91,8 @@ The rule is `gas_limit >= ceil(eth_estimateGas x 1.2)`, computed in integers as 
 - It also applies the rule to the swap limit against the recorded live estimate `544967`. That estimate needs at
   least `653961`, so the authored `700000` passes. The failed 2026-10-22 limit `400000` is refused.
 - The release's `gas.gas_limit` must equal the authored swap step limit.
+- The release's `gas.budget_raw` must cover every active step's limit at the fixed maximum fee:
+  `(70000 + 700000 + 70000) x 202 gwei = 169680000000000000`. A smaller budget refuses `INAPP_AUTHORED_INVALID`.
 - `operating_release.py` itself does not read gas estimates. At run time the app's path signs the release's fixed
   `gas_limit` and does not estimate gas again. The check therefore runs once, on the recorded estimate, when the
   release is completed. A state change after that read is not covered (the same limit as in `OPERATOR_TRADE.md`).
@@ -362,21 +368,80 @@ a step-aware reading exists or an operator resolves it.
   signer requires the top-level stage `SIGN_REQUESTED`, but the approve saves `APPROVE_SIGN_REQUESTED`.
   `original_bytes()` reads the swap's top-level signed bytes. Each approve would end as `SIGNING_UNKNOWN`, with
   its liability kept, and nothing would be signed.
-- **Gas reservation.** The worker sets the action's gas cap from the release's `gas.budget_raw`, which is
-  `141400000000000000` (the swap alone, 700000 x 202 gwei). Approve, swap and revoke need 840000 x 202 gwei =
-  `169680000000000000`. With this release the step path therefore refuses `FEE_EXCEEDS_GAS_RESERVATION` before
-  step 1. A release with a larger budget, and a new hash, is needed first.
+- **Gas reservation.** Resolved by `CLOUD-A6B`: the release's `gas.budget_raw` is now `169680000000000000`
+  (approve, swap and revoke at 202 gwei). The worker sets the action's gas cap from it.
 - **Step-aware settlement.** Settling a step action needs bound receipts for every sent step, with the gas of every
   step charged. It is not built yet. Until then these actions stay unknown (see above).
-- **Release limits.** The release fixes `signer_requests` `1` and `broadcasts` `1`, and `operating_release.py`
-  requires those values. The mounted signer and broadcast clients also allow one request each. One action with three
-  steps makes three signer requests and three broadcasts. Before a runtime can mount this path, the builder must
-  decide whether these limits count per step, or change the release rule. Either choice is a reviewed change and
-  produces a new release hash.
+- **Release limits.** Resolved in the release by `CLOUD-A6B`: the limits count per step (see below). The mounted
+  signer and broadcast clients still allow one request each per client. Counting them per step is wiring work.
 - **Revoke confirmation.** `read_revoke_receipt` exists, but no worker path calls it yet. The recovery view
   therefore reports a sent revoke as `REVOKE_UNCONFIRMED` (open).
 - **Ceiling price.** The USD check uses the release's documented MON price (`0.02`, an unapproved example). The
   builder still confirms the current price before the run (see above).
+
+## Release steps and gas budget (`CLOUD-A6B`)
+
+Task `CLOUD-A6B`, builder-approved 2026-10-23. Base `c0d59cae84560617254720a2f818f0dc07c60344`. This changes the
+release content and so its hash. It registers nothing: `APPROVED_ACTUAL_RELEASES` and `APPROVED_ACTUAL_BINDINGS`
+stay empty until the builder approves the exact hashes (pending step 8).
+
+### New release content
+
+**SHA-256 of `release.authored.json`: `d3b4be5a84a674a67fe3947300ba8d57b2c74f6e7308ff0567f2fea3df054e38`**
+(`sha256sum docs/qualification/inapp-trade/release.authored.json`; a test checks that this document prints it).
+
+The release still carries `{"$fill": name}` markers. Its `release_sha256`, the hash the builder registers, exists
+only after the controller's fill (pending steps 3-7), and step 7 prints it. The previous authored file had
+`budget_raw` `141400000000000000` and the single-action limits. Any release completed from it has a different hash.
+
+Two values changed:
+
+```json
+"gas": {"gas_limit": 700000, "max_fee_per_gas": 202000000000, "max_priority_fee_per_gas": 2000000000,
+  "budget_raw": "169680000000000000"},
+"limits": {"actions": 1, "attempts": 1, "quote_requests": 1,
+  "observer_requests": 20, "max_request_bytes": 4096, "max_response_bytes": 16384, "deadline_seconds": 60,
+  "steps": [{"step": "approve", "signer_requests": 1, "broadcasts": 1},
+    {"step": "swap", "signer_requests": 1, "broadcasts": 1},
+    {"step": "revoke", "signer_requests": 1, "broadcasts": 1}]}
+```
+
+### Builder decisions (2026-10-23)
+
+1. **Limits per step.** The in-app release names three steps, approve, swap and revoke. Each step has
+   `signer_requests` `1` and `broadcasts` `1`.
+2. **Gas budget.** `gas.budget_raw` covers all three steps: `169680000000000000` wei (0.16968 MON). It stays inside
+   the USD 2 ceiling, including gas, at the release's MON price (see "USD ceiling arithmetic").
+3. **Revoke after a stop.** The revoke still runs after a stop, an expiry, an agent removal or a consent change,
+   because it only lowers the allowance. Its rechecks keep the release admission only. `CLOUD-A6` already behaved
+   this way. The test `test_builder_decision_a_stop_agent_removal_or_consent_change_never_blocks_the_revoke` covers
+   a lasting stop (`STOPPED_HALT_ALL_SWAPS`), an agent removal (`REMOVAL_REQUESTED`) and a consent change
+   (`CONSENT_OR_REVISION_CHANGED`). `test_an_intent_expiring_after_the_approve_still_lets_the_revoke_run` covers an
+   expiry.
+
+### Release shape and admission (`operating_release.py`)
+
+`OperatingRelease` admits a release only in one of two `limits` shapes:
+
+| Shape | `limits` keys | Rule |
+| --- | --- | --- |
+| Single action (unchanged) | `actions`, `attempts`, `broadcasts`, `quote_requests`, `signer_requests`, `observer_requests`, `max_request_bytes`, `max_response_bytes`, `deadline_seconds` | Exactly as before. `actions`, `attempts`, `broadcasts`, `quote_requests` and `signer_requests` are `1`. Its canonical bytes and hash are unchanged. A test pins the synthetic release hash from the base. |
+| Steps | the same keys without `broadcasts` and `signer_requests`, plus `steps` | `steps` is exactly `[approve, swap, revoke]` in that order. Each entry has exactly `step`, `signer_requests` `1` and `broadcasts` `1`. `actions`, `attempts` and `quote_requests` are `1`. |
+
+Anything else refuses `EXECUTION_RELEASE_INVALID` before any I/O. Examples: another order, a missing, extra or
+repeated step, a count other than the integer `1`, an extra key, or top-level `signer_requests` or `broadcasts` next
+to `steps`. `release_steps(release)` returns the named order, or `None` for a single-action release.
+
+### Where the steps are read
+
+- `inapp_trade_release` refuses `INAPP_AUTHORED_INVALID` when any of these holds: the release does not have the
+  step shape, its steps differ from `facts.active_steps`, or `gas.budget_raw` is below the sum of the active step
+  limits at `max_fee_per_gas`. `TradeSteps.from_authored` uses the same checks.
+- `OriginalTransactionTransport` with a bound release runs only what that release names. It needs a step plan
+  whose order equals `release_steps`, or no plan when the release is single-action. Otherwise it refuses
+  `RELEASE_STEPS_MISMATCH` before the quote, the nonce read or any signature. The step path sends each named step
+  at most once, in order. A second run is refused with `ACTION_ALREADY_STARTED`. A step outside the release is
+  never prepared.
 
 ## Checks
 

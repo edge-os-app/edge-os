@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import hashlib
 import json
 import socket
 import uuid
@@ -20,7 +21,7 @@ import pytest
 from edge_os_api.execution import inapp_trade_release as inapp
 from edge_os_api.execution import operating_release
 from edge_os_api.execution.direct_route_quote_client import DirectRoutePins, DirectRouteQuoteClient, build_program_hex
-from edge_os_api.execution.operating_release import CONTROLS, ReleaseRefused, check_release, release_sha256
+from edge_os_api.execution.operating_release import CONTROLS, ReleaseRefused, check_release, release_sha256, release_steps
 from scripts.privy_unfunded_proof import actual_packet
 
 from execution.test_direct_route_quote_client import Http, reserves_reply
@@ -193,7 +194,7 @@ def test_any_changed_control_refuses(monkeypatch, control, change):
         check_release(changed, expected_sha256=release_sha256(changed), now=NOW)
 
 
-@pytest.mark.parametrize("name", ["actions", "attempts", "broadcasts", "quote_requests", "signer_requests"])
+@pytest.mark.parametrize("name", ["actions", "attempts", "quote_requests"])
 def test_one_action_one_attempt_stays_one(name):
     release = inapp.complete_release(authored(), fill())
     assert release.content()["limits"][name] == 1
@@ -201,6 +202,70 @@ def test_one_action_one_attempt_stays_one(name):
     source["release"]["limits"][name] = 2
     with pytest.raises(ReleaseRefused):
         inapp.complete_release(source, fill())
+
+
+@pytest.mark.parametrize("index", [0, 1, 2])
+@pytest.mark.parametrize("name", ["signer_requests", "broadcasts"])
+def test_each_step_stays_one_signer_request_and_one_broadcast(index, name):
+    release = inapp.complete_release(authored(), fill())
+    assert release.content()["limits"]["steps"][index][name] == 1
+    source = authored()
+    source["release"]["limits"]["steps"][index][name] = 2
+    with pytest.raises(ReleaseRefused):
+        inapp.complete_release(source, fill())
+
+
+def test_the_release_names_approve_swap_revoke_each_with_one_signer_request_and_one_broadcast():
+    source = authored()
+    limits = source["release"]["limits"]
+    assert limits == {"actions": 1, "attempts": 1, "quote_requests": 1, "observer_requests": 20,
+                      "max_request_bytes": 4096, "max_response_bytes": 16384, "deadline_seconds": 60,
+                      "steps": [{"step": "approve", "signer_requests": 1, "broadcasts": 1},
+                                {"step": "swap", "signer_requests": 1, "broadcasts": 1},
+                                {"step": "revoke", "signer_requests": 1, "broadcasts": 1}]}
+    assert [step["step"] for step in limits["steps"]] == source["facts"]["active_steps"]
+    release = inapp.complete_release(source, fill())
+    assert release_steps(release) == ("approve", "swap", "revoke")
+
+
+@pytest.mark.parametrize("change", [
+    lambda a: a["facts"].update(active_steps=["approve", "swap"]),
+    lambda a: a["release"]["limits"].update(steps=a["release"]["limits"]["steps"][:2]),
+    lambda a: a["release"]["limits"].update(steps=a["release"]["limits"]["steps"][::-1]),
+    lambda a: a["release"]["limits"].pop("steps"),
+    # The old single-action limits are a valid release shape, but not for the in-app approve, swap and revoke.
+    lambda a: (a["release"]["limits"].pop("steps"), a["release"]["limits"].update(signer_requests=1, broadcasts=1)),
+])
+def test_an_authored_file_whose_release_steps_differ_from_its_active_steps_refuses(change):
+    source = authored()
+    change(source)
+    with pytest.raises(ReleaseRefused, match="INAPP_AUTHORED_INVALID"):
+        inapp.complete_release(source, fill())
+
+
+def test_the_gas_budget_covers_approve_swap_and_revoke_at_the_fixed_maximum_fee():
+    source = authored()
+    gas, limits = source["release"]["gas"], source["facts"]["gas_limits"]
+    assert gas["budget_raw"] == "169680000000000000"
+    assert int(gas["budget_raw"]) == (limits["approve"] + limits["swap"] + limits["revoke"]) * gas["max_fee_per_gas"]
+    assert inapp.complete_release(source, fill()).content()["gas"]["budget_raw"] == "169680000000000000"
+    # Still inside the USD 2 ceiling with gas: the input plus the budget, at the release's MON price.
+    price = Decimal(source["facts"]["mon_usd_price"])
+    assert (Decimal(int(source["release"]["route"]["approved_input_raw"]) + int(gas["budget_raw"])) * price
+            / Decimal(10**18)) == Decimal("0.2033936")
+    assert inapp.worst_case_usd(source) <= Decimal("2.00")
+    source["release"]["gas"]["budget_raw"] = "169679999999999999"
+    with pytest.raises(ReleaseRefused, match="INAPP_AUTHORED_INVALID"):
+        inapp.complete_release(source, fill())
+    source["release"]["gas"]["budget_raw"] = "141400000000000000"  # the swap alone (the CLOUD-A2 budget)
+    with pytest.raises(ReleaseRefused, match="INAPP_AUTHORED_INVALID"):
+        inapp.complete_release(source, fill())
+
+
+def test_the_document_prints_the_sha256_of_the_authored_release_file():
+    digest = hashlib.sha256(AUTHORED_PATH.read_bytes()).hexdigest()
+    document = AUTHORED_PATH.with_name("INAPP_TRADE_RELEASE.md").read_text(encoding="utf-8")
+    assert f"`{digest}`" in document
 
 
 def test_gas_rule_is_ceil_of_estimate_times_one_point_two():
@@ -225,7 +290,7 @@ def test_a_limit_below_one_point_two_times_the_recorded_estimate_refuses_complet
 def test_a_lowered_authored_swap_limit_refuses_against_the_recorded_estimate():
     source = authored()
     source["facts"]["gas_limits"]["swap"] = source["release"]["gas"]["gas_limit"] = 400000
-    source["release"]["gas"]["budget_raw"] = str(400000 * source["release"]["gas"]["max_fee_per_gas"])
+    source["release"]["gas"]["budget_raw"] = str((70000 + 400000 + 70000) * source["release"]["gas"]["max_fee_per_gas"])
     with pytest.raises(ReleaseRefused, match="GAS_LIMIT_TOO_LOW"):
         inapp.complete_release(source, fill(gas_estimates={"approve": 1, "swap": 1, "revoke": 1}))
 

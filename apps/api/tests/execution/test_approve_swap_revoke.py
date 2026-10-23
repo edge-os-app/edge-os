@@ -33,6 +33,7 @@ from execution.test_privy_signer import NOW, PUBLISHED_TEST_KEY, PUBLISHED_WALLE
 
 AUTHORED = Path(__file__).resolve().parents[4] / "docs" / "qualification" / "inapp-trade" / "release.authored.json"
 BASE_NONCE = 5
+STEP_NAMES = ("approve", "swap", "revoke")
 
 
 def steps(**changes: Any) -> TradeSteps:
@@ -140,9 +141,16 @@ def test_the_release_names_approve_swap_revoke_with_its_fixed_gas_and_ceiling():
     assert plan.input_asset_id == "monad:143/0x3bd359c1119da7da1d913d1c4d2b7c461115433a"
 
 
-def test_an_authored_file_with_other_steps_is_refused():
+@pytest.mark.parametrize("change", [
+    lambda a: a["facts"].update(active_steps=["swap"]),
+    lambda a: a["release"]["limits"].update(steps=a["release"]["limits"]["steps"][::-1]),
+    lambda a: a["release"]["limits"]["steps"].pop(),
+    lambda a: a["release"]["limits"]["steps"][1].update(broadcasts=2),
+    lambda a: a["release"]["gas"].update(budget_raw="141400000000000000"),
+])
+def test_an_authored_file_with_other_steps_is_refused(change):
     authored = json.loads(AUTHORED.read_text(encoding="utf-8"))
-    authored["facts"]["active_steps"] = ["swap"]
+    change(authored)
     with pytest.raises(ValueError):
         TradeSteps.from_authored(authored)
 
@@ -468,11 +476,77 @@ def test_a_single_swap_envelope_has_no_allowance_record(tmp_path):
     assert "allowance" not in owner_projection(saved)
 
 
-def test_a_bound_release_runs_the_steps_and_its_swap_envelope_still_qualifies_for_receipt_recovery(tmp_path):
+def bound_steps(base: OriginalTransactionTransport, names: tuple[str, ...] | None = STEP_NAMES):
+    """`bound_original`'s synthetic release, with per-step limits naming `names` (None keeps single-action limits)."""
     from execution.test_saved_attempt_signing import bound_original
+    from edge_os_api.execution.operating_release import BoundRelease, OperatingRelease, release_sha256
+    single, _ = bound_original(base)
+    source = single.release.content()
+    del source["schema"]
+    if names is not None:
+        limits = source["limits"]
+        del limits["signer_requests"], limits["broadcasts"]
+        limits["steps"] = [{"step": name, "signer_requests": 1, "broadcasts": 1} for name in names]
+    release = OperatingRelease(source)
+    binding = BoundRelease(release, single.identity(), **{key: value for key, value in single.proofs().items()})
+    return binding, {binding.sha256: release_sha256(release)}
+
+
+def bound_transport(base: OriginalTransactionTransport, binding, approvals, *, plan: TradeSteps | None = None,
+                    signer: Signer | None = None, chain: Chain | None = None) -> OriginalTransactionTransport:
+    context = dataclasses.replace(base._context, identity=binding.identity())
+    clients = dataclasses.replace(base._clients, signer=signer or base._clients.signer,
+                                  broadcast=chain or base._clients.broadcast)
+    return OriginalTransactionTransport(context, clients, base._profile, controls=lambda: [], clock=lambda: NOW,
+                                        binding=binding, synthetic_bindings=approvals, steps=plan)
+
+
+def test_a_release_naming_the_steps_signs_and_sends_each_step_exactly_once_in_its_order(tmp_path):
+    signer, chain = Signer(), Chain()
+    base, recordings, _ = multi(tmp_path, signer=signer, chain=chain)
+    binding, approvals = bound_steps(base)
+    transport = bound_transport(base, binding, approvals, plan=steps())
+    stages: list = []
+    outcome = run(transport, stages)
+    assert outcome.detail == "BROADCAST_RETURNED;REVOKE:BROADCAST_RETURNED"
+    named = [step["step"] for step in binding.release.content()["limits"]["steps"]]
+    assert [step for step, _ in signer.calls] == named == ["approve", "swap", "revoke"]
+    assert [step for step, _ in chain.sent] == named
+    assert recordings.call_counts()["route.quote"] == 1
+    assert run(transport, []).detail == "ACTION_ALREADY_STARTED"
+    assert len(signer.calls) == len(chain.sent) == 3
+
+
+@pytest.mark.parametrize("names", [None, ("approve", "swap", "revoke")])
+def test_a_step_plan_and_a_release_that_do_not_name_the_same_steps_send_nothing(tmp_path, names):
+    signer, chain = Signer(), Chain()
+    base, recordings, _ = multi(tmp_path, signer=signer, chain=chain)
+    binding, approvals = bound_steps(base, names)
+    # A single-action release refuses the step plan; a step release refuses the single swap.
+    transport = bound_transport(base, binding, approvals, plan=steps() if names is None else None)
+    stages: list = []
+    outcome = run(transport, stages)
+    assert (outcome.outcome, outcome.detail) == ("DEFINITELY_UNSENT", "RELEASE_STEPS_MISMATCH")
+    assert signer.calls == [] and chain.sent == [] and chain.nonce_reads == 0
+    assert recordings.call_counts() == {}
+    assert [stage for stage, _ in stages] == ["REFUSED_UNSENT"]
+
+
+def test_the_step_plan_order_must_equal_the_releases_order(tmp_path):
+    signer, chain = Signer(), Chain()
+    base, recordings, _ = multi(tmp_path, signer=signer, chain=chain)
+    binding, approvals = bound_steps(base)
+    plan = steps()
+    object.__setattr__(plan, "order", ("approve", "revoke", "swap"))  # a plan built around its own checks
+    outcome = run(bound_transport(base, binding, approvals, plan=plan), [])
+    assert (outcome.outcome, outcome.detail) == ("DEFINITELY_UNSENT", "RELEASE_STEPS_MISMATCH")
+    assert signer.calls == [] and chain.sent == [] and recordings.call_counts() == {}
+
+
+def test_a_bound_release_runs_the_steps_and_its_swap_envelope_still_qualifies_for_receipt_recovery(tmp_path):
     signer, chain = Signer(), Chain()
     base, _, _ = multi(tmp_path, signer=signer, chain=chain)
-    binding, approvals = bound_original(base)
+    binding, approvals = bound_steps(base)
     context = dataclasses.replace(base._context, identity=binding.identity())
     transport = OriginalTransactionTransport(context, base._clients, base._profile, controls=lambda: [],
                                              clock=lambda: NOW, binding=binding, synthetic_bindings=approvals,
@@ -509,6 +583,27 @@ def test_a_lasting_stop_after_the_approve_refuses_the_swap_but_never_the_revoke(
     outcome = run(transport, stages)
     assert outcome.detail == "SWAP:STOPPED_HALT_ALL_SWAPS;REVOKE:BROADCAST_RETURNED"
     assert chain.sent == [("approve", 5), ("revoke", 6)]
+
+
+@pytest.mark.parametrize("reason", ["STOPPED_HALT_ALL_SWAPS", "REMOVAL_REQUESTED", "CONSENT_OR_REVISION_CHANGED"])
+def test_builder_decision_a_stop_agent_removal_or_consent_change_never_blocks_the_revoke(tmp_path, reason):
+    """Builder decision 2026-10-23: the revoke only lowers the allowance, so it runs after any of these."""
+    signer, chain = Signer(), Chain()
+    base, _, _ = multi(tmp_path, signer=signer, chain=chain)
+    binding, approvals = bound_steps(base)
+    transport = bound_transport(base, binding, approvals, plan=steps())
+    calls = {"count": 0}
+
+    def controls():
+        calls["count"] += 1
+        return [reason] if calls["count"] >= 4 else []  # on from the swap's pre-sign recheck, and lasting
+
+    transport._controls = controls
+    stages: list = []
+    outcome = run(transport, stages)
+    assert outcome.detail == f"SWAP:{reason};REVOKE:BROADCAST_RETURNED"
+    assert chain.sent == [("approve", 5), ("revoke", 6)]
+    assert envelope(stages)["revoke"]["stage"] == "BROADCAST_RETURNED"
 
 
 def test_an_intent_expiring_after_the_approve_still_lets_the_revoke_run(tmp_path):

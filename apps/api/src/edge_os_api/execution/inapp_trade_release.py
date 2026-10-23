@@ -20,7 +20,8 @@ from typing import Any
 
 from edge_os_api.execution.connected_identity import adopted_consent, resolve_agent, saved_release_identity
 from edge_os_api.execution.direct_route_quote_client import PROGRAM_FEE_SCALE
-from edge_os_api.execution.operating_release import BoundRelease, OperatingRelease, ReleaseRefused, release_sha256
+from edge_os_api.execution.operating_release import (BoundRelease, OperatingRelease, ReleaseRefused, release_sha256,
+                                                     validate_limits)
 from edge_os_api.execution.original_transaction import wallet_address
 
 AUTHORED_SCHEMA = "edge-os.inapp-trade-authoring/1"
@@ -84,6 +85,17 @@ def _facts(authored: Mapping[str, Any]) -> dict[str, Any]:
             or type(facts.get("recorded_swap_estimate")) is not int or facts["recorded_swap_estimate"] <= 0
             or gas.get("gas_limit") != limits["swap"]
             or _decimal(facts.get("usd_ceiling")) > MAX_USD_CEILING):
+        raise ReleaseRefused("INAPP_AUTHORED_INVALID")
+    # The release names the same steps, each with its own single signer request and broadcast, and its gas budget
+    # covers every one of them at the fixed maximum fee.
+    try:
+        validate_limits(release.get("limits"))
+    except ReleaseRefused:
+        raise ReleaseRefused("INAPP_AUTHORED_INVALID") from None
+    budget, max_fee = gas.get("budget_raw"), gas.get("max_fee_per_gas")
+    if ([step["step"] for step in release["limits"].get("steps") or []] != facts["active_steps"]
+            or not _raw(budget) or type(max_fee) is not int or max_fee <= 0
+            or int(budget) < sum(limits[step] for step in facts["active_steps"]) * max_fee):
         raise ReleaseRefused("INAPP_AUTHORED_INVALID")
     _decimal(facts.get("mon_usd_price"))
     return facts
