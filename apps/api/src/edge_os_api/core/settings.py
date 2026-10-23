@@ -174,7 +174,11 @@ class Settings(BaseSettings):
             # Names only: no message repeats a configured value, key or token.
             if not (self.build_sha or "").strip():
                 problems.append("build_sha: production needs the exact build identity")
-            if url.host in {"127.0.0.1", "localhost", None}:
+            # The one loopback route is the host research worker's 127.0.0.1 (builder decision 2026-10-23): only with a
+            # registered hosted deployment record whose TLS mode is the URL's sslmode. Every other loopback is refused.
+            if url.host in {"127.0.0.1", "localhost", None} and not (
+                    url.host == "127.0.0.1" and deployment is not None
+                    and url.query.get("sslmode") == deployment.database_tls_mode):
                 problems.append("database_url: production needs a hosted database, not a loopback host")
             if url.query.get("sslmode") not in {"require", "verify-ca", "verify-full"}:
                 problems.append("database_url: production needs sslmode=require or stricter")

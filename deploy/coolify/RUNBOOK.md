@@ -108,7 +108,8 @@ Rules and refusals:
 - Do not set `EDGE_OS_PRIVY_APP_SECRET`, `EDGE_OS_AUTH_DISABLED` or `EDGE_OS_DEV_AUTH_BYPASS`. Startup refuses them.
 - `EDGE_OS_CORS_ALLOWED_ORIGINS` must be one or more exact `https://` origins. No `*`, no `http://`.
 - The database host must not be loopback, `postgres` or `coolify-db`, and the URL must carry `sslmode=require` or
-  stricter.
+  stricter. The one exception is the host research worker's `127.0.0.1`, admitted only with a registered hosted
+  deployment record whose TLS mode is the URL's `sslmode` (see `HOSTED_RECORD_V2_RUNBOOK.md` §3.2).
 - `EDGE_OS_BUILD_SHA` must be the exact deployed commit.
 - The test app id `edge-os-test-app` is refused.
 - Provider modes stay `unavailable`; the interpreter stays `fixture` until an approved hosted deployment exists.
@@ -252,9 +253,10 @@ API service, plus `DOCKER_HOST=unix:///run/edge-os/research/docker.sock` and
 
 **Database route for the host research worker (builder decision B2 option a, 2026-10-22).** PostgreSQL publishes
 `127.0.0.1:5432` only, from the `hostdb` bridge, and its certificate carries `IP:127.0.0.1`. The worker URL uses host
-`127.0.0.1`. **Open item:** production settings still refuse a loopback database host, so the unit stays **NOT READY**
-and must not be enabled until a separate reviewed settings change admits that route. See
-`docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md` §3.
+`127.0.0.1`. Production settings admit that loopback host only with a registered hosted deployment record whose TLS
+mode is the URL's `sslmode` (builder decision, option A, 2026-10-23). The registry is empty, so the unit stays
+**NOT READY** and must not be enabled before the record is registered. See
+`docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md` §3.2.
 
 `/etc/edge-os/hermes-relay.env` holds `DOCKER_HOST=unix:///run/edge-os/relay/docker.sock` and the relay's non-secret
 paths. The relay operator configuration `/etc/edge-os/relay.json` is described by
@@ -421,6 +423,7 @@ the approval. Do not add the entry in this task.
 - The memory limits are proposals for the 12 GB VPS. The hosted load check (H7) stays `NOT RUN`.
 - The relay and research worker units are prepared but disabled. Do not enable them before an approved hosted
   deployment and provider release.
-- **Open item:** the host research worker's loopback route (`127.0.0.1:5432`, §6.3) is refused by the production
-  loopback rule in settings. The unit is NOT READY and must stay disabled until a reviewed settings change admits it.
+- The host research worker's loopback route (`127.0.0.1:5432`, §6.3) is admitted only with a registered hosted
+  deployment record whose TLS mode is the URL's `sslmode`. The registry is empty, so the unit is NOT READY and stays
+  disabled until the record is registered.
   The Coolify API and both workers in the Coolify stack use `edge-os-postgres:5432` on `private`.

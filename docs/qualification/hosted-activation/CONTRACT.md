@@ -137,6 +137,12 @@ equals the code-owned `APPROVED_ACTUAL_RELEASES` entry (`execution/operating_rel
 Every other case is refused with a named reason. `EDGE_OS_PRIVY_APP_SECRET` stays refused in every process
 environment. See `docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md`.
 
+### 5.5 The loopback database route (any record version)
+
+Production refuses a loopback database host, except `127.0.0.1` when a registered record is named and the URL's
+`sslmode` equals the record's `database_tls_mode` (builder decision, option A, 2026-10-23). This route is for the
+host research worker. `localhost`, a host-less URL and every unregistered case keep the refusal.
+
 ## 6. Refusal codes
 
 Errors name a code, never a configured value.

@@ -10,6 +10,8 @@ Builder decisions (2026-10-22) this file implements:
 
 - Plan A: builder-only in-app trading on the public site.
 - B2 option a: the host research worker reaches PostgreSQL over loopback `127.0.0.1:5432`.
+- Option A for that route (2026-10-23): production settings admit `127.0.0.1` only with a registered hosted
+  deployment record whose TLS mode equals the URL's `sslmode`.
 - Backups: Contabo snapshots plus an on-VPS restore drill.
 - Provider spend caps (H8): documented as sponsored.
 
@@ -167,17 +169,30 @@ PostgreSQL reads the new certificate on its next restart (redeploy the stack, or
 `sslmode=require` the connection is encrypted but the name is not verified; the SANs make a later `verify-full`
 possible. Every process that names the hosted record must use the record's one `database_tls_mode`.
 
-### 3.2 The host research worker URL, and the open settings item
+### 3.2 The host research worker URL and the production loopback rule
 
 ```text
-EDGE_OS_DATABASE_URL=postgresql+psycopg://edge_os:<URL-encoded password>@127.0.0.1:5432/edge_os?sslmode=require
+EDGE_OS_DATABASE_URL=postgresql+psycopg://edge_os:<URL-encoded password>@127.0.0.1:5432/edge_os?sslmode=<record TLS mode>
+EDGE_OS_HOSTED_DEPLOYMENT_ID=<the registered deployment id>
+EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH=<absolute path of that record>
 ```
 
-**Open item (not changed here):** `core/settings.py` refuses a loopback database host in production
-(`database_url: production needs a hosted database, not a loopback host`). The host research worker loads the same
-settings, so it still refuses this URL. Keep `/etc/edge-os/research-worker.enabled` absent. Enabling the route needs a
-separate reviewed change to that refusal, for example admitting a loopback host in production only when an approved
-hosted deployment record is named. The builder must approve that change. This candidate does not widen the refusal.
+Builder decision, option A (2026-10-23). In production, `core/settings.py` admits a loopback database host only when
+**all** of these hold:
+
+- the host is exactly `127.0.0.1`;
+- the configuration names a hosted deployment record that is registered in `APPROVED_HOSTED_DEPLOYMENTS` and passes
+  every record check (hash, origins, TLS mode, validity window);
+- the URL's `sslmode` equals the record's `database_tls_mode`.
+
+Every other case keeps the refusal `database_url: production needs a hosted database, not a loopback host`. That
+includes no named record, an unregistered or refused record, an `sslmode` that differs from the record, `localhost`,
+and a URL with no host (a Unix socket). A version 1 or version 2 record admits the route; neither changes anything
+else, and a version 1 record still grants no execution.
+
+The registry is empty in this candidate, so production still refuses the route today. Keep
+`/etc/edge-os/research-worker.enabled` absent until the builder's record is registered. The record's one TLS mode
+also binds the Coolify services, so they use the same `sslmode` on `edge-os-postgres`.
 
 ## 4. Execution worker environment and egress
 
@@ -213,8 +228,8 @@ What `apply` installs:
 | `EDGE_OS_IN_DB_A/B` (first rule of `INPUT`) | `! -i edgeos-hostdb ! -s 10.203.0.16/28 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
 | `EDGE_OS_IN_PRIVATE_A/B` (first rule of `INPUT`) | `! -i edgeos-private ! -s 10.203.0.64/26 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
 
-- The upstream resolvers are every IPv4 `nameserver` in the file Docker uses (below), without loopback stubs. Docker's embedded resolver forwards from the container's namespace, so these queries cross
-  `edgeos-egress`.
+- The upstream resolvers are every IPv4 `nameserver` in the file Docker uses (below), without loopback stubs.
+  Docker's embedded resolver forwards from the container's namespace, so these queries cross `edgeos-egress`.
 - `edgeos-egress-allow` is a `hash:ip` set with a 900-second entry timeout. `refresh` resolves
   `EDGE_OS_EGRESS_HOSTS` on the host and only adds addresses; an empty answer never clears the set, and an address
   the providers stop using expires. A missing address fails closed (dropped), never open.
@@ -373,5 +388,5 @@ is visible, in the evidence file the record's `h8_provider_spend_cap` gate refer
 4. Change `EDGE_OS_DATABASE_URL` in Coolify to host `edge-os-postgres` (§2), deploy the new compose file, and run the
    alias, loopback (§2, §3) and firewall (§4.1) checks.
 5. Record the evidence files, then hand the record v2 for builder approval. Registration of the record and of the
-   execution release are separate reviewed code changes. The host research worker stays disabled until the open
-   settings item (§3.2) is resolved.
+   execution release are separate reviewed code changes. The host research worker stays disabled until that record
+   is registered and its URL meets §3.2.

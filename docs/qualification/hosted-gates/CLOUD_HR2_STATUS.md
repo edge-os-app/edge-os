@@ -6,28 +6,34 @@ key or VPS access was used. Both registries (`APPROVED_HOSTED_DEPLOYMENTS`, `APP
 
 ## 1. What this lane is waiting for
 
-**Review: done.** Both independent round-5 reviewers PASSED the same commit, **`056dd65`**, the final reviewed
-candidate. The commit that adds this text changes only this status file.
+**Review: round 6 is running** on the head of `cloud/hosted-record-v2` (the commit that adds this text).
 
-The lane is not blocked.
+- Round 5 PASSED `056dd65`; both reviewers passed that commit.
+- The builder then chose **option A** for the loopback database route (2026-10-23, relayed by the controller). This
+  round adds it:
+  - RED tests in `2d334b4`;
+  - the settings change and documentation in the next commit.
 
-**One builder decision (it does not block this lane): the host research worker's loopback database route.**
-`core/settings.py` still refuses a loopback database host in production (`database_url: production needs a hosted
-database, not a loopback host`). The host research worker loads the same settings, so B2 option a
-(`127.0.0.1:5432`) is wired in Compose, TLS and the runbook, but the worker still refuses that URL. This lane did not
-widen a production refusal without approval.
+If both new reviewers pass the same commit, the lane is done; otherwise the lane repairs and reviews again.
 
-| Option | Effect |
-|---|---|
-| **A (recommended)** | A separate reviewed settings change. In production, admit a loopback database host only when a registered hosted deployment record is named and the URL's `sslmode` equals the record's TLS mode. Everything else keeps the refusal. |
-| B | Keep the refusal. The research worker stays disabled (`/etc/edge-os/research-worker.enabled` absent). |
-| C | Point the host name `edge-os-postgres` at 127.0.0.1 in the host's `/etc/hosts`. This is not recommended: it gets around the loopback check instead of deciding it. |
+**Builder decision applied: the host research worker's loopback route, option A.** In production, `core/settings.py`
+admits the database host `127.0.0.1` only when:
+
+- a hosted deployment record registered in `APPROVED_HOSTED_DEPLOYMENTS` is named and passes every record check;
+- the URL's `sslmode` equals the record's TLS mode.
+
+Every other case keeps the refusal `database_url: production needs a hosted database, not a loopback host`: no named
+record, an unregistered record, a different `sslmode`, `localhost`, or a host-less socket URL. Non-loopback hosts are
+unchanged, and a v1 record still grants no execution. The registry stays empty, so production still refuses the route
+until the builder's record is registered. The research worker unit stays disabled until then.
 
 ## 2. Candidate, files, tests, verdicts
 
-- **Final reviewed candidate:** `056dd65`. The branch head after it adds only this status file. The RED tests are commit
+- **Candidate:** the round-6 head of `cloud/hosted-record-v2` (the commit that adds this text). `056dd65` was
+  the round-5 PASS candidate, before option A. The RED tests are commit
   `46c95a5` (tests only), followed by `4897972`, `c1c67f5`, `7f450ce`, `dccb7b5` (this status file only),
-  `7ca2a4f` and `056dd65` (the round-4 repair).
+  `7ca2a4f`, `056dd65` (the round-4 repair), `a838461` (status only), `2d334b4` (option A RED tests) and the
+  option A implementation.
 - **Files changed (since 82290e2):**
   - `apps/api/src/edge_os_api/core/hosted_deployment.py`
   - `apps/api/src/edge_os_api/core/settings.py`: the production-gate lines only. The `wallet_provider` line and the
@@ -45,9 +51,9 @@ widen a production refusal without approval.
 - **Tests:**
   - Focused: `cd apps/api && uv run --frozen pytest -q -p no:cacheprovider tests/test_hosted_deployment.py tests/deploy`
     gives **183 passed**. It covers the record and settings gate, the Compose topology, the runbooks and the firewall
-    files (185 after the round-4 repair). `docker compose config` runs inside these tests; only the Docker CLI is present, with no daemon.
-  - Full: `cd apps/api && uv run --frozen pytest -q -p no:cacheprovider` gives 2556 passed, 1 skipped, 14 failed and
-    1264 errors. The 1264 errors are database fixtures that need a Docker daemon, which this container does not
+    files (185 after the round-4 repair, 194 with option A). `docker compose config` runs inside these tests; only the Docker CLI is present, with no daemon.
+  - Full: `cd apps/api && uv run --frozen pytest -q -p no:cacheprovider` gives 2558 passed, 1 skipped, 14 failed and
+    1264 errors at `056dd65`. The 1264 errors are database fixtures that need a Docker daemon, which this container does not
     have. Of the 14 failures, 12 in `test_harness_isolation.py` and 1 in `test_live.py` also need the Docker daemon.
     The other one, `test_privy_wallet_lookup.py::test_ipc_malformed_or_oversized_frames_get_a_code_only[...]`, fails
     the same way on the untouched base `82290e2`.
@@ -62,6 +68,7 @@ widen a production refusal without approval.
   | 3 | `7f450ce` | FAIL: runbook container selection and false-pass checks | PASS (non-blocking findings only) |
   | 4 | `7ca2a4f` | FAIL: `must_fail` counted a Docker CLI failure as blocked | FAIL: same finding |
   | 5 | `056dd65` | **PASS** (non-blocking findings only) | **PASS** (non-blocking findings only) |
+  | 6 | option A head | pending | pending |
 
   After round 1 both reviewers passed, but the hardening they suggested was applied anyway, which is why round 2
   ran. Round 2's blocking finding is fixed in `7f450ce`. The round-3 repair adds runbook §1a: containers are
@@ -138,5 +145,5 @@ running any host command.
    - `ip link show edgeos-private` also exists.
    - Repeat these checks after a reboot.
 6. **Keep disabled:** controlled execution (the worker stays `EDGE_OS_EXECUTION_MODE: unavailable`) and the host
-   research worker (§3.2). Hand record v2 to the builder for approval. Registering the record and the execution
+   research worker until the builder's record is registered and its URL meets §3.2. Hand record v2 to the builder for approval. Registering the record and the execution
    release are separate reviewed code changes.
