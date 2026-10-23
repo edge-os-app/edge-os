@@ -7,7 +7,7 @@ integration push, no force push, no PR, no merge. No network, provider, credenti
 
 ## Result
 
-**Final reviewed code SHA: `3cf11a4`** (`3cf11a4` is the full short id; `git rev-parse 3cf11a4` gives the long id).
+**Final reviewed code SHA: `3cf11a4d6accd2ebeab5447629fec5ab6e9b92ed`** (`3cf11a4`).
 This status file is the only commit after it, and it is documentation only.
 
 Both new independent reviewers returned **PASS on the same commit `3cf11a4`**:
