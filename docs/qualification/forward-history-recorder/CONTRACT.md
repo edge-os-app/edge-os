@@ -55,7 +55,7 @@ The input is one JSON object with exactly these keys. Unknown or missing keys ar
 | `expected_decimals` | `{"token0": int, "token1": int}`. |
 | `creation` | `decoder`, `transaction_hash`, `block_number`, `block_hash`, `transaction_index`, `log_index`, `factory`, `topic0`. |
 | `t0_utc` | `YYYY-MM-DDTHH:MM:SSZ` on the 300-second grid. |
-| `window_seconds`, `bucket_seconds` | `1200` and `300`. |
+| `window_seconds`, `bucket_seconds` | `1200` or `7200`, and `300`. |
 | `destinations` | `quicknode_host` (host only) and `hypersync_url` (`https://<host>/query`). |
 | `credential_slots` | Slot names for `quicknode` and `hypersync`. Values are never in the input. |
 | `output_dir` | Absolute, existing, non-symlink directory. |
@@ -84,7 +84,8 @@ event that fixed this layout is not published here.
 
 ## Schedule and calls
 
-`WE = T0 + 1200`. Bucket `i` is `[T0 + 300i, T0 + 300(i+1))`.
+`WE = T0 + window_seconds`. Bucket `i` is `[T0 + 300i, T0 + 300(i+1))`; the shape has 4 buckets for
+1200 s and 24 for 7200 s.
 
 | Phase | Calls (maximum) | Time rule |
 |---|---|---|
@@ -201,7 +202,7 @@ the versions, predecessor, input and recorder-code hashes, attempt and source id
 reason, network, market and pool token order, window, exact query and field selection, boundaries, scan, scan log count,
 retained header facts (in-scan log blocks and boundaries), phase outcomes, P3 reply summaries, facts (bytecode hashes
 and lengths of decoded bytes, decimals, finality, archive height, `fee_transfer_semantics=EXTERNAL_EVIDENCE_REQUIRED`),
-clock trust, call accounting, a `calls` list and exactly four buckets. Each `calls` entry has the admitted call id,
+clock trust, call accounting, a `calls` list and the shape's bucket count (4 for 1200 s, 24 for 7200 s). Each `calls` entry has the admitted call id,
 phase, slot, provider, request SHA-256 and byte count, outcome (`REPLY_RECEIVED`, `OVERSIZED_REFUSED`,
 `CREDENTIAL_INCIDENT` or `UNKNOWN`), HTTP status, and the retained reply body SHA-256 and byte count. A credential
 incident or an oversized reply keeps no body hash in the handoff.

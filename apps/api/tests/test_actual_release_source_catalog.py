@@ -21,7 +21,7 @@ from edge_os_api.research import history_dataset
 from flows import NO_THESIS, submit
 from research_flows import FIELDS, QUALIFIED, REVIEW, rising, volume_above
 
-ACTUAL_SOURCE = "actual-moe-wmon-fwd20m/1"
+ACTUAL_SOURCE = "actual-moe-wmon-fwd2h/1"
 
 
 @pytest.fixture(scope="module")

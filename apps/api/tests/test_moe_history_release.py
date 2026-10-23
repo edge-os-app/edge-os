@@ -27,11 +27,12 @@ from edge_os_api.core.research.operating_release import (
 )
 from edge_os_api.research import history_payload_binding
 
-RELEASE_ID = "actual-moe-history-nansen-20261022/1"
-RELEASE_SHA256 = "2d359daca6f9ca131ee6f90ca1efb97a6f12af4aa285104ebd062366648564c5"
-OLD_RELEASE_ID = "actual-moe-nansen-demo-20261018/1"
-WINDOW = {"start_utc": "2026-10-22T07:35:00Z", "end_utc": "2026-10-22T07:55:00Z"}
-SCAN = {"from_block": 115554031, "to_block_exclusive": 115558007}
+RELEASE_ID = "actual-moe-history2h-nansen-20261022/1"
+RELEASE_SHA256 = "45c8cfbf5d61eb519ee3140e02e50b2b7091669dc28cbef224bdc6a0e77ca877"
+OLD_RELEASE_ID = "actual-moe-history-nansen-20261022/1"
+EARLIER_RELEASE_ID = "actual-moe-nansen-demo-20261018/1"
+WINDOW = {"start_utc": "2026-10-22T21:40:00Z", "end_utc": "2026-10-22T23:40:00Z"}
+SCAN = {"from_block": 115721086, "to_block_exclusive": 115744931}
 EVIDENCE_SHA256 = "5ad3a7c3e11f48e6f32fe2ab9f1edf7bf968962e4854c98d16e70327cfc9e73b"
 FIXTURE = Path(__file__).with_name("fixtures") / "moe_history_anchor_20261022.json"
 
@@ -63,13 +64,14 @@ def test_the_registries_carry_exactly_the_one_approved_moe_history_release() -> 
     assert check_release(definition(), network_transport=True, nansen_network=True) == RELEASE_SHA256
 
 
-def test_the_old_nansen_only_id_is_refused() -> None:
-    assert OLD_RELEASE_ID not in released_runtime_bootstrap.RELEASE_DEFINITIONS
-    assert OLD_RELEASE_ID not in operating_release.APPROVED_RELEASES
-    with pytest.raises(ReleaseRefused) as refused:
-        check_release(dataclasses.replace(definition(), release_id=OLD_RELEASE_ID),
-                      network_transport=True, nansen_network=True)
-    assert refused.value.code == "operating_release_not_approved"
+def test_the_replaced_and_earlier_ids_are_refused() -> None:
+    for old in (OLD_RELEASE_ID, EARLIER_RELEASE_ID):
+        assert old not in released_runtime_bootstrap.RELEASE_DEFINITIONS
+        assert old not in operating_release.APPROVED_RELEASES
+        with pytest.raises(ReleaseRefused) as refused:
+            check_release(dataclasses.replace(definition(), release_id=old),
+                          network_transport=True, nansen_network=True)
+        assert refused.value.code == "operating_release_not_approved"
 
 
 def test_the_anchor_admits_the_completed_run_and_matches_the_release_window_and_scan() -> None:
@@ -77,7 +79,7 @@ def test_the_anchor_admits_the_completed_run_and_matches_the_release_window_and_
     handoff = json.loads(anchor()["handoff_json"])
     assert handoff["status"] == "COMPLETED" and handoff["stop_reason"] is None
     assert handoff["clock"]["trusted"] is True
-    assert [bucket["status"] for bucket in handoff["buckets"]] == ["DELIVERED"] * 4
+    assert [bucket["status"] for bucket in handoff["buckets"]] == ["DELIVERED"] * 24
     assert (handoff["window"]["start_utc"], handoff["window"]["end_utc"]) == (
         WINDOW["start_utc"], WINDOW["end_utc"])
     assert handoff["scan"] == SCAN
@@ -131,7 +133,7 @@ def test_the_history_limits_are_declarable_and_fit_the_default_owner_caps() -> N
 
     limits = history().limits
     assert HistoryResourceBounds(**limits).model_dump() == limits  # a declaration can carry these exact bounds
-    assert limits == {"provider_requests": 13, "compute_seconds": 600, "max_pages": 4, "max_rows": 2000,
+    assert limits == {"provider_requests": 14, "compute_seconds": 600, "max_pages": 5, "max_rows": 2000,
                       "max_bytes": 4194304, "deadline_seconds": 600}
     assert history().client_bounds == {"deadline_seconds": 120, "connect_timeout_seconds": 15,
                                        "max_response_bytes": 2097152, "max_request_bytes": 65536,

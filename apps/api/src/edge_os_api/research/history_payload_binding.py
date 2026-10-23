@@ -41,12 +41,12 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 CHECKER_RELATIVE_PATH = "scripts/history_payload_binding.py"
 CHECKER_PATH = REPO_ROOT / CHECKER_RELATIVE_PATH
 # The accepted lane 4 checker bytes. A changed checker is unavailable (INCOMPLETE) until a reviewed change pins it.
-CHECKER_SHA256 = "1c74d8c9bce020e35bb372dd4a363641f1ed35566263163a9dd18807264fd667"
+CHECKER_SHA256 = "813cc91fd10d16222cdc4622071406bc9bb614f0efdaf74c3ab51ab2bf13acaa"
 
 CHECKER_RELATIVE_PATH_V2 = "scripts/history_payload_binding_v2.py"
-CHECKER_SHA256_V2 = "4c9c58adefeec3cb574701d554c7f059ea055802e057bbf6960ee5018929ca82"
+CHECKER_SHA256_V2 = "24a4948f83c235339ecf301ac8cc21eee5f02b89e69b024c24244f22b45a6cd9"
 # All trusted projection, canonicalization and time helpers, including their loaded contract assets.
-CHECKER_DEPENDENCIES_V2 = {'scripts/history_payload_binding.py': '1c74d8c9bce020e35bb372dd4a363641f1ed35566263163a9dd18807264fd667',
+CHECKER_DEPENDENCIES_V2 = {'scripts/history_payload_binding.py': '813cc91fd10d16222cdc4622071406bc9bb614f0efdaf74c3ab51ab2bf13acaa',
  'apps/api/src/edge_os_api/records/contract_adapter.py': '092a87ea75384138e4663aea1d48249d9e7a8cc92a23b1d493887bae560e1b0e',
  'apps/api/src/edge_os_api/research_history/qualification_engine.py': '6cd74eefaee6a01ba81bdc7641cdf47e3cfa6edcce1cb98fec1e8ee70fc2b782',
  'docs/contracts/p02/check_contract.py': '06f3820a2ccfcf1445aef8240e5808977f8adc708ab32aecfedf28ef323d8f79',

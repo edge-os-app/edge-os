@@ -6,8 +6,10 @@ P07 qualification or demo readiness.
 
 ## Versions and compatibility
 
-The injected `run_attempt` and historical checker keep their `/1` synthetic behavior. The historical checker stays pinned
-to SHA256 `1c74d8c9bce020e35bb372dd4a363641f1ed35566263163a9dd18807264fd667`.
+The injected `run_attempt` and historical checker keep their `/1` synthetic behavior. The historical checker is pinned
+to SHA256 `813cc91fd10d16222cdc4622071406bc9bb614f0efdaf74c3ab51ab2bf13acaa`. RELEASE-2H adds one optional argument
+to its bucket check: the `/2` checker passes the accepted shape's bucket count (4 or 24), while the `/1` default stays 4.
+The `/2` checker is pinned to SHA256 `24a4948f83c235339ecf301ac8cc21eee5f02b89e69b024c24244f22b45a6cd9`.
 Historical artifacts cannot be promoted by changing their labels or attaching a new sidecar.
 
 | Artifact | ACTUAL schema |
