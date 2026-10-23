@@ -61,6 +61,7 @@
       "source": "DIRECT_V2_PROGRAM",
       "endpoint": {"$fill": "quote_endpoint"},
       "slippage_bps": 100,
+      "pre_sign_tolerance_bps": 50,
       "pool_address": "0x97199b34564911936bc850ac45ede785892b5aad",
       "token0_address": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
       "token1_address": "0xd8e004acba279417c04c0633cb5a21ceca207777",

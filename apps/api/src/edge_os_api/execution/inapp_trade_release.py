@@ -19,7 +19,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from edge_os_api.execution.connected_identity import adopted_consent, resolve_agent, saved_release_identity
-from edge_os_api.execution.direct_route_quote_client import PROGRAM_FEE_SCALE
+from edge_os_api.execution.direct_route_quote_client import MAX_PRE_SIGN_TOLERANCE_BPS, PROGRAM_FEE_SCALE
 from edge_os_api.execution.operating_release import (BoundRelease, OperatingRelease, ReleaseRefused, release_sha256,
                                                      validate_limits)
 from edge_os_api.execution.original_transaction import wallet_address
@@ -157,8 +157,10 @@ def complete_release(authored: Mapping[str, Any], fill: Mapping[str, Any]) -> Op
     try:
         input_raw = int(route["approved_input_raw"])
         direction, fee_ppm, slippage = quote["direction"], quote["program_fee_ppm"], quote["slippage_bps"]
+        tolerance = quote["pre_sign_tolerance_bps"]
         valid = (direction == 0 and type(fee_ppm) is int and 0 < fee_ppm < PROGRAM_FEE_SCALE
-                 and type(slippage) is int and 1 <= slippage <= 10000)
+                 and type(slippage) is int and 1 <= slippage <= 10000
+                 and type(tolerance) is int and 0 <= tolerance <= MAX_PRE_SIGN_TOLERANCE_BPS)
     except (KeyError, TypeError, ValueError):
         valid = False
     if not valid:

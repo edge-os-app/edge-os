@@ -37,6 +37,7 @@ DIRECT_QUOTE_SOURCE = "DIRECT_V2_PROGRAM"
 EXECUTE_SWAP_SELECTOR = "0xce1e7030"
 RESERVES_SELECTOR = "0x0902f1ac"
 PROGRAM_FEE_SCALE = 10**6
+MAX_PRE_SIGN_TOLERANCE_BPS = 50
 MAX_RAW_DIGITS = 78
 _ZERO_ADDRESS = "0x" + "0" * 40
 _RESERVES_REPLY = re.compile(r"0x(?:[0-9a-fA-F]{64}){3}")
@@ -69,6 +70,13 @@ def build_program_hex(*, input_token: str, pool_address: str, direction: int, fe
     return "0x" + raw.hex()
 
 
+def quote_meets_release_minimum(*, output: int, slippage_bps: int, approved_min_output_raw: int,
+                                pre_sign_tolerance_bps: int) -> bool:
+    """The live floor may sit at most `pre_sign_tolerance_bps` below the release minimum."""
+    floor = output * (10000 - slippage_bps) // 10000
+    return floor * 10000 >= approved_min_output_raw * (10000 - pre_sign_tolerance_bps)
+
+
 @dataclass(frozen=True)
 class DirectRoutePins:
     """The release fields this source may use. Nothing outside these values enters calldata."""
@@ -85,6 +93,7 @@ class DirectRoutePins:
     entrypoint_address: str
     input_token: str
     output_token: str
+    pre_sign_tolerance_bps: int = 0
 
     def __post_init__(self) -> None:
         addresses = (self.pool_address, self.token0_address, self.token1_address,
@@ -101,6 +110,9 @@ class DirectRoutePins:
             raise ValueError("DIRECT_PIN_TOKEN_ORDER_INVALID")
         if not _raw(self.approved_input_raw) or not _raw(self.approved_min_output_raw):
             raise ValueError("DIRECT_PIN_AMOUNT_INVALID")
+        if type(self.pre_sign_tolerance_bps) is not int \
+                or not 0 <= self.pre_sign_tolerance_bps <= MAX_PRE_SIGN_TOLERANCE_BPS:
+            raise ValueError("DIRECT_PIN_TOLERANCE_INVALID")
         try:
             validate_bounds(endpoint=self.endpoint, deadline=1.0, timeout=1.0, request_bytes=1, response_bytes=1)
         except Exception as error:
@@ -124,7 +136,8 @@ class DirectRoutePins:
                    approved_min_output_raw=route["approved_min_output_raw"],
                    entrypoint_address=route["entrypoint_address"],
                    input_token=route["input_asset"]["token_address"],
-                   output_token=route["output_asset"]["token_address"])
+                   output_token=route["output_asset"]["token_address"],
+                   pre_sign_tolerance_bps=quote.get("pre_sign_tolerance_bps", 0))
 
 
 def build_calldata_hex(pins: DirectRoutePins) -> str:
@@ -225,7 +238,10 @@ class DirectRouteQuoteClient:
                     reserve_in * PROGRAM_FEE_SCALE + amount * (PROGRAM_FEE_SCALE - fee))
                 if output <= 0:
                     raise RpcError("QUOTE_OUTPUT_ZERO")
-                if output * (10000 - self._slippage) // 10000 < int(self._pins.approved_min_output_raw):
+                if not quote_meets_release_minimum(
+                        output=output, slippage_bps=self._slippage,
+                        approved_min_output_raw=int(self._pins.approved_min_output_raw),
+                        pre_sign_tolerance_bps=self._pins.pre_sign_tolerance_bps):
                     raise RpcError("QUOTE_SLIPPAGE_EXCEEDED")
         except RpcError:
             raise
