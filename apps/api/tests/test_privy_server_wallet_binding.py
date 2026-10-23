@@ -44,9 +44,10 @@ def _release() -> object:
 
 def _record(**overrides: object) -> dict:
     record = {"id": WID, "address": ADDR, "chain_type": "ethereum", "policy_ids": [POLICY],
-              "owner_id": POLICY_OWNER, "additional_signers": [{"signer_id": SIGNER}],
+              "owner_id": POLICY_OWNER,
+              "additional_signers": [{"signer_id": SIGNER, "override_policy_ids": [POLICY]}],
               "created_at": 1741834854578, "entity": {"id": "user-1", "type": "user"},
-              "external_id": None, "display_name": None}
+              "external_id": None, "display_name": None, "exported_at": None, "imported_at": None}
     record.update(overrides)
     return record
 
@@ -138,6 +139,19 @@ def test_exact_wallet_record_matches_the_release():
                        "release_binding_sha256": release.binding_sha256}
 
 
+def test_recorded_live_signer_shape_matches():
+    """The recorded creation state in PRIVY_SETUP1.json carries the signer override policy."""
+    record = _record()
+    record["additional_signers"] = [{"signer_id": SIGNER, "override_policy_ids": [POLICY]}]
+    assert lookup_server.match_server_wallet(record, _release()) is not None
+
+
+def test_optional_export_and_import_timestamps_must_be_null():
+    assert lookup_server.match_server_wallet(_record(exported_at=None, imported_at=None), _release()) is not None
+    for key in ("exported_at", "imported_at"):
+        assert lookup_server.match_server_wallet(_record(**{key: 1}), _release()) is None
+
+
 @pytest.mark.parametrize("record", [
     None, [], "wallet", {},
     {**_record(), "id": "other-wallet"},
@@ -150,14 +164,23 @@ def test_exact_wallet_record_matches_the_release():
     {**_record(), "owner_id": "other-owner"},
     {**_record(), "additional_signers": []},
     {**_record(), "additional_signers": [{"signer_id": "other-signer"}]},
-    {**_record(), "additional_signers": [{"signer_id": SIGNER}, {"signer_id": "other-signer"}]},
-    {**_record(), "additional_signers": [{"signer_id": SIGNER, "extra": "x"}]},
+    {**_record(), "additional_signers": [{"signer_id": SIGNER, "override_policy_ids": []}]},
+    {**_record(), "additional_signers": [{"signer_id": SIGNER, "override_policy_ids": ["other-policy"]}]},
+    {**_record(), "additional_signers": [{"signer_id": SIGNER,
+                                          "override_policy_ids": [POLICY, "other-policy"]}]},
+    {**_record(), "additional_signers": [{"signer_id": SIGNER, "override_policy_ids": POLICY}]},
+    {**_record(), "additional_signers": [{"signer_id": SIGNER, "override_policy_ids": [POLICY],
+                                          "extra": "x"}]},
+    {**_record(), "additional_signers": [{"signer_id": SIGNER, "override_policy_ids": [POLICY]},
+                                         {"signer_id": "other-signer", "override_policy_ids": [POLICY]}]},
     {**_record(), "additional_signers": ["signer"]},
     {**_record(), "created_at": "yesterday"},
     {**_record(), "entity": "user"},
     {**_record(), "entity": {"id": "user-1"}},
     {**_record(), "external_id": 7},
     {**_record(), "display_name": 7},
+    {**_record(), "exported_at": 1},
+    {**_record(), "imported_at": 1},
     {key: value for key, value in _record().items() if key != "owner_id"},
     {key: value for key, value in _record().items() if key != "additional_signers"},
     {**_record(), "unknown_field": True},

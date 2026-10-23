@@ -258,17 +258,23 @@ wallet id. It accepts a wallet object only when all of these hold:
 | `address` | release `wallet_address`, compared without letter case |
 | `policy_ids` | exactly `[release.policy_id]` |
 | `owner_id` | release `policy_owner_id` (the builder-owned key quorum) |
-| `additional_signers` | exactly `[{"signer_id": release.signer_id}]` |
+| `additional_signers` | exactly `[{"signer_id": release.signer_id, "override_policy_ids": [release.policy_id]}]` |
 
-The allowed optional fields are `created_at`, `entity`, `external_id` and `display_name`, and each must have the
-documented type. A missing identity field, an extra field, an unknown shape, a non-200 status, a redirect, a
-timeout or any provider error refuses the lookup. A refusal is never `WALLET_BOUND`; the setup stays `UNKNOWN`.
+The allowed optional fields are `created_at`, `entity`, `external_id`, `display_name`, `exported_at` and
+`imported_at`, and each must have the documented type. `exported_at` and `imported_at` must be null: an exported
+key is outside Privy policy enforcement, and this wallet was created, not imported. A missing identity field, an
+extra field, an unknown shape, a non-200 status, a redirect, a timeout or any provider error refuses the lookup.
+A refusal is never `WALLET_BOUND`; the setup stays `UNKNOWN`.
 The process also answers `lookup_embedded_wallet`; the `bind_server_wallet` operation exists only when it
 starts with `--server-wallet-release`.
 
-The `owner_id` = `policy_owner_id` and `additional_signers` = `[{signer_id}]` mapping follows the A2 release's single
-builder-owned key quorum and signer. The repository has no live `GET /v1/wallets/{id}` reply for this wallet. The first
-live read must confirm the mapping. A different live record is refused; it is not a reason to relax the check.
+The `owner_id` = `policy_owner_id` and `additional_signers` =
+`[{signer_id, override_policy_ids: [policy_id]}]` mapping follows the recorded creation state in
+`ROOT/.scratch/trade-prep-20261021/PRIVY_SETUP1_RECORD.md` and `PRIVY_SETUP1.json`: wallet owner and policy owner
+`a5gwmgrsn6903ac09lphyv9a`, policy `c30racyru6duaipj815cvjce`, signer `zu1qjdfqlbcq1ct7sdxendgg` with override
+policy `c30racyru6duaipj815cvjce`. The executor signer override is the control that limits the agent signer, so a
+missing, empty or different override refuses. The first live read must confirm the mapping. A different live
+record is refused; it is not a reason to relax the check.
 
 ### Release binding hash
 

@@ -56,7 +56,8 @@ AUTHORED_SCHEMA = "edge-os.inapp-trade-authoring/1"
 _MONAD_MAINNET = 143
 _BOUND_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _RECORD_REQUIRED = frozenset({"id", "address", "chain_type", "policy_ids", "owner_id", "additional_signers"})
-_RECORD_OPTIONAL = frozenset({"created_at", "entity", "external_id", "display_name"})
+_RECORD_OPTIONAL = frozenset({"created_at", "entity", "external_id", "display_name", "exported_at",
+                              "imported_at"})
 
 FetchUser = Callable[[str], object]
 FetchWallet = Callable[[str], object]
@@ -326,6 +327,9 @@ def _valid_optional_record_fields(record: dict[str, Any]) -> bool:
     for key in ("external_id", "display_name"):
         if key in record and record[key] is not None and not isinstance(record[key], str):
             return False
+    for key in ("exported_at", "imported_at"):
+        if key in record and record[key] is not None:
+            return False
     return True
 
 
@@ -339,7 +343,8 @@ def match_server_wallet(record: object, release: ServerWalletRelease) -> dict[st
             and address.lower() == release.address.lower() and record.get("chain_type") == "ethereum"
             and record.get("policy_ids") == [release.policy_id]
             and record.get("owner_id") == release.policy_owner_id
-            and record.get("additional_signers") == [{"signer_id": release.signer_id}]
+            and record.get("additional_signers") == [{"signer_id": release.signer_id,
+                                                       "override_policy_ids": [release.policy_id]}]
             and _valid_optional_record_fields(record)):
         return None
     return {"wallet_id": release.wallet_id, "address": release.address, "chain_type": "ethereum",
