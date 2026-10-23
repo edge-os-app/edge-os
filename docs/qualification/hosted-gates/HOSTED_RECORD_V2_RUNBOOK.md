@@ -530,3 +530,80 @@ is visible, in the evidence file the record's `h8_provider_spend_cap` gate refer
 5. Record the evidence files, then hand the record v2 for builder approval. Registration of the record and of the
    execution release are separate reviewed code changes. The host research worker stays disabled until that record
    is registered and its URL meets §3.2.
+
+## 8. Fill, hash and register one record
+
+This section builds the version 1 (research-only) record. A version 2 record that also binds execution uses the same
+steps, but this tool refuses `execution_release` on purpose.
+
+### 8.1 Fill the values file
+
+Copy this object and replace every placeholder. The tool sets `schema_version` itself, so the values file omits it and
+must not carry `execution_release`.
+
+```json
+{
+  "deployment_id": "edgeos-fun-vps1",
+  "public_origins": ["https://app.edgeos.fun"],
+  "cors_origins": ["https://app.edgeos.fun"],
+  "database_tls_mode": "require",
+  "hermes_relay": {"release_id": "hermes-first-call-1", "record_sha256": "<64 hex>"},
+  "research_release": {"release_id": "actual-moe-history2h-nansen-20261022/1", "sha256": "<64 hex>"},
+  "host_gates": {
+    "h1_egress": {"path": "docs/qualification/hosted-gates/evidence/h1_egress.md", "sha256": "<64 hex>"},
+    "h2_runner_isolation": {"path": "docs/qualification/hosted-gates/evidence/h2_runner_isolation.md", "sha256": "<64 hex>"},
+    "h8_provider_spend_cap": {"path": "docs/qualification/hosted-gates/evidence/h8_provider_spend_cap.md", "sha256": "<64 hex>"},
+    "h10_backup_restore": {"path": "docs/qualification/hosted-gates/evidence/h10_backup_restore.md", "sha256": "<64 hex>"}
+  },
+  "image_digests": {"postgres": "sha256:<64 hex>"},
+  "valid_from": "2026-10-23T00:00:00Z",
+  "valid_until": "2026-11-23T00:00:00Z"
+}
+```
+
+The four gate paths must stay under `docs/qualification/`. Each declared `sha256` is the SHA-256 of the exact file
+bytes, so fill the evidence files first and never edit them after the record is registered.
+
+### 8.2 Hash and validate
+
+From `apps/api`, with the repository root as `--root`:
+
+```sh
+uv run --frozen python -m edge_os_api.core.hosted_record_tool \
+  --values ../../docs/qualification/hosted-gates/records/edgeos-fun-vps1.values.json --root ../..
+```
+
+The tool writes nothing and uses no network. It:
+
+1. refuses a values file that is not one strict JSON object, that carries a version 2 field, or that does not hold
+   exactly the version 1 fields;
+2. reads each gate file inside the root and refuses a missing file, a path that leaves the root, or bytes whose hash
+   differs from the declared hash;
+3. builds the canonical record and validates it with the production parser in `core.hosted_deployment`;
+4. prints three lines: the canonical record JSON, `sha256 <64 hex>`, and the exact registry line.
+
+An exit code of 1 is a refusal. The message names the code and never a field value. The tool reads at most 64 KiB for
+the values file and 1 MiB for each gate file, and refuses a larger file.
+
+### 8.3 Register
+
+1. Save the printed record line (no trailing newline) as
+   `docs/qualification/hosted-gates/records/<deployment_id>.json` and copy it to the absolute path the runtime reads.
+2. Set `EDGE_OS_HOSTED_DEPLOYMENT_ID` and `EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH` together.
+3. Replace the empty registry in `apps/api/src/edge_os_api/core/hosted_deployment.py` with the printed line, keeping
+   the module's annotation:
+   `APPROVED_HOSTED_DEPLOYMENTS: Mapping[str, str] = {"edgeos-fun-vps1": "<64 hex>"}`.
+4. Add a test that pins the exact deployment id and hash, so any edit fails.
+5. Run the full API suite before the candidate is reviewed.
+
+A record is immutable once approved. Any change to a field, a gate file or an evidence byte changes the canonical
+hash and needs a new reviewed registry entry. Never hand-edit the hash: rerun the tool.
+
+### 8.4 What `image_digests` pins
+
+The registry line is source code, so every image built from the registered source tree carries the record hash and its
+image id depends on that hash. The record cannot name such an image, because the hash would then depend on the image id
+that depends on the hash. Pin only images that do not carry the registry hash, for example the PostgreSQL image id the
+VPS runs, and a host relay job image only when its build context does not contain
+`apps/api/src/edge_os_api/core/hosted_deployment.py`. Omit `api`, `execution-worker` and every other source-built
+image. The parser still requires at least one entry.

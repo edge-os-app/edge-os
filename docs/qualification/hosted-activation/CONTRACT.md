@@ -65,7 +65,7 @@ link, of at most 64 KiB.
     "h8_provider_spend_cap": {"path": "docs/qualification/...", "sha256": "<64 hex>"},
     "h10_backup_restore": {"path": "docs/qualification/...", "sha256": "<64 hex>"}
   },
-  "image_digests": {"api": "sha256:<64 hex>", "worker": "sha256:<64 hex>"},
+  "image_digests": {"postgres": "sha256:<64 hex>"},
   "valid_from": "2026-10-21T00:00:00Z",
   "valid_until": "2026-11-21T00:00:00Z"
 }
@@ -84,7 +84,7 @@ link, of at most 64 KiB.
 | `research_release.sha256` | The operating release SHA-256, 64 lower-case hex characters. |
 | `execution_release` | Version 2 only, and required there: exactly `release_id` and `sha256` (64 lower-case hex). Absent from version 1. |
 | `host_gates` | Exactly the four named gates. Each has exactly `path` and `sha256`. The path starts with `docs/qualification/`; the hash is 64 lower-case hex characters. |
-| `image_digests` | 1 to 20 entries. Each key is 1 to 64 lower-case characters; each value is a Docker image id `sha256:<64 hex>`, not a tag or a registry digest reference. |
+| `image_digests` | 1 to 20 entries. Each key is 1 to 64 lower-case characters; each value is a Docker image id `sha256:<64 hex>`, not a tag or a registry digest reference. Pin only an image that does not carry the registry hash: a source-built image, including the API image, receives the registry line, so its image id depends on the record hash and cannot appear in the record. The `api` and `execution-worker` images are therefore omitted; at least one independent image id is still required. |
 | `valid_from`, `valid_until` | UTC whole seconds, `YYYY-MM-DDTHH:MM:SSZ`. `valid_from < valid_until`; the start-up time must be inside the window. |
 
 A reference is a path plus SHA-256. A free-text claim is not a reference.
