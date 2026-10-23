@@ -265,7 +265,8 @@ key material.
 | Code | Meaning |
 | --- | --- |
 | `EXECUTION_BOOTSTRAP_ROLE_NOT_WORKER` | The caller is the API or another non-worker role. |
-| `EXECUTION_BOOTSTRAP_ENV_NOT_LOCAL` | `settings.env` is not `local`. |
+| `EXECUTION_BOOTSTRAP_ENV_NOT_ADMITTED` | `settings.env` is neither `local` nor `production` (`EXEC-PROD-L3`). |
+| `EXECUTION_BOOTSTRAP_HOSTED_RECORD_REFUSED` / `_HOSTED_RELEASE_MISMATCH` | In `production`: no admitted v2 hosted record, or its `execution_release` is not the admitted candidate's exact release. See `HOSTED_RECORD_V2_RUNBOOK.md`. |
 | `EXECUTION_BOOTSTRAP_APP_ID_MISSING` / `_INVALID` | The Privy app id is absent, blank or malformed. |
 | `EXECUTION_BOOTSTRAP_APP_SECRET_MISSING` / `_INVALID` | The app secret is absent, blank or not printable ASCII without spaces. |
 | `EXECUTION_BOOTSTRAP_KEY_PATH_MISSING` / `_INVALID` | The key path is absent, blank, relative, too long or contains NUL. |
