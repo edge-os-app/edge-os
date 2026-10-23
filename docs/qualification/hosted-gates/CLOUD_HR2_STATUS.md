@@ -6,11 +6,15 @@ key or VPS access was used. Both registries (`APPROVED_HOSTED_DEPLOYMENTS`, `APP
 
 ## 1. What this lane is waiting for
 
-**Review:** round 4 is running on the repaired candidate (the commit that adds this text). Round 3 at `7f450ce`
-ended with security PASS and spec FAIL. The spec failure was in the runbook: containers were chosen by the Compose
-service label alone, which can select Coolify's own `postgres` service, and the negative checks counted a failed
-`docker exec` as "blocked". If both new reviewers pass the same commit, the lane is done; otherwise the lane repairs
-and reviews again.
+**Review:** round 5 is running on the head of `cloud/hosted-record-v2` (the commit that adds this text).
+
+- Round 4 at `7ca2a4f`: both reviewers FAILED it on one defect. The runbook's `must_fail` still counted a Docker CLI
+  failure (exit code 1: empty, missing or stopped container) as "blocked".
+- The repair: a pass now needs the probe's own exit code 42, which the probe returns only on a connection timeout.
+  The probe must also run in a container that was selected (`READY=1`) and is running. A refused connection, a DNS
+  error or a missing command now fails.
+
+If both new reviewers pass the same commit, the lane is done; otherwise the lane repairs and reviews again.
 
 **One builder decision (it does not block this lane): the host research worker's loopback database route.**
 `core/settings.py` still refuses a loopback database host in production (`database_url: production needs a hosted
@@ -26,9 +30,9 @@ widen a production refusal without approval.
 
 ## 2. Candidate, files, tests, verdicts
 
-- **Candidate:** the head of `cloud/hosted-record-v2` that adds this text (round 4). The RED tests are commit
-  `46c95a5` (tests only), followed by `4897972`, `c1c67f5`, `7f450ce`, `dccb7b5` (this status file only) and the
-  round-3 repair.
+- **Candidate:** the head of `cloud/hosted-record-v2` that adds this text (round 5). The RED tests are commit
+  `46c95a5` (tests only), followed by `4897972`, `c1c67f5`, `7f450ce`, `dccb7b5` (this status file only),
+  `7ca2a4f` and the round-4 repair.
 - **Files changed (since 82290e2):**
   - `apps/api/src/edge_os_api/core/hosted_deployment.py`
   - `apps/api/src/edge_os_api/core/settings.py`: the production-gate lines only. The `wallet_provider` line and the
@@ -46,7 +50,7 @@ widen a production refusal without approval.
 - **Tests:**
   - Focused: `cd apps/api && uv run --frozen pytest -q -p no:cacheprovider tests/test_hosted_deployment.py tests/deploy`
     gives **183 passed**. It covers the record and settings gate, the Compose topology, the runbooks and the firewall
-    files. `docker compose config` runs inside these tests; only the Docker CLI is present, with no daemon.
+    files (185 after the round-4 repair). `docker compose config` runs inside these tests; only the Docker CLI is present, with no daemon.
   - Full: `cd apps/api && uv run --frozen pytest -q -p no:cacheprovider` gives 2556 passed, 1 skipped, 14 failed and
     1264 errors. The 1264 errors are database fixtures that need a Docker daemon, which this container does not
     have. Of the 14 failures, 12 in `test_harness_isolation.py` and 1 in `test_live.py` also need the Docker daemon.
@@ -61,12 +65,21 @@ widen a production refusal without approval.
   | 1 | `4897972` | PASS | PASS |
   | 2 | `c1c67f5` | FAIL: the firewall unit's `ConditionPathExists` let Docker start without rules | FAIL: same finding |
   | 3 | `7f450ce` | FAIL: runbook container selection and false-pass checks | PASS (non-blocking findings only) |
-  | 4 | the round-3 repair | pending | pending |
+  | 4 | `7ca2a4f` | FAIL: `must_fail` counted a Docker CLI failure as blocked | FAIL: same finding |
+  | 5 | the round-4 repair | pending | pending |
 
   After round 1 both reviewers passed, but the hardening they suggested was applied anyway, which is why round 2
   ran. Round 2's blocking finding is fixed in `7f450ce`. The round-3 repair adds runbook §1a: containers are
   selected inside this stack's Compose project, found from the `edgeos-hostdb` bridge, with exactly one per
-  service, and a check passes only when the connection itself fails. It also adds:
+  service. The round-4 repair makes a check pass only on the probe's own timeout code from a selected, running
+  container. It also:
+  - gives `private` a fixed bridge (`edgeos-private`, `10.203.0.64/26`) whose gateway is kept off host services
+  - refuses `host`/`hostaddr` query keys in the production database URL
+  - makes the collision check fail closed
+  - follows Docker's resolver-file rule
+  - hardens the drill (no stale container, a bounded wait)
+
+  The round-3 repair also added:
   - a check that Coolify attached no extra network
   - `docker rm -fv` for the drill container
   - a complete TLS snippet
@@ -76,10 +89,8 @@ widen a production refusal without approval.
 - **Non-blocking follow-ups (not done here):**
   - Match the reserved database host on its first DNS label, so `postgres.coolify` is also refused.
   - Have `refresh` re-run `apply` if a firewall reload removed the hook, or state that firewalld must not be used.
-  - Give `private` a fixed bridge name and protect its gateway in INPUT.
-  - Add a host check that Coolify attached no extra network to the worker or Postgres.
-  - Have the execution runtime check that it runs the record's bound release (in `provider_ports.py`, outside this
-    lane).
+  - Have the execution runtime check that it runs the record's bound release, and update the stale "local and test
+    only" docstring for `controlled` (both in `provider_ports.py`, outside this lane).
 
 ## 3. Exact host steps for the operator (all NOT RUN)
 
@@ -114,8 +125,10 @@ running any host command.
    - The worker is attached to exactly `private` and `egress`, and Postgres to exactly `private` and `hostdb`.
    - `ss -ltnp | grep 5432` shows only `127.0.0.1:5432`, and `nc -vz <public IP> 5432` fails from outside.
    - `ip link show edgeos-egress` and `ip link show edgeos-hostdb` both exist.
-   - From the worker, `api.privy.io` answers, while `example.com` and `10.203.0.1:22` fail.
-   - From Postgres, `10.203.0.17:22` and `1.1.1.1:443` fail.
+   - From the worker, `api.privy.io` answers. Every `must_fail` probe prints `pass: blocked`: from the worker,
+     `example.com:443`, `10.203.0.1:22` and the `private` gateway on port 22; from Postgres, `10.203.0.17:22` and
+     `1.1.1.1:443`.
+   - `ip link show edgeos-private` also exists.
    - Repeat these checks after a reboot.
 6. **Keep disabled:** controlled execution (the worker stays `EDGE_OS_EXECUTION_MODE: unavailable`) and the host
    research worker (§3.2). Hand record v2 to the builder for approval. Registering the record and the execution

@@ -53,26 +53,43 @@ the builder's approval of that exact hash.
 ## 1a. Selecting this stack's containers (every host command below)
 
 Coolify's own database is also a Compose service named `postgres` (container `coolify-db`), so a container chosen by
-the service label alone can be Coolify's. Every command below finds this stack's Compose project from the unique
-bridge `edgeos-hostdb`, then requires exactly one container per service. A negative check passes only when the
-connection itself fails, never when `docker exec` fails (exit codes 125 to 127).
+the service label alone can be Coolify's. The block below finds this stack's Compose project from the unique bridge
+`edgeos-hostdb` and requires exactly one running container per service. It sets `READY=1` only when every selection
+succeeded. If it prints `STOP`, do not run or record any check below.
+
+A negative check (`must_fail`) passes only when the probe ran inside a selected, running container and exited with
+its own code 42, which each probe returns only when the connection timed out (the packet was dropped). Every other
+result fails: an empty or stopped container, any Docker CLI error (it exits 1, like many probe errors), a refused
+connection (the packet reached its target), a DNS error, or a missing command.
 
 ```sh
+READY=0
 PROJECT=$(docker network ls -q --filter driver=bridge | xargs docker network inspect --format \
   '{{index .Options "com.docker.network.bridge.name"}} {{index .Labels "com.docker.compose.project"}}' \
   | awk '$1 == "edgeos-hostdb" {print $2}')
-[ -n "$PROJECT" ] || echo "STOP: no edgeos-hostdb network; this stack is not deployed"
-one() {  # one() <compose service>: the single container of this stack for that service, or a failure
+one() {  # one <compose service>: the single container of this stack for that service, or a failure
   ids=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" --filter "label=com.docker.compose.service=$1")
-  [ "$(printf '%s\n' "$ids" | grep -c .)" -eq 1 ] || { echo "STOP: expected one $1 in $PROJECT" >&2; return 1; }
+  [ "$(printf '%s\n' "$ids" | grep -c .)" -eq 1 ] || { echo "STOP: expected one $1 in '$PROJECT'" >&2; return 1; }
   echo "$ids"
 }
-must_fail() {  # must_fail <command...>: passes only when the command ran inside the container and failed
-  "$@"; rc=$?
-  if [ "$rc" -eq 0 ]; then echo "FAIL: open"; elif [ "$rc" -ge 125 ]; then echo "FAIL: check did not run ($rc)";
-  else echo "pass: blocked ($rc)"; fi
+[ -n "$PROJECT" ] && API=$(one api) && W=$(one execution-worker) && PG=$(one postgres) && READY=1
+[ "$READY" = 1 ] || echo "STOP: selection failed; do not run or record any check below"
+running() {  # running <container>: selected and running now
+  [ "$READY" = 1 ] && [ -n "$1" ] && [ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = true ]
 }
-API=$(one api); W=$(one execution-worker); PG=$(one postgres)
+must_fail() {  # must_fail <container> <probe...>: pass only on the probe's own exit code 42 (connection timed out)
+  c=$1; shift
+  running "$c" || { echo "FAIL: check did not run (container not selected or not running)"; return 1; }
+  docker exec "$c" "$@"; rc=$?
+  if [ "$rc" -eq 42 ]; then echo "pass: blocked"; else echo "FAIL: not proven blocked ($rc)"; return 1; fi
+}
+# The probes. Python (worker): resolve first (a DNS failure is not a block), then exit 42 only on a timeout.
+PY_PROBE='import socket, sys
+addr = socket.gethostbyname(sys.argv[1])
+try: socket.create_connection((addr, int(sys.argv[2])), 5)
+except TimeoutError: sys.exit(42)'
+# Bash (postgres image, which has no python): exit 42 only when `timeout` stopped the connect (code 124).
+SH_PROBE='timeout 5 bash -c "exec 3<>/dev/tcp/$0/$1" 2>/dev/null; [ $? -eq 124 ] && exit 42; exit 1'
 ```
 
 The stack is one per host: the bridge names and subnets are fixed, so a second copy (for example a Coolify preview
@@ -93,14 +110,22 @@ the alias `postgres`, and our API resolved `postgres` to it.
 Host check after the deploy (expect an address from the `private` network, never Coolify's database):
 
 ```sh
-# §1a first (PROJECT, one, must_fail, API, PG).
-docker exec "$API" python -c "import socket; print(socket.gethostbyname('edge-os-postgres'))"
+# §1a first; READY must be 1.
+running "$API" && docker exec "$API" python -c "import socket; print(socket.gethostbyname('edge-os-postgres'))"
 docker inspect "$PG" --format '{{(index .NetworkSettings.Networks "'"$PROJECT"'_private").IPAddress}}'  # must be equal
-# No container on Coolify's network may carry the name or alias edge-os-postgres.
+# No container on Coolify's network may carry the name or alias edge-os-postgres. The check fails closed: a failed
+# inspect or an empty member list is a FAIL, not a pass.
 NET=${COOLIFY_NETWORK:-coolify}
-for c in $(docker network inspect "$NET" --format '{{range $id, $e := .Containers}}{{$id}} {{end}}'); do
-  docker inspect "$c" --format '{{.Name}} {{range .NetworkSettings.Networks}}{{.Aliases}} {{.DNSNames}} {{end}}'
-done | grep -i edge-os-postgres && echo "FAIL: collision on $NET" || echo "pass: no edge-os-postgres on $NET"
+if ! members=$(docker network inspect "$NET" --format '{{range $id, $e := .Containers}}{{$id}} {{end}}') \
+    || [ -z "$(printf '%s' "$members" | tr -d ' ')" ]; then
+  echo "FAIL: cannot list $NET"
+elif for c in $members; do docker inspect "$c" --format \
+    '{{.Name}} {{range .NetworkSettings.Networks}}{{.Aliases}} {{.DNSNames}} {{end}}' || echo "inspect-error"; done \
+    | grep -iE 'edge-os-postgres|inspect-error'; then
+  echo "FAIL: collision or inspect error on $NET"
+else
+  echo "pass: no edge-os-postgres on $NET"
+fi
 ```
 
 ## 3. Loopback route for the host research worker
@@ -186,9 +211,9 @@ What `apply` installs:
 | `EDGE_OS_FWD_A/B` (first rule of `DOCKER-USER`) | `-i edgeos-hostdb`, `-o edgeos-hostdb`, `-s 10.203.0.16/28` and `-d 10.203.0.16/28` `-j DROP`; `! -i edgeos-egress ! -s 10.203.0.0/28 -j RETURN`; `ESTABLISHED,RELATED -j RETURN`; UDP and TCP 53 to each upstream resolver `-j RETURN`; TCP to `EDGE_OS_EGRESS_PORTS` (default 443) with `--match-set edgeos-egress-allow dst -j RETURN`; `-j DROP` |
 | `EDGE_OS_IN_A/B` (first rule of `INPUT`) | `! -i edgeos-egress ! -s 10.203.0.0/28 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
 | `EDGE_OS_IN_DB_A/B` (first rule of `INPUT`) | `! -i edgeos-hostdb ! -s 10.203.0.16/28 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
+| `EDGE_OS_IN_PRIVATE_A/B` (first rule of `INPUT`) | `! -i edgeos-private ! -s 10.203.0.64/26 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
 
-- The upstream resolvers are every IPv4 `nameserver` in `/run/systemd/resolve/resolv.conf` (or `/etc/resolv.conf`),
-  without loopback stubs. Docker's embedded resolver forwards from the container's namespace, so these queries cross
+- The upstream resolvers are every IPv4 `nameserver` in the file Docker uses (below), without loopback stubs. Docker's embedded resolver forwards from the container's namespace, so these queries cross
   `edgeos-egress`.
 - `edgeos-egress-allow` is a `hash:ip` set with a 900-second entry timeout. `refresh` resolves
   `EDGE_OS_EGRESS_HOSTS` on the host and only adds addresses; an empty answer never clears the set, and an address
@@ -200,13 +225,16 @@ What `apply` installs:
   survive on the `ESTABLISHED` allowance. `conntrack` is required; a failed flush fails `apply`.
 - `apply` holds a lock (`flock`), so two runs never build the same idle chain at once.
 - Both networks set `enable_ipv6: false`, so the IPv4 rules cover them.
-- The `INPUT` chains keep both bridges off host services (SSH, Coolify, the loopback database). Replies to the
-  loopback publish still arrive (`ESTABLISHED`).
+- The `INPUT` chains keep all three bridges (`edgeos-egress`, `edgeos-hostdb`, `edgeos-private`) off host services
+  (SSH, Coolify, the loopback database). Replies to the loopback publish still arrive (`ESTABLISHED`).
+- The upstream resolvers follow Docker's rule: `/run/systemd/resolve/resolv.conf` only when `/etc/resolv.conf` names
+  loopback stubs only; otherwise `/etc/resolv.conf`.
 
 Install (before the first deploy that puts the worker on `egress`):
 
 ```sh
 apt-get install -y ipset conntrack
+install -d -m 0755 -o root -g root /etc/edge-os
 install -m 0600 -o root -g root /dev/null /etc/edge-os/egress.env
 cat > /etc/edge-os/egress.env <<'ENV'
 EDGE_OS_EGRESS_HOSTS="api.privy.io <the Monad RPC host name in the approved execution release>"
@@ -249,24 +277,26 @@ Limits:
 Checks (record the output; repeat after a reboot):
 
 ```sh
-# §1a first (PROJECT, one, must_fail, W, PG).
-ip link show edgeos-egress && ip link show edgeos-hostdb    # both bridges carry their fixed names
+# §1a first; READY must be 1.
+ip link show edgeos-egress && ip link show edgeos-hostdb && ip link show edgeos-private  # the fixed bridge names
 iptables -S DOCKER-USER | head -3; iptables -S INPUT | head -3; ipset list edgeos-egress-allow | head
 # Coolify must not have attached another network (one with NAT would bypass these rules).
 docker inspect "$W" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'   # exactly <PROJECT>_private <PROJECT>_egress
 docker inspect "$PG" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'  # exactly <PROJECT>_private <PROJECT>_hostdb
-docker exec "$W" python -c "
+running "$W" && docker exec "$W" python -c "
 import urllib.error as e, urllib.request as u
 try: print(u.urlopen('https://api.privy.io', timeout=5).status)
 except e.HTTPError as error: print(error.code)"                                                       # any HTTP status
-must_fail docker exec "$W" python -c "import urllib.request as u; u.urlopen('https://example.com', timeout=5)"
-must_fail docker exec "$W" python -c "import socket; socket.create_connection(('10.203.0.1', 22), 3)"
-must_fail docker exec "$PG" bash -c 'timeout 5 bash -c "exec 3<>/dev/tcp/10.203.0.17/22"'
-must_fail docker exec "$PG" bash -c 'timeout 5 bash -c "exec 3<>/dev/tcp/1.1.1.1/443"'
+GW=$(docker network inspect "${PROJECT}_private" --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}')
+must_fail "$W" python -c "$PY_PROBE" example.com 443       # the internet beyond the allowlist
+must_fail "$W" python -c "$PY_PROBE" 10.203.0.1 22         # the host, through the egress gateway
+[ -z "$GW" ] || must_fail "$W" python -c "$PY_PROBE" "$GW" 22   # the host, through the private gateway, if any
+must_fail "$PG" bash -c "$SH_PROBE" 10.203.0.17 22         # the host, through the hostdb gateway
+must_fail "$PG" bash -c "$SH_PROBE" 1.1.1.1 443            # the internet, from PostgreSQL
 ```
 
-Every `must_fail` line must print `pass: blocked`. `FAIL: check did not run` means the container or its command was
-not found; fix the selection, do not record it as blocked.
+Every `must_fail` line must print `pass: blocked`. Any `FAIL` line is a failed check: fix the cause, never record it
+as blocked. A refused connection (`FAIL: not proven blocked (1)`) means the packet reached its target.
 
 ## 5. Backups and the restore drill
 
@@ -283,14 +313,16 @@ rolled back over; it is not the only copy of the data.
 ### 5.2 Logical dump (`pg_dump`)
 
 ```sh
-# §1a first (PROJECT, one, PG).
+# §1a first; READY must be 1.
 install -d -m 0700 -o root -g root /var/backups/edge-os
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 DUMP=/var/backups/edge-os/edge_os-$STAMP.dump
-docker exec "$PG" pg_dump -Fc -U edge_os -d edge_os > "$DUMP" || { echo "FAIL: pg_dump"; rm -f "$DUMP"; }
-chmod 0600 "$DUMP"
-docker exec -i "$PG" pg_restore -l < "$DUMP" > /dev/null && echo "pass: dump readable" || echo "FAIL: dump unreadable"
-sha256sum "$DUMP"
+if running "$PG" && (umask 077; docker exec "$PG" pg_dump -Fc -U edge_os -d edge_os > "$DUMP") \
+    && docker exec -i "$PG" pg_restore -l < "$DUMP" > /dev/null; then
+  echo "pass: dump readable"; sha256sum "$DUMP"
+else
+  echo "FAIL: no usable dump"; rm -f "$DUMP"
+fi
 ```
 
 The dump sits on the VPS disk, so the next Contabo snapshot carries it. An encrypted copy off the VPS
@@ -303,10 +335,14 @@ The scratch container has no network and no published port. It uses the same Pos
 ```sh
 IMAGE=<the deployed postgres image, by digest>
 DUMP=/var/backups/edge-os/edge_os-<STAMP>.dump   # and §1a first (PG)
+docker rm -fv edge-os-restore-drill 2>/dev/null   # never restore into a stale drill container
 docker run -d --name edge-os-restore-drill --network none \
   -e POSTGRES_PASSWORD="$(openssl rand -hex 16)" -e POSTGRES_DB=edge_os_restore "$IMAGE"
 # Over TCP: the image's temporary init server listens on the Unix socket only, so this waits for the real server.
-until docker exec edge-os-restore-drill pg_isready -h 127.0.0.1 -U postgres -d edge_os_restore; do sleep 1; done
+# Bounded: stop after 120 seconds (a wrong image or a crash would otherwise wait forever).
+for _ in $(seq 120); do
+  docker exec edge-os-restore-drill pg_isready -h 127.0.0.1 -U postgres -d edge_os_restore && break; sleep 1
+done
 START=$(date +%s)
 docker exec -i edge-os-restore-drill pg_restore -h 127.0.0.1 -U postgres -d edge_os_restore --no-owner --exit-on-error < "$DUMP"
 echo "restore seconds: $(( $(date +%s) - START ))"

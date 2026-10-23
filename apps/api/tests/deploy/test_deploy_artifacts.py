@@ -117,6 +117,10 @@ def test_the_hosted_record_v2_runbook_covers_every_host_step():
     assert "docker ps --filter label=com.docker.compose.service" not in text
     assert "head -1" not in text
     assert "label=com.docker.compose.project=$PROJECT" in text
+    # A negative check passes only on the probe's own "blocked" exit code from a selected, running container.
+    assert 'if [ "$rc" -eq 42 ]; then echo "pass: blocked"' in text
+    assert "running \"$c\" ||" in text
+    assert "-ge 125" not in text
 
 
 def test_the_coolify_runbook_uses_the_unique_database_alias():
@@ -135,8 +139,11 @@ def test_the_egress_firewall_is_fail_closed_and_starts_before_docker():
     text = script.read_text(encoding="utf-8")
     for rule in ("-i edgeos-hostdb -j DROP", "-o edgeos-hostdb -j DROP", '-s "$HOSTDB_SUBNET" -j DROP',
                  '! -i edgeos-egress ! -s "$EGRESS_SUBNET" -j RETURN', '-m set --match-set "$SET" dst -j RETURN',
-                 '-A "$fwd" -j DROP', '-A "$in_egress" -j DROP', '-A "$in_db" -j DROP', "hook DOCKER-USER",
-                 "hook INPUT", "conntrack -D -s", "flock 9", "conntrack is required"):
+                 '-A "$fwd" -j DROP', '-A "$chain" -j DROP', "hook DOCKER-USER",
+                 "hook INPUT", "conntrack -D -s", "flock 9", "conntrack is required",
+                 'replies_only EDGE_OS_IN edgeos-egress "$EGRESS_SUBNET"',
+                 'replies_only EDGE_OS_IN_DB edgeos-hostdb "$HOSTDB_SUBNET"',
+                 'replies_only EDGE_OS_IN_PRIVATE edgeos-private "$PRIVATE_SUBNET"'):
         assert rule in text, rule
     assert "ipset flush" not in text and "ipset swap" not in text
     unit = (host / "edge-os-egress-firewall.service").read_text(encoding="utf-8")

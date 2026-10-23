@@ -180,6 +180,9 @@ class Settings(BaseSettings):
                 problems.append("database_url: production needs sslmode=require or stricter")
             if (url.host or "").rstrip(".").lower() in COOLIFY_RESERVED_DATABASE_HOSTS:
                 problems.append("database_url: the host is Coolify's own database alias; use edge-os-postgres")
+            # The driver takes query `host`/`hostaddr` over the URL host, which would bypass both host checks.
+            if {"host", "hostaddr"} & {key.lower() for key in url.query}:
+                problems.append("database_url: production refuses host or hostaddr query parameters")
             if self.fixture_effects_path is not None:
                 problems.append("fixture_effects_path: fixture effects are refused in production")
         if self.env == "production" and self.interpreter != "fixture" and deployment is None:

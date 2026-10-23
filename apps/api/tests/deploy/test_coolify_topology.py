@@ -264,6 +264,8 @@ def test_api_and_web_join_the_proxy_network(compose):
     assert set(compose["services"]["postgres"]["networks"]) == {"private", "hostdb"}
     assert set(compose["services"]["execution-worker"]["networks"]) == {"private", "egress"}
     assert compose["networks"]["private"]["internal"] is True
+    assert compose["networks"]["private"]["driver_opts"]["com.docker.network.bridge.name"] == "edgeos-private"
+    assert compose["networks"]["private"]["ipam"]["config"] == [{"subnet": "10.203.0.64/26"}]
     assert compose["networks"]["coolify"]["external"] is True
 
 

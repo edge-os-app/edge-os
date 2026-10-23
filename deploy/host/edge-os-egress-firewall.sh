@@ -4,6 +4,8 @@
 #   edgeos-egress  the execution worker's only route out: DNS to the host's upstream resolvers and TCP to the
 #                  resolved addresses of EDGE_OS_EGRESS_HOSTS on EDGE_OS_EGRESS_PORTS. Everything else is dropped.
 #   edgeos-hostdb  PostgreSQL's loopback publish: nothing is forwarded in or out, and only replies reach the host.
+#   edgeos-private the internal service network: only replies reach the host (its gateway must not expose SSH or
+#                  Coolify to the containers).
 #
 # Every rule matches the bridge name or its fixed subnet, so a bridge renamed by a later edit is still filtered.
 #
@@ -27,12 +29,16 @@ SET=edgeos-egress-allow
 TTL=900
 EGRESS_SUBNET=10.203.0.0/28
 HOSTDB_SUBNET=10.203.0.16/28
+PRIVATE_SUBNET=10.203.0.64/26
 LOCK=${EDGE_OS_EGRESS_LOCK:-/run/edge-os-egress-firewall.lock}
 
 resolvers() {
-  # The file Docker reads when the host runs systemd-resolved; otherwise /etc/resolv.conf. Loopback stubs excluded.
+  # Docker's rule: it reads the systemd-resolved upstream file only when /etc/resolv.conf names loopback stubs only.
   file=/etc/resolv.conf
-  [ -f /run/systemd/resolve/resolv.conf ] && file=/run/systemd/resolve/resolv.conf
+  if [ -f /run/systemd/resolve/resolv.conf ] \
+      && ! awk '$1 == "nameserver" && $2 !~ /^127\./ {found = 1} END {exit !found}' /etc/resolv.conf; then
+    file=/run/systemd/resolve/resolv.conf
+  fi
   awk '$1 == "nameserver" && $2 ~ /^[0-9.]+$/ && $2 !~ /^127\./ {print $2}' "$file" | sort -u
 }
 
@@ -65,6 +71,15 @@ hook() {
   done
 }
 
+replies_only() {
+  # replies_only <chain name> <bridge> <subnet>: INPUT from that bridge or subnet accepts replies and drops the rest.
+  chain=$(build INPUT "$1")
+  iptables -A "$chain" ! -i "$2" ! -s "$3" -j RETURN
+  iptables -A "$chain" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  iptables -A "$chain" -j DROP
+  hook INPUT "$1" "$chain"
+}
+
 apply() {
   command -v conntrack >/dev/null 2>&1 || { echo "conntrack is required" >&2; exit 1; }
   servers=$(resolvers)
@@ -90,17 +105,10 @@ apply() {
   iptables -A "$fwd" -j DROP
   hook DOCKER-USER EDGE_OS_FWD "$fwd"
 
-  # Traffic to the host itself (SSH, Coolify, the loopback database) from either bridge: replies only.
-  in_egress=$(build INPUT EDGE_OS_IN)
-  iptables -A "$in_egress" ! -i edgeos-egress ! -s "$EGRESS_SUBNET" -j RETURN
-  iptables -A "$in_egress" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-  iptables -A "$in_egress" -j DROP
-  hook INPUT EDGE_OS_IN "$in_egress"
-  in_db=$(build INPUT EDGE_OS_IN_DB)
-  iptables -A "$in_db" ! -i edgeos-hostdb ! -s "$HOSTDB_SUBNET" -j RETURN
-  iptables -A "$in_db" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-  iptables -A "$in_db" -j DROP
-  hook INPUT EDGE_OS_IN_DB "$in_db"
+  # Traffic to the host itself (SSH, Coolify, the loopback database) from each bridge: replies only.
+  replies_only EDGE_OS_IN edgeos-egress "$EGRESS_SUBNET"
+  replies_only EDGE_OS_IN_DB edgeos-hostdb "$HOSTDB_SUBNET"
+  replies_only EDGE_OS_IN_PRIVATE edgeos-private "$PRIVATE_SUBNET"
 
   # Connections opened before the rules existed must not survive on the ESTABLISHED allowance. "0 flow entries" is
   # not an error; any other conntrack failure is.

@@ -299,6 +299,12 @@ networks:
   # provider egress. Only the execution worker has a route out (`egress`); PostgreSQL's `hostdb` has no NAT.
   private:
     internal: true
+    # A fixed bridge name and subnet so the host firewall keeps its gateway from reaching host services.
+    driver_opts:
+      com.docker.network.bridge.name: edgeos-private
+    ipam:
+      config:
+        - subnet: 10.203.0.64/26
   # The execution worker's only route out, intended for https://api.privy.io and the Monad RPC endpoint only. Docker
   # cannot restrict by host name: this network alone allows every destination. The host firewall (DOCKER-USER chain
   # on the fixed bridge `edgeos-egress`, subnet 10.203.0.0/28) or an egress gateway enforces the two destinations;

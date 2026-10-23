@@ -59,6 +59,12 @@ def test_the_production_contract_loads():
      "Coolify's own database alias"),
     ({"EDGE_OS_DATABASE_URL": "postgresql+psycopg://u:p@coolify-db:5432/edge_os?sslmode=require"},
      "Coolify's own database alias"),
+    ({"EDGE_OS_DATABASE_URL":
+      "postgresql+psycopg://u:p@edge-os-postgres:5432/edge_os?sslmode=require&host=postgres"},
+     "host or hostaddr query parameters"),
+    ({"EDGE_OS_DATABASE_URL":
+      "postgresql+psycopg://u:p@edge-os-postgres:5432/edge_os?sslmode=require&hostaddr=127.0.0.1"},
+     "host or hostaddr query parameters"),
     ({"EDGE_OS_EXECUTION_MODE": "controlled"}, "controlled execution needs an approved hosted deployment"),
 ])
 def test_production_refusals_stay_in_force(change, reason):
