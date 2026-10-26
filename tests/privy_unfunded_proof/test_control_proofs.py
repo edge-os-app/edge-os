@@ -42,19 +42,15 @@ def _build(**changes):  # noqa: ANN003, ANN202
 # ---------------------------------------------------------------- full recorded run
 
 
-def test_a_matching_recorded_run_proves_four_controls_leaves_three_to_the_builder_and_never_the_program() -> None:
+def test_a_matching_recorded_run_proves_the_recorded_controls_and_leaves_four_decisions() -> None:
     result = _build()
     assert set(result["proven"]) == set(PROVEN)
-    assert set(result["unproven"]) == {"opaque_program"}
-    assert result["unproven"]["opaque_program"]["reason"] == "NO_PROVIDER_BOUND_ON_PROGRAM_BYTES"
-    support = result["supporting"]["opaque_program"]
-    assert result["unproven"]["opaque_program"]["supporting_evidence_sha256"] == support["sha256"]
-    assert support["sha256"] == hashlib.sha256(canonical_json(support["artifact"])).hexdigest()
-    assert support["artifact"]["evidence_class"] is None and support["artifact"]["state"] == "UNPROVEN_SUPPORT"
+    assert result["unproven"] == {} and result["supporting"] == {}
     assert {name: entry["reason"] for name, entry in result["decision_required"].items()} == {
         "input_output_assets": "OUTPUT_TOKEN_NOT_PROVIDER_BOUND", "fees": "FEE_VALUES_NOT_PROVIDER_BOUND",
-        "expiry_freshness": "PROVIDER_COVERS_SIGNING_CUTOFF_ONLY"}
-    for name in DECISION:
+        "expiry_freshness": "PROVIDER_COVERS_SIGNING_CUTOFF_ONLY",
+        "opaque_program": "PROGRAM_BOUND_BY_HOST_AND_TRACE_ONLY"}
+    for name in DECISION + ("opaque_program",):
         entry = result["decision_required"][name]
         assert entry["artifact"]["state"] == "DECISION_REQUIRED"
         assert entry["artifact"]["decision_required"] == entry["reason"]
@@ -124,18 +120,15 @@ def test_produced_controls_drop_in_to_the_release_shape() -> None:
                          "reserve_moe": "75000000000000000000000000"},
             "gas_estimates": {"approve": 46000, "swap": 544967, "revoke": 30000}}
     release = inapp.complete_release(value, fill)
-    # Controls 1-3 and 9 wait on the recorded v3 result, 4 and 11 on a builder decision, 12 stays unproven.
-    assert inapp.unqualified_controls(release) == ["approvals", "chain", "entrypoint_method", "expiry_freshness",
-                                                   "fees", "input_output_assets", "opaque_program",
-                                                   "wallet_signer_binding"]
+    # The authored file now records the v3 result and the five builder decisions, so every control qualifies.
+    assert inapp.unqualified_controls(release) == []
     digest = release_sha256(release)
     import datetime as dt
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(operating_release, "APPROVED_ACTUAL_RELEASES",
                       {release.content()["release_id"]: digest})
-        with pytest.raises(operating_release.ReleaseRefused) as caught:
-            check_release(release, expected_sha256=digest, now=dt.datetime(2026, 10, 30, tzinfo=dt.timezone.utc))
-    assert str(caught.value) == "EXECUTION_CONTROL_UNQUALIFIED"
+        assert check_release(release, expected_sha256=digest,
+                             now=dt.datetime(2026, 10, 30, tzinfo=dt.timezone.utc)) == digest
 
 
 # ---------------------------------------------------------------- fail-closed per control
@@ -196,12 +189,12 @@ def test_a_changed_baseline_output_breaks_every_dependent_request() -> None:
     assert caught.value.code == "CHAIN_RECORD_MISMATCH"
 
 
-def test_a_missing_trace_leaves_only_the_recipient_unproven() -> None:
+def test_a_missing_trace_leaves_the_recipient_and_the_program_unproven() -> None:
     result = _build(chain_records=recorded_chain(debug_supported=False))
     assert "recipient" not in result["proven"]
     assert result["unproven"]["recipient"]["reason"] == "TRACE_UNAVAILABLE"
+    assert result["unproven"]["opaque_program"]["reason"] == "TRACE_UNAVAILABLE"
     assert set(result["proven"]) == set(PROVEN) - {"recipient"}
-    assert result["unproven"]["opaque_program"]["supporting_evidence_sha256"] is None
     assert result["supporting"] == {}
 
 
@@ -504,9 +497,10 @@ def test_command_reads_a_privy_store_and_a_chain_results_file(tmp_path: Path,
     for name in DECISION:
         saved = (out_dir / f"{name}.proof.json").read_bytes()
         assert hashlib.sha256(saved).hexdigest() == printed["decision_required"][name]["proof_sha256"]
-    support = (out_dir / "opaque_program.support.json").read_bytes()
-    assert hashlib.sha256(support).hexdigest() == printed["unproven"]["opaque_program"]["supporting_evidence_sha256"]
-    assert printed["unproven"]["opaque_program"]["reason"] == "NO_PROVIDER_BOUND_ON_PROGRAM_BYTES"
+    opaque = (out_dir / "opaque_program.proof.json").read_bytes()
+    assert hashlib.sha256(opaque).hexdigest() == printed["decision_required"]["opaque_program"]["proof_sha256"]
+    assert printed["decision_required"]["opaque_program"]["reason"] == "PROGRAM_BOUND_BY_HOST_AND_TRACE_ONLY"
+    assert printed["unproven"] == {}
     assert control_proofs.main(["--authored", str(authored_path), "--privy-store", str(privy_dir),
                                 "--chain-store", str(chain_dir), "--out", str(out_dir)]) == 2
 

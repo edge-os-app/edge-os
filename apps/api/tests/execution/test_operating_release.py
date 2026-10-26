@@ -4,6 +4,7 @@ import copy
 import datetime as dt
 import socket
 import pytest
+from edge_os_api.execution import operating_release
 from edge_os_api.execution.operating_release import OperatingRelease, check_release, release_sha256
 from edge_os_api.execution.operating_release import CONTROLS, ReleaseRefused, release_steps
 
@@ -272,3 +273,122 @@ def test_a_single_action_release_keeps_its_exact_limits(change):
     change(source)
     with pytest.raises(ReleaseRefused, match="EXECUTION_RELEASE_INVALID"):
         OperatingRelease(source)
+
+
+# ------------------------------------------------- builder-accepted control decisions (CONTROL-ADOPT-L1)
+
+DECISION = ("fees", "FEE_VALUES_NOT_PROVIDER_BOUND", "a" * 64)
+
+
+def actual_definition():
+    """The synthetic shape, made ACTUAL. The endpoints and evidence class are test inputs only."""
+    source = definition()
+    source.update(kind="ACTUAL", evidence_class="PROVIDER_ACTUAL")
+    source["quote"]["endpoint"] = "https://ws.kuru.io/api/quote"
+    source["broadcast"]["endpoint"] = "https://broadcast.example/rpc"
+    source["observer"]["endpoint"] = "https://observer.example/rpc"
+    for control in source["controls"].values():
+        control.update(state="ENFORCED", evidence_class="PROVIDER_ACTUAL", proof_sha256="b" * 64)
+    return source
+
+
+def decision_definition():
+    source = actual_definition()
+    name, reason, proof = DECISION
+    source["controls"][name] = {"state": "DECISION_ACCEPTED", "evidence_class": "BUILDER_DECISION",
+                                "proof_sha256": proof, "decision_reason": reason}
+    return source
+
+
+def admit(monkeypatch, release, *, decisions=frozenset({DECISION}), registered=True):
+    digest = release_sha256(release)
+    monkeypatch.setattr(operating_release, "APPROVED_CONTROL_DECISIONS", decisions)
+    monkeypatch.setattr(operating_release, "APPROVED_ACTUAL_RELEASES",
+                        {release.content()["release_id"]: digest} if registered else {})
+    return check_release(release, expected_sha256=digest, now=NOW)
+
+
+def test_a_registered_decision_admits_only_its_exact_triple(monkeypatch):
+    release = OperatingRelease(decision_definition())
+    control = release.content()["controls"]["fees"]
+    assert control == {"state": "DECISION_ACCEPTED", "evidence_class": "BUILDER_DECISION",
+                       "proof_sha256": "a" * 64, "decision_reason": "FEE_VALUES_NOT_PROVIDER_BOUND"}
+    assert admit(monkeypatch, release) == release_sha256(release)
+
+
+@pytest.mark.parametrize("change", [
+    {"decision_reason": "FEE_VALUES_PROVIDER_BOUND"}, {"proof_sha256": "c" * 64},
+])
+def test_a_changed_decision_reason_or_hash_refuses(monkeypatch, change):
+    source = decision_definition()
+    source["controls"]["fees"].update(change)
+    release = OperatingRelease(source)
+    with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
+        admit(monkeypatch, release)
+
+
+def test_a_changed_decision_control_name_refuses(monkeypatch):
+    source = decision_definition()
+    source["controls"]["fees"], source["controls"]["recipient"] = (
+        source["controls"]["recipient"], source["controls"]["fees"])
+    release = OperatingRelease(source)
+    with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
+        admit(monkeypatch, release)
+
+
+def test_an_unregistered_decision_refuses_the_control_check(monkeypatch):
+    release = OperatingRelease(decision_definition())
+    with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
+        admit(monkeypatch, release, decisions=frozenset())
+
+
+def test_a_decision_needs_an_actual_release_and_the_builder_evidence_class():
+    source = decision_definition()
+    source["controls"]["fees"]["evidence_class"] = "PROVIDER_ACTUAL"
+    with pytest.raises(ReleaseRefused, match="EXECUTION_RELEASE_INVALID"):
+        OperatingRelease(source)
+    source = decision_definition()
+    source["controls"]["fees"]["decision_reason"] = "has a space"
+    with pytest.raises(ReleaseRefused, match="EXECUTION_RELEASE_INVALID"):
+        OperatingRelease(source)
+
+
+def test_a_decision_under_a_synthetic_release_refuses_at_construction():
+    source = definition()
+    source["controls"]["fees"] = {"state": "DECISION_ACCEPTED", "evidence_class": "BUILDER_DECISION",
+                                  "proof_sha256": "a" * 64, "decision_reason": "FEE_VALUES_NOT_PROVIDER_BOUND"}
+    with pytest.raises(ReleaseRefused, match="EXECUTION_RELEASE_INVALID"):
+        OperatingRelease(source)
+
+
+def test_a_decision_labelled_enforced_refuses(monkeypatch):
+    source = decision_definition()
+    source["controls"]["fees"] = {"state": "ENFORCED", "evidence_class": "PROVIDER_ACTUAL",
+                                  "proof_sha256": "a" * 64}
+    release = OperatingRelease(source)
+    with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
+        admit(monkeypatch, release)
+
+
+def test_a_decision_proof_relabelled_on_an_enforced_control_refuses(monkeypatch):
+    source = actual_definition()
+    source["controls"]["fees"]["proof_sha256"] = DECISION[2]
+    release = OperatingRelease(source)
+    with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
+        admit(monkeypatch, release)
+
+
+def test_a_copied_decision_triple_in_an_unregistered_release_refuses(monkeypatch):
+    release = OperatingRelease(decision_definition())
+    with pytest.raises(ReleaseRefused, match="ACTUAL_EXECUTION_RELEASE_NOT_APPROVED"):
+        admit(monkeypatch, release, registered=False)
+
+
+def test_control_is_qualified_is_the_shared_rule(monkeypatch):
+    release = OperatingRelease(decision_definition())
+    content = release.content()
+    monkeypatch.setattr(operating_release, "APPROVED_CONTROL_DECISIONS", frozenset({DECISION}))
+    assert operating_release.control_is_qualified("fees", content["controls"]["fees"], content) is True
+    assert operating_release.control_is_qualified("recipient", content["controls"]["recipient"], content) is True
+    changed = dict(content["controls"]["fees"], decision_reason="FEE_VALUES_PROVIDER_BOUND")
+    assert operating_release.control_is_qualified("fees", changed, content) is False

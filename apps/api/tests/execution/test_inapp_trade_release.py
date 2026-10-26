@@ -23,7 +23,8 @@ from edge_os_api.execution import operating_release
 from edge_os_api.execution.direct_route_quote_client import DirectRoutePins, DirectRouteQuoteClient, build_program_hex
 from edge_os_api.execution.operating_release import CONTROLS, ReleaseRefused, check_release, release_sha256, release_steps
 from edge_os_api.kuru_flow.flow_calldata import decode_flow_call
-from scripts.privy_unfunded_proof import actual_packet
+from scripts.privy_unfunded_proof import actual_packet, control_proofs
+from scripts.privy_unfunded_proof.actual_packet import UNFUNDED_POLICY_PACKET
 
 from execution.test_direct_route_quote_client import Http, reserves_reply
 
@@ -85,10 +86,11 @@ def register(monkeypatch, release, binding=None) -> None:
 
 
 def all_controls_proven(source: dict) -> dict:
-    """A hypothetical: what the release would carry once every control has provider-actual proof."""
+    """A hypothetical: what the release would carry if every control had a provider-actual proof."""
     changed = copy.deepcopy(source)
-    for control in changed["release"]["controls"].values():
-        control.update(state="ENFORCED", evidence_class="PROVIDER_ACTUAL", proof_sha256="9" * 64)
+    for name in changed["release"]["controls"]:
+        changed["release"]["controls"][name] = {
+            "state": "ENFORCED", "evidence_class": "PROVIDER_ACTUAL", "proof_sha256": "9" * 64}
     return changed
 
 
@@ -131,12 +133,17 @@ def test_authored_release_names_the_one_builder_wallet_policy_and_pinned_route()
     assert release["gas"]["gas_limit"] == facts["gas_limits"]["swap"]
 
 
-def test_no_control_claims_provider_proof_the_repository_does_not_record():
+def test_each_control_claims_only_the_recorded_evidence():
     controls = authored()["release"]["controls"]
-    assert all(control["evidence_class"] != "PROVIDER_ACTUAL" for control in controls.values())
     for name in POLICY_OWNED:
-        assert controls[name] == {"state": "ENFORCED", "evidence_class": "LOCAL_TESTED",
-                                  "proof_sha256": actual_packet.SEALED_PACKET_SHA256}
+        assert controls[name] == {"state": "ENFORCED", "evidence_class": "PROVIDER_ACTUAL",
+                                  "proof_sha256": "c9ceb7bef199930327d671c8f68095bab8a9cf0ddcb7b950d6f4e9ab41cb429b"}
+    for name in ("raw_input", "minimum_output", "gas_action_capacity"):
+        assert controls[name] == {"state": "ENFORCED", "evidence_class": "PROVIDER_ACTUAL",
+                                  "proof_sha256": DEFINED_PROOF_HASHES[name]}
+    for name, reason in DEFINED_DECISIONS.items():
+        assert controls[name] == {"state": "DECISION_ACCEPTED", "evidence_class": "BUILDER_DECISION",
+                                  "proof_sha256": DEFINED_PROOF_HASHES[name], "decision_reason": reason}
 
 
 def test_owner_agent_and_consent_ids_are_never_authored():
@@ -156,12 +163,13 @@ def test_completed_release_validates_with_a_stable_hash_and_refuses_while_unregi
         check_release(release, expected_sha256=digest, now=NOW, synthetic_approvals={"x": digest})
 
 
-def test_pending_registry_line_reaches_the_control_check_and_the_honest_controls_refuse(monkeypatch):
+def test_an_empty_decision_registry_still_refuses_at_the_control_check(monkeypatch):
     release = inapp.complete_release(authored(), fill())
     register(monkeypatch, release)
+    monkeypatch.setattr(operating_release, "APPROVED_CONTROL_DECISIONS", frozenset())
     with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
         check_release(release, expected_sha256=release_sha256(release), now=NOW)
-    assert inapp.unqualified_controls(release) == sorted(CONTROLS)
+    assert set(inapp.unqualified_controls(release)) == set(DEFINED_DECISIONS)
 
 
 def test_release_admits_its_exact_hash_once_registered_and_every_control_is_proven(monkeypatch):
@@ -440,12 +448,16 @@ def test_binding_hash_covers_owner_agent_and_consent_and_one_wallet(monkeypatch)
         bound.admit({**identity(), "agent_id": "foreign"}, now=NOW)
 
 
-def test_binding_of_the_honest_release_refuses_at_the_control_check(monkeypatch):
+def test_the_binding_follows_the_same_decision_rule(monkeypatch):
     release = inapp.complete_release(authored(), fill())
     bound = inapp.bind_release(release, binding_fill())
     register(monkeypatch, release, bound)
+    real = operating_release.APPROVED_CONTROL_DECISIONS
+    monkeypatch.setattr(operating_release, "APPROVED_CONTROL_DECISIONS", frozenset())
     with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
         bound.admit(identity(), now=NOW)
+    monkeypatch.setattr(operating_release, "APPROVED_CONTROL_DECISIONS", real)
+    assert bound.admit(identity(), now=NOW) == bound.sha256
 
 
 @pytest.mark.parametrize("change", [
@@ -504,7 +516,7 @@ def test_command_prints_the_release_hash_and_registry_lines(tmp_path, capsys):
     release = inapp.complete_release(authored(), fill())
     assert printed["release_sha256"] == release_sha256(release)
     assert printed["release"] == release.content()
-    assert printed["unqualified_controls"] == sorted(CONTROLS)
+    assert printed["unqualified_controls"] == []
     assert "binding_sha256" not in printed
     assert inapp.main(["--authored", str(AUTHORED_PATH), "--fill", str(fill_path),
                        "--binding-fill", str(binding_path)]) == 0
@@ -514,3 +526,148 @@ def test_command_prints_the_release_hash_and_registry_lines(tmp_path, capsys):
     fill_path.write_text("{}", encoding="utf-8")
     assert inapp.main(["--authored", str(AUTHORED_PATH), "--fill", str(fill_path)]) == 2
     assert json.loads(capsys.readouterr().out) == {"status": "REFUSED", "code": "INAPP_FILL_INVALID"}
+
+
+# ------------------------------------- committed control evidence (CONTROL-ADOPT-L1)
+
+PROOFS = AUTHORED_PATH.parent / "control-proofs"
+V3_RESULT = AUTHORED_PATH.parent / "v3-live-result"
+OPAQUE_REASON = "PROGRAM_BOUND_BY_HOST_AND_TRACE_ONLY"
+V3_SHA256 = "c9ceb7bef199930327d671c8f68095bab8a9cf0ddcb7b950d6f4e9ab41cb429b"
+DEFINED_DECISIONS = {
+    "input_output_assets": "OUTPUT_TOKEN_NOT_PROVIDER_BOUND",
+    "recipient": "FEE_RECIPIENTS_OBSERVED_NOT_SOURCE_BOUND",
+    "fees": "FEE_VALUES_NOT_PROVIDER_BOUND",
+    "expiry_freshness": "PRIVY_REFUSAL_REASON_NOT_READABLE",
+    "opaque_program": "PROGRAM_BOUND_BY_HOST_AND_TRACE_ONLY",
+}
+DEFINED_PROOF_HASHES = {
+    "chain": V3_SHA256, "wallet_signer_binding": V3_SHA256, "entrypoint_method": V3_SHA256,
+    "approvals": V3_SHA256,
+    "raw_input": "82c542a72664efd5d4a83bc674be8d6fc45e976538fe8b65bcf36945192cf40c",
+    "minimum_output": "0dcee961871eb38e76079747cd5ffdf55956ed580ffc97e663d2ba8d7b5d94da",
+    "gas_action_capacity": "f5a5e82b8edd172c8beb798de26b2c117344ec6879b248be5504a36d0f3d7e29",
+    "input_output_assets": "b7c303f625ff3a094c79f81f004fb5a65bdb81599a5a495faafc919292164c33",
+    "recipient": "4eaa956243fd0d92d767f73620e89b5685538b34bd4c7bab77259f0d17efc8bb",
+    "fees": "6232e2a96d9623fa7a442dc36bdb8f467085805ee685adf9b8ada314bcbf1675",
+    "expiry_freshness": "c638035f9f5d42651b53da6d7082ea0e3ec6b1f70db5e76781ce347c1d92b5e7",
+    "opaque_program": "e231b94de51224b88e8d5ed2d86a354e9f4a4948ef110ae348cb5044c542544c",
+}
+PROOFS_4_SHA256 = {
+    "controls.json": "9182273d304f1ebea0268a7151d7cfb9709ae89cda7929ae8861378d7129c8f1",
+    "expiry_freshness.proof.json": "c638035f9f5d42651b53da6d7082ea0e3ec6b1f70db5e76781ce347c1d92b5e7",
+    "fees.proof.json": "6232e2a96d9623fa7a442dc36bdb8f467085805ee685adf9b8ada314bcbf1675",
+    "gas_action_capacity.proof.json": "f5a5e82b8edd172c8beb798de26b2c117344ec6879b248be5504a36d0f3d7e29",
+    "input_output_assets.proof.json": "b7c303f625ff3a094c79f81f004fb5a65bdb81599a5a495faafc919292164c33",
+    "minimum_output.proof.json": "0dcee961871eb38e76079747cd5ffdf55956ed580ffc97e663d2ba8d7b5d94da",
+    "raw_input.proof.json": "82c542a72664efd5d4a83bc674be8d6fc45e976538fe8b65bcf36945192cf40c",
+    "recipient.proof.json": "4eaa956243fd0d92d767f73620e89b5685538b34bd4c7bab77259f0d17efc8bb",
+}
+
+
+def rebuild_v3_summary() -> dict:
+    rows = []
+    for path in sorted((V3_RESULT / "rows").glob("*.outcome.json")):
+        outcome = json.loads(path.read_text(encoding="utf-8"))
+        specimen = outcome["specimen_id"]
+        rows.append({
+            "specimen_id": specimen, "expected": outcome["expected"], "outcome": outcome["outcome"],
+            "reason": outcome["reason"], "matches_expectation": outcome["matches_expectation"],
+            "intent_record_sha256": hashlib.sha256(
+                (V3_RESULT / "rows" / f"{specimen}.intent.json").read_bytes()).hexdigest(),
+            "capture_record_sha256": hashlib.sha256(
+                (V3_RESULT / "rows" / f"{specimen}.capture.json").read_bytes()).hexdigest(),
+            "outcome_record_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "completed_at": outcome["completed_at"],
+        })
+    completed = [row.pop("completed_at") for row in rows]
+    return {
+        "schema": "edge-os.inapp-v3-live-result/1",
+        "packet_id": UNFUNDED_POLICY_PACKET.packet_id,
+        "attempt_identity": UNFUNDED_POLICY_PACKET.attempt_identity,
+        "policy_id": UNFUNDED_POLICY_PACKET.profile_policies["raw"],
+        "policy_sha256": UNFUNDED_POLICY_PACKET.profile_policy_sha256["raw"],
+        "profile": "raw", "reply_profile_id": "privy.raw.v1",
+        "row_count": len(rows), "matched_count": sum(1 for row in rows if row["matches_expectation"]),
+        "allow_count": sum(1 for row in rows if row["outcome"] == "ALLOW"),
+        "policy_deny_count": sum(1 for row in rows if row["outcome"] == "POLICY_DENY"),
+        "stop": None, "first_completed_at": min(completed), "last_completed_at": max(completed),
+        "rows": rows,
+    }
+
+
+def test_all_twelve_controls_qualify_and_only_the_release_registry_blocks(monkeypatch):
+    release = inapp.complete_release(authored(), fill())
+    digest = release_sha256(release)
+    assert inapp.unqualified_controls(release) == []
+    with pytest.raises(ReleaseRefused, match="ACTUAL_EXECUTION_RELEASE_NOT_APPROVED"):
+        check_release(release, expected_sha256=digest, now=NOW)
+    register(monkeypatch, release)
+    assert check_release(release, expected_sha256=digest, now=NOW) == digest
+    source = authored()
+    source["release"]["controls"]["fees"]["decision_reason"] = "FEE_VALUES_PROVIDER_BOUND"
+    changed = inapp.complete_release(source, fill())
+    register(monkeypatch, changed)
+    with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
+        check_release(changed, expected_sha256=release_sha256(changed), now=NOW)
+
+
+def test_the_committed_v3_summary_recomputes_and_binds_controls_1_2_3_and_9():
+    summary = json.loads((V3_RESULT / "summary.json").read_text(encoding="utf-8"))
+    assert summary == rebuild_v3_summary()
+    digest = hashlib.sha256((V3_RESULT / "summary.json").read_bytes()).hexdigest()
+    controls = authored()["release"]["controls"]
+    for name in ("chain", "wallet_signer_binding", "entrypoint_method", "approvals"):
+        assert controls[name] == {"state": "ENFORCED", "evidence_class": "PROVIDER_ACTUAL",
+                                  "proof_sha256": digest}
+    assert summary["row_count"] == summary["matched_count"] == 19
+    assert summary["allow_count"] == 4 and summary["policy_deny_count"] == 15
+    assert {row["specimen_id"] for row in summary["rows"]} == set(UNFUNDED_POLICY_PACKET.specimen_expected)
+
+
+def test_proofs_4_is_immutable():
+    assert set(PROOFS_4_SHA256) == {path.name for path in (PROOFS / "proofs-4").iterdir()}
+    for name, digest in PROOFS_4_SHA256.items():
+        assert hashlib.sha256((PROOFS / "proofs-4" / name).read_bytes()).hexdigest() == digest
+
+
+def test_the_committed_proofs_match_every_control():
+    source = authored()
+    controls = source["release"]["controls"]
+    binding = control_proofs.authored_binding_sha256(source)
+    for name in ("raw_input", "minimum_output", "gas_action_capacity"):
+        assert controls[name] == {"state": "ENFORCED", "evidence_class": "PROVIDER_ACTUAL",
+                                  "proof_sha256": hashlib.sha256(
+                                      (PROOFS / "proofs-4" / f"{name}.proof.json").read_bytes()).hexdigest()}
+    for name in ("input_output_assets", "fees", "recipient", "expiry_freshness"):
+        path = PROOFS / "proofs-4" / f"{name}.proof.json"
+        artifact = json.loads(path.read_text(encoding="utf-8"))
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == controls[name]["proof_sha256"]
+        assert controls[name]["state"] == "DECISION_ACCEPTED"
+        assert controls[name]["evidence_class"] == "BUILDER_DECISION"
+        assert controls[name]["decision_reason"] == artifact["decision_required"]
+        assert artifact["authored_binding_sha256"] == binding
+    path = PROOFS / "proofs-5" / "opaque_program.proof.json"
+    artifact = json.loads(path.read_text(encoding="utf-8"))
+    assert controls["opaque_program"] == {
+        "state": "DECISION_ACCEPTED", "evidence_class": "BUILDER_DECISION",
+        "proof_sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "decision_reason": OPAQUE_REASON}
+    assert artifact["control"] == "opaque_program"
+    assert artifact["state"] == "DECISION_REQUIRED"
+    assert artifact["decision_required"] == OPAQUE_REASON
+    assert artifact["authored_binding_sha256"] == binding
+    findings = artifact["findings"]
+    assert findings["host_program_check"]["match"] is True
+    assert len(findings["touched_addresses"]) == 11
+    assert {entry["recipient"] for entry in findings["fee_transfers"]} == {
+        "0x681c3f796ae388026634c26025504d7c45248998", "0xe1c8b73343f5a83ebe165be90470d84b00e33022"}
+    assert findings["frame_types"]["DELEGATECALL"]
+    assert findings["frame_types"]["STATICCALL"]
+
+
+def test_the_document_records_the_decision_rule_and_the_committed_paths():
+    document = AUTHORED_PATH.with_name("INAPP_TRADE_RELEASE.md").read_text(encoding="utf-8")
+    for needle in ("DECISION_ACCEPTED", "BUILDER_DECISION", "APPROVED_CONTROL_DECISIONS",
+                   "control-proofs/proofs-4", "control-proofs/proofs-5", "v3-live-result",
+                   "PROGRAM_BOUND_BY_HOST_AND_TRACE_ONLY"):
+        assert needle in document
