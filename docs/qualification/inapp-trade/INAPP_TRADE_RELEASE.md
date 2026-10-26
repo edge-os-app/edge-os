@@ -10,8 +10,10 @@ local app, later on the public site.
 | File | Role |
 | --- | --- |
 | [`release.authored.json`](release.authored.json) | The one release (`actual-inapp-wmon-moe-20261022/1`), its authoring facts and `{"$fill": name}` markers for values that need a recorded read or a later lane. |
+| `control-proofs/` | The committed raw stores and proof artifacts: `proofs-4` (seven controls), `proofs-5` (control 12) and `stores/` (the Privy and chain records). |
+| `v3-live-result/` | The recorded v3 live result: 19 rows (57 record files) and `summary.json` (controls 1-3 and 9). |
 | `apps/api/src/edge_os_api/execution/inapp_trade_release.py` | A pure completion step. It checks the fill, the gas rule and the USD ceiling, computes the minimum output, builds the `OperatingRelease` and the `BoundRelease`, and prints the exact registry lines. |
-| `apps/api/tests/execution/test_inapp_trade_release.py` | Tests for the authored file and the completion step. |
+| `apps/api/tests/execution/test_inapp_trade_release.py` | Tests for the authored file, the completion step and the committed evidence. |
 
 `operating_release.py` changed only its release shape and admission (`CLOUD-A6B`, see "Release steps and gas
 budget" below). `APPROVED_ACTUAL_RELEASES` and `APPROVED_ACTUAL_BINDINGS` stay empty.
@@ -50,11 +52,14 @@ document file hash is not used. Reasons:
   equals `SEALED_PACKET_SHA256`. A test checks that the release carries that exact value.
 - A document file hash changes with any wording edit.
 
-The packet hash is the proof input, not the provider outcome. The builder reported the 19/19 v3 live result on
-2026-10-22, but the repository does not record it yet. `UNFUNDED_POLICY_PACKET.md` still says "pending". The four
-policy-owned controls therefore cite the packet hash with evidence class `LOCAL_TESTED`, which is the packet's recorded
-status. They are not marked `PROVIDER_ACTUAL`. They can move to `PROVIDER_ACTUAL` only after the v3 result is recorded
-in the repository (pending step 1 below), with that recorded result's hash as their proof.
+The packet hash is the proof input, not the provider outcome. The v3 live result is now recorded in
+[`v3-live-result/`](v3-live-result/): 19 rows, all 19 matched, packet `8255d003…`, 4 `ALLOW` and 15
+`POLICY_DENY`. `summary.json` binds every row file by SHA-256:
+`c9ceb7bef199930327d671c8f68095bab8a9cf0ddcb7b950d6f4e9ab41cb429b`. Controls 1-3 and 9 therefore cite
+that summary hash with evidence class `PROVIDER_ACTUAL`. The packet document
+`docs/qualification/privy-unfunded-proof/UNFUNDED_POLICY_PACKET.md` still says "pending (v3)"; it is outside
+this task's owned paths, so the controller must update that line. This release document and the committed
+store are the record for the release.
 
 ## USD ceiling arithmetic (including gas)
 
@@ -97,42 +102,108 @@ The rule is `gas_limit >= ceil(eth_estimateGas x 1.2)`, computed in integers as 
   `gas_limit` and does not estimate gas again. The check therefore runs once, on the recorded estimate, when the
   release is completed. A state change after that read is not covered (the same limit as in `OPERATOR_TRADE.md`).
 
-## Controls: honest states, and why the release cannot be admitted yet
+## Controls: the recorded states and the builder decisions
 
-`check_release` admits an ACTUAL release only if each of its 12 controls is `ENFORCED`, carries evidence class
-`PROVIDER_ACTUAL` and has a proof hash. This release keeps the states that the repository records. No control is
-relaxed, and no control claims a provider proof that the repository does not hold. A test checks that.
+`check_release` admits an ACTUAL release only when its exact hash is in the code-owned
+`APPROVED_ACTUAL_RELEASES` registry. That check runs before any control is read. Then every control must be
+qualified. A control is qualified in one of two ways:
+
+- `ENFORCED` with the release's own evidence class (`PROVIDER_ACTUAL`) and a proof hash; or
+- `DECISION_ACCEPTED` with evidence class `BUILDER_DECISION`, a fixed `decision_reason`, and the exact
+  `(control, reason, proof_sha256)` triple in the code-owned `APPROVED_CONTROL_DECISIONS` registry.
+
+A decision is never `ENFORCED` and never `PROVIDER_ACTUAL`. A decision proof relabelled as an `ENFORCED`
+provider proof refuses. A release file is data and cannot write the registry, so a release file can never
+accept its own decision.
 
 | # | Control | State / evidence | Proof |
 | --- | --- | --- | --- |
-| 1 | `chain` | `ENFORCED` / `LOCAL_TESTED` | packet `8255d003…` (proof input) |
-| 2 | `wallet_signer_binding` | `ENFORCED` / `LOCAL_TESTED` | packet (proof input) |
-| 3 | `entrypoint_method` | `ENFORCED` / `LOCAL_TESTED` | packet (proof input) |
-| 4 | `input_output_assets` | `UNKNOWN` / `NOT_RUN` | none |
-| 5 | `raw_input` | `ENFORCED` / `SOURCE_INSPECTED` | none |
-| 6 | `recipient` | `ENFORCED` / `SOURCE_INSPECTED` | none |
-| 7 | `minimum_output` | `ENFORCED` / `SOURCE_INSPECTED` | none |
-| 8 | `fees` | `ENFORCED` / `SOURCE_INSPECTED` | none |
-| 9 | `approvals` | `ENFORCED` / `LOCAL_TESTED` | packet (proof input) |
-| 10 | `gas_action_capacity` | `UNSET` / `NOT_RUN` | none |
-| 11 | `expiry_freshness` | `ENFORCED` / `DOCUMENTED` | none |
-| 12 | `opaque_program` | `UNKNOWN` / `NOT_RUN` | none |
+| 1 | `chain` | `ENFORCED` / `PROVIDER_ACTUAL` | v3 summary `c9ceb7be…` |
+| 2 | `wallet_signer_binding` | `ENFORCED` / `PROVIDER_ACTUAL` | v3 summary |
+| 3 | `entrypoint_method` | `ENFORCED` / `PROVIDER_ACTUAL` | v3 summary |
+| 4 | `input_output_assets` | `DECISION_ACCEPTED` / `BUILDER_DECISION` | `b7c303f6…`, `OUTPUT_TOKEN_NOT_PROVIDER_BOUND` |
+| 5 | `raw_input` | `ENFORCED` / `PROVIDER_ACTUAL` | `82c542a7…` |
+| 6 | `recipient` | `DECISION_ACCEPTED` / `BUILDER_DECISION` | `4eaa9562…`, `FEE_RECIPIENTS_OBSERVED_NOT_SOURCE_BOUND` |
+| 7 | `minimum_output` | `ENFORCED` / `PROVIDER_ACTUAL` | `0dcee961…` |
+| 8 | `fees` | `DECISION_ACCEPTED` / `BUILDER_DECISION` | `6232e2a9…`, `FEE_VALUES_NOT_PROVIDER_BOUND` |
+| 9 | `approvals` | `ENFORCED` / `PROVIDER_ACTUAL` | v3 summary |
+| 10 | `gas_action_capacity` | `ENFORCED` / `PROVIDER_ACTUAL` | `f5a5e82b…` |
+| 11 | `expiry_freshness` | `DECISION_ACCEPTED` / `BUILDER_DECISION` | `c638035f…`, `PRIVY_REFUSAL_REASON_NOT_READABLE` |
+| 12 | `opaque_program` | `DECISION_ACCEPTED` / `BUILDER_DECISION` | `c172e1d5…`, `PROGRAM_BOUND_BY_HOST_AND_TRACE_ONLY` |
 
-Even with the registry lines added, this release is refused with `EXECUTION_CONTROL_UNQUALIFIED`. All 12 controls
-need a recorded provider-actual proof first: controls 1-3 and 9 from the recorded v3 live result, and controls 4-8 and
-10-12 from new evidence. Each needs a new proof artifact, which changes the release
-hash. A test shows the exact refusal. Another test shows that a copy with every control proven, plus the registry
-entry, admits its exact hash and refuses any changed control. That copy is a hypothetical in the test only. It is not
-in the authored file.
+### The decision registry
+
+`APPROVED_CONTROL_DECISIONS` holds exactly five entries: `input_output_assets`, `recipient`, `fees`,
+`expiry_freshness` and `opaque_program`, with the reasons and hashes above. The registry is a
+`frozenset[tuple[str, str, str]]` in `apps/api/src/edge_os_api/execution/operating_release.py`. It is reviewed
+code, not release data.
+
+`check_release` and `unqualified_controls` use one shared helper, `control_is_qualified`. A changed control,
+reason or proof hash refuses `EXECUTION_CONTROL_UNQUALIFIED`. An unregistered decision refuses the same code.
+A `DECISION_ACCEPTED` control in a `SYNTHETIC_FIXTURE` release refuses at construction. A decision with
+evidence class `PROVIDER_ACTUAL` refuses at construction. A registered decision proof used on an `ENFORCED`
+control refuses.
+
+**Residual limit.** The triple does not bind the release values. A different release file could copy a
+registered triple. That copy still needs its own exact hash in `APPROVED_ACTUAL_RELEASES`, which is a second
+reviewed code change. Until that registration it refuses `ACTUAL_EXECUTION_RELEASE_NOT_APPROVED`. A test covers
+this case. The proof artifact's `authored_binding_sha256` also binds the authored release facts, and the
+registering review checks it.
+
+### The committed evidence
+
+- `control-proofs/proofs-4/` holds the seven artifacts built from the stores on 2026-10-23 and 2026-10-26. Their
+  bytes and hashes are frozen; `controls.json` is `9182273d…`.
+- `control-proofs/proofs-5/` holds the same seven files, byte for byte, plus `opaque_program.proof.json` and its
+  `controls.json`. The build command is in `control-proofs/README.md`.
+- `control-proofs/stores/` holds the Privy store, its one expiry re-run and the chain store. They are the
+  evidence of record. The proofs are only as authentic as those stores.
+- `v3-live-result/` holds the 19 v3 rows and `summary.json`. A test recomputes the summary from the rows.
+
+With every control qualified, the authored release still refuses `ACTUAL_EXECUTION_RELEASE_NOT_APPROVED`:
+`APPROVED_ACTUAL_RELEASES` and `APPROVED_ACTUAL_BINDINGS` are empty (step 8 is not in this task). One test
+registers a test-only copy of the release and shows admission; another changes one decision triple and shows
+`EXECUTION_CONTROL_UNQUALIFIED`. No test writes the real registries.
+
+### Control 12 (`opaque_program`)
+
+`control-proofs/proofs-5/opaque_program.proof.json` is a decision artifact, not a provider proof. It carries:
+
+- the host check: `route.approved_program_hex` equals `build_program_hex` for the release input token, pool,
+  direction and program fee (`LOCAL_TESTED`, `findings.host_program_check`);
+- the provider-actual `chain.swap_trace` at block `115860413`;
+- `call_targets`: entrypoint, router, pool, WMON, MOE and fee collector `0xe1c8…3022`;
+- `delegate_targets`: pool implementation `0x8115…b4cf`, MOE implementation `0x4f44…6fbd`,
+  fee-collector implementation `0xd52c…6dbe` and helper implementation `0x2e14…de50`, each labelled
+  "proxy implementation, observed at this block, owner-upgradeable";
+- `static_targets`, including the read-only helper `0x71f8…71c7`;
+- `touched`: all 11 addresses, each with its frame types and callers;
+- `fee_transfers`: `0xe1c8…3022` 0.10 WMON and `0x681c…8998` 0.035 WMON, each within its pinned bound.
+
+Admission checks every `CALL` target. Each must be one of the five release contracts or a pinned fee recipient.
+A `DELEGATECALL` or `STATICCALL` frame needs an admitted caller. A `CREATE`, `CREATE2`, `SELFDESTRUCT` or a
+non-zero native value refuses. Token movements keep the recipient rules. The reason is
+`PROGRAM_BOUND_BY_HOST_AND_TRACE_ONLY`. No provider binds the program bytes; the host check is `LOCAL_TESTED`.
+
+### The v3 summary
+
+`v3-live-result/summary.json` has schema `edge-os.inapp-v3-live-result/1`. It names the packet
+`8255d003…`, the attempt `unfunded-policy-proof-3`, the policy and profile, the row and match counts (19/19,
+4 `ALLOW`, 15 `POLICY_DENY`), `stop: null`, the first and last completion times, and every row's
+`intent_record_sha256`, `capture_record_sha256`, `outcome_record_sha256`, outcome and reason. A test recomputes
+the summary from the 57 committed row files and checks the hash.
 
 ## Pending builder and controller steps, in order
 
-1. **Record the v3 live result (controller).** Commit the 19/19 v3 result store, or its summary hash bound to packet
-   `8255d003…`, and update `UNFUNDED_POLICY_PACKET.md`. Then set controls 1-3 and 9 to `PROVIDER_ACTUAL` with that
-   recorded hash.
-2. **Control evidence (builder decision).** Produce provider-actual proof for controls 4-8 and 10-12, or decide
-   otherwise. The module rule cannot be met without one of these. A decision to change the rule is a product decision
-   and a separate reviewed change. It is not part of this task.
+1. **Record the v3 live result (done, `CONTROL-ADOPT-L1`).** The 19/19 store is committed at
+   [`v3-live-result/`](v3-live-result/). Controls 1-3 and 9 cite the summary hash
+   `c9ceb7bef199930327d671c8f68095bab8a9cf0ddcb7b950d6f4e9ab41cb429b` with `PROVIDER_ACTUAL`. The controller
+   still owns one documentation edit outside this task's paths: `UNFUNDED_POLICY_PACKET.md` still says
+   "pending (v3)".
+2. **Control evidence (done, `CONTROL-ADOPT-L1`).** Controls 4, 6, 8, 11 and 12 are `DECISION_ACCEPTED` with
+   the builder's option A acceptance. The five exact decisions are in `APPROVED_CONTROL_DECISIONS`; the proof
+   artifacts are committed. Control 12 uses the host-exact program check plus the provider-actual trace of that
+   exact program, and lists every touched address with its frame type and caller.
 3. **Dry run (controller).** Run the operator dry run with `"start": "WMON"`, `input_raw`
    `10000000000000000000` and the authored step limits. Record the pool reserves with their block, and record the
    estimate for each of approve, swap and revoke.
@@ -387,12 +458,14 @@ stay empty until the builder approves the exact hashes (pending step 8).
 
 ### New release content
 
-**SHA-256 of `release.authored.json`: `05d3be00c8c2f5ca0862d587f696ab8b0a28aabec45ce8399a76b25bba60aa1a`**
+**SHA-256 of `release.authored.json`: `6951559b6c573ab1cc8dafbfa0aa05ea7e84ede883a43228bfa3a08d94ba58a1`**
 (`sha256sum docs/qualification/inapp-trade/release.authored.json`; a test checks that this document prints it).
 
 The release still carries `{"$fill": name}` markers. Its `release_sha256`, the hash the builder registers, exists
-only after the controller's fill (pending steps 3-7), and step 7 prints it. The previous authored file had
-`budget_raw` `141400000000000000` and the single-action limits. Any release completed from it has a different hash.
+only after the controller's fill (pending steps 3-7), and step 7 prints it. `CONTROL-ADOPT-L1` changed the 12
+controls and so this authored hash; the release steps, gas budget and limits did not change. The previous authored
+file had `budget_raw` `141400000000000000` and the single-action limits. Any release completed from it has a
+different hash.
 
 Two values changed:
 
@@ -479,11 +552,26 @@ allowance tests in `tests/execution/test_approve_swap_revoke.py`. All external r
 ## Checks
 
 ```sh
-cd apps/api && .venv/bin/python -m pytest -q tests/execution/test_inapp_trade_release.py \
+cd apps/api && .venv/bin/python -m pytest -q tests/execution/test_operating_release.py \
+  tests/execution/test_inapp_trade_release.py \
   tests/execution/test_approve_swap_revoke.py tests/recovery/test_approve_swap_revoke_recovery.py
+PYTHONPATH=apps/api/src:. apps/api/.venv/bin/python -m pytest -q tests/privy_unfunded_proof
 ```
 
 The recovery test needs Docker for its PostgreSQL container.
+
+Rebuild the control 12 artifact from the committed stores (no network). Build into a new directory; the committed
+`proofs-5` is the reviewed output.
+
+```sh
+PYTHONPATH=apps/api/src:. apps/api/.venv/bin/python -B -s -m scripts.privy_unfunded_proof.control_proofs \
+  --authored docs/qualification/inapp-trade/release.authored.json \
+  --privy-store docs/qualification/inapp-trade/control-proofs/stores/privy-store-1 \
+  --chain-store docs/qualification/inapp-trade/control-proofs/stores/chain-store-1 \
+  --with-expiry-rerun --out <new directory>
+```
+
+The seven existing artifacts must keep the `proofs-4` hashes in `control-proofs/README.md`.
 
 ## A5 server-wallet binding, local only
 

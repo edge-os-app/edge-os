@@ -7,10 +7,11 @@ the authored release, the Privy outcome records of the sealed control-proof pack
 credential; the command reads three local paths and writes one new directory.
 
 A control is proven only when every rule below holds. Anything else leaves it in ``unproven`` with a fixed
-reason, and no state is produced for it. Three controls are ``decision_required`` even when their evidence is
+reason, and no state is produced for it. Several controls are ``decision_required`` even when their evidence is
 complete, because the provider covers only part of the control: their artifact and hash are produced, but no
-state, until the builder decides. ``opaque_program`` is never proven here: neither the Privy policy nor the
-entrypoint bounds the program bytes. See ``docs/qualification/inapp-trade/CONTROL_PROOFS_PLAN.md``.
+state, until the builder decides. ``opaque_program`` is a decision artifact: only the host's exact program check
+binds the bytes, and the provider-actual trace shows what that exact program did at the pinned block. See
+``docs/qualification/inapp-trade/CONTROL_PROOFS_PLAN.md``.
 
 The artifacts are only as authentic as the records. Chain records can be re-checked by anyone at the pinned
 block; Privy records cannot, so the controller commits the raw store with the artifacts.
@@ -95,6 +96,16 @@ _CLAIMS: Mapping[str, tuple[str, ...]] = {
         "release's request_expires_at, which is the intent expiry valid_until, as that header, so no "
         "signature is issued after valid_until.",
     ),
+    "opaque_program": (
+        "The host checks the release's approved program bytes exactly: route.approved_program_hex equals "
+        "build_program_hex for the release input token, pool, direction and program fee (LOCAL_TESTED).",
+        "A call trace of that exact program at the pinned block shows that every CALL target is the entrypoint, "
+        "router, pool, WMON, MOE or a pinned observed fee recipient; every DELEGATECALL and STATICCALL frame is "
+        "made by an admitted caller other than the program frame, and a delegate or static call directly from "
+        "the program frame refuses; no frame creates a contract, self-destructs or moves native value; the whole "
+        "MOE output reaches the wallet; and only the pool and the pinned fee recipients gain WMON within their "
+        "bounds.",
+    ),
 }
 _LIMITS: Mapping[str, tuple[str, ...]] = {
     "input_output_assets": (
@@ -148,6 +159,14 @@ _LIMITS: Mapping[str, tuple[str, ...]] = {
         "request or its authorization signature expired (400 request_expired, or such a code on a 401); the "
         "capture saves that code. If the row was re-run alone, the record cites the earlier store by hash.",
     ),
+    "opaque_program": (
+        "No provider binds the program bytes: the Privy policy has no condition on program, and the entrypoint "
+        "forwards program opaquely. Only the host's exact program check (LOCAL_TESTED) does.",
+        "The trace is one block. Each DELEGATECALL target is a proxy implementation, observed at this block, "
+        "owner-upgradeable; each STATICCALL-only target is read-only. They are observed, not source-bound, and "
+        "can change after this block.",
+        "The two fee recipients and their bounds are pinned from the live trace of 2026-10-23, not from source.",
+    ),
 }
 
 # The texts of an expiry artifact whose refusal reason Privy did not state (EXPIRY_REASON_DECISION).
@@ -177,10 +196,14 @@ _EXPIRY_UNREADABLE_LIMITS: tuple[str, ...] = (
 
 
 # Complete evidence that covers only part of the control. Adopting it as the control's proof is a builder decision.
+OPAQUE_DECISION = "PROGRAM_BOUND_BY_HOST_AND_TRACE_ONLY"
+
+
 DECISION_REQUIRED: Mapping[str, str] = {
     "input_output_assets": "OUTPUT_TOKEN_NOT_PROVIDER_BOUND",
     "fees": "FEE_VALUES_NOT_PROVIDER_BOUND",
     "expiry_freshness": "PROVIDER_COVERS_SIGNING_CUTOFF_ONLY",
+    "opaque_program": OPAQUE_DECISION,
 }
 
 
@@ -882,9 +905,7 @@ def build_control_proofs(*, authored: Mapping[str, Any], privy_records: Mapping[
     attempt("fees", _fees)
     attempt("gas_action_capacity", lambda c, p, b: _gas_action_capacity(c, p, b, authored))
     attempt("expiry_freshness", lambda c, p, b: _expiry_freshness(p, authored), needs_chain=False)
-    support = _opaque_support(authored, by_id)
-    unproven["opaque_program"] = {"reason": "NO_PROVIDER_BOUND_ON_PROGRAM_BYTES",
-                                  "supporting_evidence_sha256": None if support is None else _sha256(support)}
+    attempt("opaque_program", _opaque_program)
     return {
         "schema": "edge-os.inapp-control-proofs/1",
         "proven": {name: proven[name] for name in CONTROLS if name in proven},
@@ -892,36 +913,106 @@ def build_control_proofs(*, authored: Mapping[str, Any], privy_records: Mapping[
                             "proof_sha256": proven[name]["proof_sha256"]} for name in CONTROLS if name in proven},
         "decision_required": {name: decision_required[name] for name in CONTROLS if name in decision_required},
         "unproven": {name: unproven[name] for name in CONTROLS if name in unproven},
-        "supporting": {} if support is None else {"opaque_program": {"artifact": support,
-                                                                     "sha256": _sha256(support)}},
+        "supporting": {},
     }
 
 
-def _opaque_support(authored: Mapping[str, Any], by_id: Mapping[str, Mapping[str, Any]]) -> dict[str, Any] | None:
-    """Evidence of what the one approved program does, for a builder decision. It is not a control proof."""
-    chain = _Chain(authored, by_id)
-    try:
-        base = chain.preconditions()
-        record = chain.record("chain.swap_trace")
-        if record.get("status") != "RESULT":
-            return None
-        findings = _trace_findings(record.get("result"), base["baseline_output"])
-    except _Unproven:
-        return None
-    allowed = {address.lower() for address in (chain_proof.ENTRYPOINT, chain_proof.ROUTER, chain_proof.POOL,
-                                                chain_proof.WMON, chain_proof.MOE)}
-    if not set(findings["touched_addresses"]) <= allowed:
-        return None
-    return _artifact("opaque_program", authored, chain, None, base,
-                     {"program_hex": chain_proof.PROGRAM_HEX, **findings}, state="UNPROVEN_SUPPORT",
-                     evidence_class=None,
-                     claims=("The approved program, simulated at the pinned block, calls only the entrypoint, "
-                             "router, pool, WMON and MOE, and pays the whole output to the wallet.",),
-                     limits=("Neither the Privy policy nor the entrypoint bounds the program bytes; only the "
-                             "host's exact program check does. This is not a provider bound.",
-                             "When findings.fee_transfers is not empty, the swap also pays WMON out of the input "
-                             "to those recipients, which are pinned from the live trace of 2026-10-23, not from "
-                             "source (the recipient control's FEE_RECIPIENTS_OBSERVED_NOT_SOURCE_BOUND)."))
+def _host_program_check(authored: Mapping[str, Any]) -> dict[str, Any]:
+    """The host-only exact program check. It is LOCAL_TESTED, never a provider bound."""
+    from edge_os_api.execution.direct_route_quote_client import build_program_hex
+    release = authored["release"]
+    route, quote = release["route"], release["quote"]
+    rebuilt = build_program_hex(input_token=route["input_asset"]["token_address"],
+                                pool_address=quote["pool_address"], direction=quote["direction"],
+                                fee_ppm=quote["program_fee_ppm"])
+    approved = route["approved_program_hex"]
+    if type(approved) is not str or approved.lower() != rebuilt.lower():
+        raise _Unproven("HOST_PROGRAM_MISMATCH")
+    return {"release_program_hex": approved, "rebuilt_program_hex": rebuilt, "match": True}
+
+
+def _opaque_frames(trace: Any) -> dict[str, Any]:
+    """Every frame's type and caller. Only CALL targets are admitted by name; child frames need an admitted caller."""
+    allowed = {chain_proof.ENTRYPOINT.lower(), chain_proof.ROUTER.lower(), chain_proof.POOL.lower(),
+               chain_proof.WMON.lower(), chain_proof.MOE.lower()}
+    fee = set(chain_proof.OBSERVED_FEE_RECIPIENTS_PPM)
+    call_targets: set[str] = set()
+    delegate_targets: set[str] = set()
+    static_targets: set[str] = set()
+    touched: dict[str, dict[str, Any]] = {}
+
+    def walk(frame: Any, admitted_parent: bool, context: str | None, parent_is_program_frame: bool) -> None:
+        if not isinstance(frame, Mapping):
+            raise _Unproven("TRACE_TRANSFERS_INVALID")
+        raw_to, raw_from = frame.get("to"), frame.get("from")
+        if (type(raw_to) is not str or _ADDRESS.fullmatch(raw_to) is None
+                or type(raw_from) is not str or _ADDRESS.fullmatch(raw_from) is None):
+            raise _Unproven("TRACE_TRANSFERS_INVALID")
+        frame_type, to, caller = frame.get("type"), raw_to.lower(), raw_from.lower()
+        if frame_type not in ("CALL", "STATICCALL", "DELEGATECALL"):
+            raise _Unproven("UNEXPECTED_FRAME_TYPE")
+        if frame.get("value", "0x0") not in ("0x0", None):
+            raise _Unproven("NATIVE_VALUE_MOVED")
+        if context is not None and caller != context:
+            raise _Unproven("FRAME_CALLER_MISMATCH")
+        if frame_type == "CALL":
+            if to not in allowed and to not in fee:
+                raise _Unproven("UNEXPECTED_CALL_TARGET")
+            call_targets.add(to)
+            admitted, child_context = True, to
+        elif frame_type == "STATICCALL":
+            if parent_is_program_frame:
+                raise _Unproven("PROGRAM_FRAME_CALL_REFUSED")
+            if not admitted_parent:
+                raise _Unproven("UNEXPECTED_FRAME_CALLER")
+            static_targets.add(to)
+            admitted, child_context = True, to
+        else:
+            if parent_is_program_frame:
+                raise _Unproven("PROGRAM_FRAME_CALL_REFUSED")
+            if not admitted_parent:
+                raise _Unproven("UNEXPECTED_FRAME_CALLER")
+            delegate_targets.add(to)
+            # A DELEGATECALL runs the target's code in the caller's context; children report the proxy as `from`.
+            admitted, child_context = True, context
+        entry = touched.setdefault(to, {"frame_types": set(), "callers": set()})
+        entry["frame_types"].add(frame_type)
+        entry["callers"].add(caller)
+        is_program_frame = context is None
+        for child in frame.get("calls") or []:
+            walk(child, admitted, child_context, is_program_frame)
+
+    walk(trace, False, None, False)
+    if not call_targets:
+        raise _Unproven("TRACE_TRANSFERS_INVALID")
+    listing = []
+    for address in sorted(touched):
+        types = sorted(touched[address]["frame_types"])
+        if "DELEGATECALL" in types:
+            label = "proxy implementation, observed at this block, owner-upgradeable"
+        elif types == ["STATICCALL"]:
+            label = "read-only"
+        else:
+            label = "called contract"
+        listing.append({"address": address, "frame_types": types,
+                        "callers": sorted(touched[address]["callers"]), "label": label})
+    return {"call_targets": sorted(call_targets), "delegate_targets": sorted(delegate_targets),
+            "static_targets": sorted(static_targets),
+            "frame_types": {"CALL": sorted(call_targets), "DELEGATECALL": sorted(delegate_targets),
+                            "STATICCALL": sorted(static_targets)},
+            "touched": listing, "touched_addresses": sorted(touched)}
+
+
+def _opaque_program(chain: "_Chain", privy: "_Privy", base: Mapping[str, Any]) -> dict[str, Any]:
+    """The host-exact program plus the provider-actual trace of that exact program. A builder decision."""
+    record = chain.record("chain.swap_trace")
+    if record.get("status") != "RESULT":
+        raise _Unproven("TRACE_UNAVAILABLE")
+    findings = _trace_findings(record.get("result"), base["baseline_output"])
+    findings.update(_opaque_frames(record.get("result")))
+    findings["program_hex"] = chain_proof.PROGRAM_HEX
+    findings["host_program_check"] = _host_program_check(chain.authored)
+    return findings
 
 
 # ---------------------------------------------------------------- command

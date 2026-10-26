@@ -2,13 +2,17 @@
 
 Task `CLOUD-CONTROL-PROOFS`, builder-approved 2026-10-23 ("collect the proofs"). Base
 `3a495cd355262b712afbc966ea49932e19dea575` (`integration/edge-os-mvp`). Status: **first live run done
-2026-10-23 (controller); two findings fixed in `CLOUD-CONTROL-PROOFS-2`; one Privy row to re-run.** See
-"Live run of 2026-10-23: findings and resolution". The cloud sessions used no network, provider, credential or
-key. This document grants no trade authority and changes no release hash.
+2026-10-23 (controller); two findings fixed in `CLOUD-CONTROL-PROOFS-2`; the expiry row re-run on 2026-10-26; the
+builder decisions and the v3 result recorded by `CONTROL-ADOPT-L1`.** See "Live run of 2026-10-23: findings and
+resolution". The cloud sessions used no network, provider, credential or key. This document grants no trade
+authority. `CONTROL-ADOPT-L1` changed the release controls and so the authored release hash; it registered no
+release.
 
-`check_release` admits an ACTUAL release only when all 12 controls are `ENFORCED`, carry evidence class
-`PROVIDER_ACTUAL` and have a proof hash. Controls 1-3 and 9 come from the recorded v3 result (controller,
-pending step 1 of `INAPP_TRADE_RELEASE.md`). This plan covers the other eight.
+`check_release` admits an ACTUAL release only when its exact hash is in the code-owned
+`APPROVED_ACTUAL_RELEASES` registry and every control is qualified: `ENFORCED` with `PROVIDER_ACTUAL` and a
+proof, or `DECISION_ACCEPTED` with `BUILDER_DECISION` and the exact `(control, reason, proof hash)` triple in
+`APPROVED_CONTROL_DECISIONS`. Controls 1-3 and 9 come from the recorded v3 result, now committed under
+`v3-live-result/`. This plan covers the other eight.
 
 ## Result in one table
 
@@ -21,13 +25,14 @@ pending step 1 of `INAPP_TRADE_RELEASE.md`). This plan covers the other eight.
 | 8 | `fees` | **Builder decision** (sum bound only; fee values and recipients have no provider bound) | Chain simulations |
 | 10 | `gas_action_capacity` | Provable for the native gas budget | Chain estimates and base fee |
 | 11 | `expiry_freshness` | **Builder decision**: `PRIVY_REFUSAL_REASON_NOT_READABLE` for the recorded 401 re-run (2026-10-26); `PROVIDER_COVERS_SIGNING_CUTOFF_ONLY` if a recognized expiry code is ever recorded | One Privy refusal, twice, with the same body + the positive control + the app's own expiry checks |
-| 12 | `opaque_program` | **Not provable this way** | See "Control 12" |
+| 12 | `opaque_program` | **Builder decision** (option A: host-exact program check + provider-actual trace) | See "Control 12" |
 
 "Provable" means: if the controller's live run returns the expected results, the proof builder emits an
 artifact and a hash in the `check_release` shape under `controls`. "Builder decision" means: with complete
-evidence the builder emits the artifact and its hash under `decision_required`, with a fixed reason, but no
-state; putting that hash into the release is a builder decision and a separate reviewed change. Any other
-result leaves the control in `unproven` with a fixed reason. The builder never writes a state for a control it
+evidence the builder emits the artifact and its hash under `decision_required`, with a fixed reason. The
+release carries `DECISION_ACCEPTED`, and only the code-owned `APPROVED_CONTROL_DECISIONS` registry admits the
+exact triple (`CONTROL-ADOPT-L1`). Any other result leaves the control in `unproven` with a fixed reason. The
+builder never writes `ENFORCED` or `PROVIDER_ACTUAL` for a decision, and never writes a state for a control it
 did not prove.
 
 ## Live run of 2026-10-23: findings and resolution
@@ -387,25 +392,31 @@ tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherw
   packet; that its body is in policy rests on R3 and the v3 row `raw.allow_swap_zero_value`. A code that is not
   an expiry code stops the run (`UNRECOGNIZED_REPLY`) and needs a reviewed profile update.
 
-### 12 `opaque_program`: not provable this way
+### 12 `opaque_program`: builder decision (option A)
 
 - Reason: no layer outside the host bounds the program bytes. R3 has no condition on `program`, and Privy
   `bytes` equality is undocumented (`UNKNOWN`). The entrypoint forwards `program` opaquely. Only the host's
-  exact program check (`LOCAL_TESTED`) stops a different program. A provider-actual proof of a bound that does
-  not exist would be fake, so the builder always reports `NO_PROVIDER_BOUND_ON_PROGRAM_BYTES` and no state.
-- Supporting evidence (not a proof): when the trace is valid, the builder writes
-  `opaque_program.support.json` (state `UNPROVEN_SUPPORT`, evidence class null) showing that the approved
-  program calls only the entrypoint, router, pool, WMON and MOE and pays the whole output to the wallet, and
-  reports its hash as `supporting_evidence_sha256`. If the live trace calls any other address (for example a
-  pair factory or fee contract, which the fee payouts of Finding 1 may involve), the support file is not
-  written. When the trace pays the pinned fee recipients, the support file lists them in
-  `findings.fee_transfers` and a limit line says they are observed, not sourced.
-- Smallest alternatives, each a builder decision:
-  1. Accept "host-exact program + provider-actual trace of that exact program" as control 12's proof. This
-     changes the rule and is a separate reviewed change to the release module or this builder.
-  2. Add a Privy R3 condition on `executeSwap.program` equality (a policy edit with the builder's owner key),
-     then add an allow row with the approved program and a deny row with one changed byte. Privy's support for
-     a `bytes` condition is unknown until that pair runs.
+  exact program check (`LOCAL_TESTED`) binds the program bytes.
+- Builder decision (2026-10-26, option A "industry standard"): accept the host-exact program check plus the
+  provider-actual trace of that exact program, with reason `PROGRAM_BOUND_BY_HOST_AND_TRACE_ONLY`. This is the
+  artifact, not a provider bound. The builder emits it under `decision_required`; the release records the
+  builder's acceptance.
+- Artifact `opaque_program.proof.json` (proofs-5):
+  - `findings.host_program_check`: `route.approved_program_hex` equals `build_program_hex` for the release input
+    token, pool, direction and fee.
+  - `findings.call_targets`: entrypoint, router, pool, WMON, MOE and fee collector `0xe1c8…3022`. Every other
+    `CALL` target refuses.
+  - `findings.delegate_targets`: pool implementation `0x8115…b4cf`, MOE implementation `0x4f44…6fbd`,
+    fee-collector implementation `0xd52c…6dbe` and helper implementation `0x2e14…de50`, each labelled a proxy
+    implementation, observed at this block, owner-upgradeable.
+  - `findings.static_targets`: includes the read-only helper `0x71f8…71c7`.
+  - `findings.touched`: all 11 touched addresses with frame types and callers.
+  - `findings.fee_transfers`: `0xe1c8…3022` 0.10 WMON and `0x681c…8998` 0.035 WMON, each within its bound.
+- Admission: a `DELEGATECALL` or `STATICCALL` frame needs an admitted caller; `CREATE`, `CREATE2`,
+  `SELFDESTRUCT` and non-zero native value refuse; token movement keeps the recipient rules.
+- Limit: the trace is one block; proxy implementations can change after it. Only the host check
+  (`LOCAL_TESTED`) binds the program bytes, and no provider does.
+- Alternative 2 (a Privy R3 `program` condition) is out of scope.
 
 ## What no operation can do
 
@@ -485,9 +496,11 @@ From the checkout root, with `<venv>` = `apps/api/.venv`. Each store is a new di
    and `unproven` with reasons. A Privy outcome counts only when its saved capture file hashes to the
    record's `capture_record_sha256`.
 
-5. Commit the two raw stores and the proofs directory, then, as a separate reviewed change, put the printed
-   `controls` entries (and any `decision_required` entry the builder accepts) into `release.authored.json`. That changes the release hash (pending steps 7-8 of
-   `INAPP_TRADE_RELEASE.md`). This task does not do it.
+5. Committed by `CONTROL-ADOPT-L1`: the two raw stores under
+   `docs/qualification/inapp-trade/control-proofs/stores/`, the seven proofs in `proofs-4/`, the control 12
+   artifact in `proofs-5/`, and the builder's accepted entries in `release.authored.json`. That changed the
+   authored release hash. Release registration (steps 7-8 of `INAPP_TRADE_RELEASE.md`) is still pending, and
+   both release registries stay empty.
 
 ## Proof artifact format
 
@@ -527,7 +540,9 @@ from the frozen inputs.
 | `scripts/privy_unfunded_proof/actual_runner.py` | Saves the identifier-shaped error code and type of an error reply; recognizes a 401 expiry code on the expiry row; the `rerun_of` admission. |
 | `scripts/privy_unfunded_proof/actual_profile.py` | `error_fields`, `safe_reply_field`, `is_expiry_refusal`. |
 | `scripts/privy_unfunded_proof/chain_proof.py` | Read-only chain client, frozen operations, the pinned observed fee recipients and the one-store chain command. |
-| `scripts/privy_unfunded_proof/control_proofs.py` | The pure proof builder and its command. |
+| `scripts/privy_unfunded_proof/control_proofs.py` | The pure proof builder and its command; it emits the control 12 decision artifact from the host check and the trace. |
+| `docs/qualification/inapp-trade/control-proofs/` | Committed raw stores and the proofs-4/proofs-5 artifacts. |
+| `docs/qualification/inapp-trade/v3-live-result/` | Committed 19/19 v3 result and its summary. |
 | `docs/qualification/privy-unfunded-proof/ACTUAL_PROOF_OPERATION_INPUTS.json` | New `control_proof_operations` section; the v3 content is unchanged. |
 | `tests/privy_unfunded_proof/test_control_proof_packet.py`, `test_chain_proof.py`, `test_control_proofs.py`, `test_control_proof_expiry_rerun.py`, `test_control_proof_expiry_decision.py`, `_control_support.py` | Tests with recorded fakes only. |
 
@@ -535,4 +550,6 @@ from the frozen inputs.
 
 ```sh
 PYTHONPATH=apps/api/src:. apps/api/.venv/bin/python -m pytest -q tests/privy_unfunded_proof
+cd apps/api && .venv/bin/python -m pytest -q tests/execution/test_operating_release.py \
+  tests/execution/test_inapp_trade_release.py
 ```

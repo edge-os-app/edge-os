@@ -20,8 +20,8 @@ from typing import Any
 
 from edge_os_api.execution.connected_identity import adopted_consent, resolve_agent, saved_release_identity
 from edge_os_api.execution.direct_route_quote_client import MAX_PRE_SIGN_TOLERANCE_BPS, PROGRAM_FEE_SCALE
-from edge_os_api.execution.operating_release import (BoundRelease, OperatingRelease, ReleaseRefused, release_sha256,
-                                                     validate_limits)
+from edge_os_api.execution.operating_release import (BoundRelease, OperatingRelease, ReleaseRefused,
+                                                     control_is_qualified, release_sha256, validate_limits)
 from edge_os_api.execution.original_transaction import wallet_address
 
 AUTHORED_SCHEMA = "edge-os.inapp-trade-authoring/1"
@@ -182,11 +182,10 @@ def complete_release(authored: Mapping[str, Any], fill: Mapping[str, Any]) -> Op
 
 
 def unqualified_controls(release: OperatingRelease) -> list[str]:
-    """Controls that keep `check_release` refusing: not ENFORCED with the release's evidence class and a proof."""
+    """Controls that keep `check_release` refusing; the same rule as admission."""
     content = release.content()
     return sorted(name for name, control in content["controls"].items()
-                  if control["state"] != "ENFORCED" or control["evidence_class"] != content["evidence_class"]
-                  or control["proof_sha256"] is None)
+                  if not control_is_qualified(name, control, content))
 
 
 def bind_release(release: OperatingRelease, binding_fill: Mapping[str, Any]) -> BoundRelease:
