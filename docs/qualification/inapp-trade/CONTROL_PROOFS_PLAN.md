@@ -20,7 +20,7 @@ pending step 1 of `INAPP_TRADE_RELEASE.md`). This plan covers the other eight.
 | 7 | `minimum_output` | Provable | Chain simulations |
 | 8 | `fees` | **Builder decision** (sum bound only; fee values and recipients have no provider bound) | Chain simulations |
 | 10 | `gas_action_capacity` | Provable for the native gas budget | Chain estimates and base fee |
-| 11 | `expiry_freshness` | **Builder decision** (provider signing cutoff only; the control is HOST-layer) | One Privy refusal |
+| 11 | `expiry_freshness` | **Builder decision**: `PRIVY_REFUSAL_REASON_NOT_READABLE` for the recorded 401 re-run (2026-10-26); `PROVIDER_COVERS_SIGNING_CUTOFF_ONLY` if a recognized expiry code is ever recorded | One Privy refusal, twice, with the same body + the positive control + the app's own expiry checks |
 | 12 | `opaque_program` | **Not provable this way** | See "Control 12" |
 
 "Provable" means: if the controller's live run returns the expected results, the proof builder emits an
@@ -120,6 +120,65 @@ Privy run. Privy signed nothing but the revoke-to-zero positive control.
   must decide from the status and the raw-body hash; the runner never saves message text.
 - The saved code is in the capture, which the proof cites by hash; the builder reads it there, not in the
   `expiry_freshness` findings.
+
+### Re-run of 2026-10-26 and the builder's decision
+
+- Result (controller's record): the builder ran the one-row re-run. Privy answered
+  `raw.ctl_deny_expired_request` with HTTP 401, `application/json`, 113 bytes, `raw_body_sha256`
+  `76a0174db6daea58159332a34aacd9d9274290b7372b4acb3f3c95066eb95140`, the same body hash as the 2026-10-23
+  capture. `error_code` and `error_type` are both null: the body has no code or type field the capture rule
+  accepts. The outcome is `UNKNOWN` / `UNRECOGNIZED_REPLY`, `matches_expectation` false, and
+  `rerun_of.positive_control_outcome_record_sha256` is
+  `581ee1c6cdde61213c2a3bf98072d4a46bb24385c39ea9e4e28bdf96635fc442`. Privy did not sign. The re-run slot is
+  spent; no further Privy call will be made. The positive control `ctl_allow_revoke_zero` (same packet, policy
+  id, policy hash and agent key) was `ALLOW` / `SIGNED_FIELDS_MATCH`.
+- Decision (builder, 2026-10-26, option A, "industry standard"): `expiry_freshness` is **decision_required**
+  with reason `PRIVY_REFUSAL_REASON_NOT_READABLE`, not unproven. The proof builder emits it only when all of the
+  following hold (`control_proofs._Privy.refused_unreadably`); anything else stays `PRIVY_RECORD_INVALID`, as
+  before:
+  1. Both expiry attempts, the 2026-10-23 one and its one re-run, are outcome records with exactly the runner's
+     error-reply keys, so neither holds `signed_bytes_sha256` or `signed_field_reasons`. Each is
+     `UNKNOWN` / `UNRECOGNIZED_REPLY`, not matched, and bound to the sealed packet, policy id, policy hash, reply
+     profile and request hash. Its `completed_at` is a UTC time at or after its capture's `captured_at`.
+  2. Each capture has exactly the runner's capture keys, hashes to its record's `capture_record_sha256`, and
+     shows integer status 401, `application/json`, valid metadata, null `error_code` and `error_type`, a time
+     after the request's frozen expiry, a positive byte count and a hex content-type hash. The two captures have the same
+     `raw_body_sha256`, byte count and content-type hash, and the re-run was captured after the earlier
+     attempt, after the earlier attempt completed. The re-run capture file hashes to the re-run record, as for
+     every other row.
+  3. The positive control is valid as before (`ALLOW` / `SIGNED_FIELDS_MATCH`, signed hash, capture hash). The
+     re-run's `rerun_of` cites the earlier expiry record and that positive control by hash.
+  4. The expired request differs from a fresh request only in its expiry. This is checked from the sealed packet
+     (`expiry_request_difference`). The row's only frozen header is `privy-request-expiry: 1792000000000`
+     (2026-10-14), below the packet's `auth_header_expiry` `1796083200000`. The transport sends a frozen expiry
+     header when a row has one and the packet's otherwise, with the same app id and the row's own idempotency
+     key (`actual_transport.py`). So the fresh twin is the same body with the future expiry. That twin was
+     never sent. Against the positive control, the only signed request, the transaction differs in `to`,
+     `data` and `gas_limit`, and the headers differ in `privy-request-expiry` and the idempotency key.
+- A signed reply, any 2xx, a status other than 401, a readable code or type, differing body hashes, a missing
+  or mismatched positive control, a missing earlier record or capture, and a re-run record that fails its
+  existing `rerun_of` checks all stay `PRIVY_RECORD_INVALID`. A recognized expiry code
+  (`UNKNOWN` / `EXPIRY_REFUSAL`) still takes the unchanged path to `PROVIDER_COVERS_SIGNING_CUTOFF_ONLY`.
+- The app refuses an expired request itself before any Privy signing call. The artifact lists these checks under
+  `findings.app_expiry_checks` (`control_proofs.APP_EXPIRY_CHECKS`), and a test checks that each cited line
+  still returns the refusal:
+
+  | Refusal | Where | Test that shows the refusal (and what else it shows) |
+  | --- | --- | --- |
+  | `REQUEST_EXPIRED` | `execution/privy_signer.py:214`, `PrivySignerClient._stop`, checked before the local authorization (line 153) and immediately before the send (line 183). The expiry is the release's `transaction.request_expires_at` (`core/provider_ports.py:735`). | `test_privy_signer.py`: `test_a_stop_before_authorization_sends_nothing`, `test_a_stop_that_arrives_during_authorization_sends_nothing`, `test_a_stop_before_authorization_never_reaches_the_key`, `test_a_stop_during_signing_sends_nothing_and_keeps_the_original_expiry`: no Privy call; an expiry during authorization comes after the local key signed |
+  | `INTENT_EXPIRED` | `execution/original_transaction.py:603`, `_prepare`, before the quote and any signer call | `test_approve_swap_revoke.py::test_existing_refusals_still_precede_the_steps`: no signer call |
+  | `INTENT_EXPIRED` | `execution/original_transaction.py:753`, `_recheck`, run at line 504 after `SIGN_REQUESTED` is saved and before `signer.rpc` (line 513), for the approve and swap steps (the revoke uses `_release_problem`) | none isolates this return |
+  | `MANDATE_EXPIRED` | `execution/original_transaction.py:755`, `_recheck`; the unit test reaches it through the recheck after the quote (line 648), the journey test through the one at line 504 before `signer.rpc` | `test_saved_attempt_signing.py::test_mandate_expiry_during_quote_preserves_exact_refusal` (no `signer.rpc`); `test_original_transaction_journey.py::test_an_authority_change_during_a_stage_save_allows_no_next_effect[SIGN_REQUESTED-expiry-expected0]` (needs Docker Postgres) |
+  | `EXECUTION_RELEASE_EXPIRED` | `execution/operating_release.py:223`, `check_release`, at or after `valid_until` or `transaction.request_expires_at`. The worker's signer factory admits the release (`core/provider_ports.py:730`, reaching `check_release` at `operating_release.py:299`) before it builds the Privy client (line 734). | `test_operating_release.py::test_signer_request_expiry_is_enforced_before_release_expiry`: the `request_expires_at` refusal only, not `valid_until` or the call order |
+  | `INTENT_EXPIRED` | `execution/service.py:656`, `ExecutionService._revalidate`, called from `_begin_submission` (line 442) before submission | `test_revalidation.py::test_expired_intent_denies_before_submission` (needs Docker Postgres): no attempt is created |
+
+- What the decision does not show:
+  - Privy did not say why it refused, so the refusal is not shown to be an expiry refusal. A 401 can also be
+    an authorization or credential failure. That the same key signed the positive control is the
+    controller's statement; the records do not name the key.
+  - The re-run sent the same request and idempotency key, so Privy may have answered with its stored reply.
+    The two replies may then be one refusal.
+  - No fresh twin of the expired request was sent.
 
 ## Why these kinds of evidence
 
@@ -298,7 +357,14 @@ tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherw
   signer and broadcast counts are host limits (`LOCAL_TESTED`); no provider bounds them. Refusal reasons:
   `GAS_LIMIT_BELOW_ESTIMATE_MARGIN`, `BASE_FEE_ABOVE_RELEASE_FEE`, `GAS_BUDGET_SHORT`.
 
-### 11 `expiry_freshness` (builder decision: `PROVIDER_COVERS_SIGNING_CUTOFF_ONLY`)
+### 11 `expiry_freshness` (builder decision: `PRIVY_REFUSAL_REASON_NOT_READABLE`, or `PROVIDER_COVERS_SIGNING_CUTOFF_ONLY`)
+
+- Recorded result: the 2026-10-23 attempt and its 2026-10-26 re-run were both refused with the same unreadable
+  401. The builder decided on 2026-10-26 to treat that as `decision_required` with reason
+  `PRIVY_REFUSAL_REASON_NOT_READABLE`. The gate, the evidence the artifact carries, the app's own expiry checks
+  and what this does not show are listed in "Re-run of 2026-10-26 and the builder's decision". The artifact has
+  its own claims and limits (`_EXPIRY_UNREADABLE_CLAIMS`, `_EXPIRY_UNREADABLE_LIMITS`). The rest of this section
+  describes the recognized-code path, which is unchanged.
 
 - Evidence: `raw.ctl_deny_expired_request` is refused with an expiry code (400 `request_expired`, or a 401
   whose code says the request or its authorization signature expired; see Finding 2); the authored release binds
@@ -405,7 +471,9 @@ From the checkout root, with `<venv>` = `apps/api/.venv`. Each store is a new di
    ```
 
    After the expiry re-run, add `--with-expiry-rerun` (the earlier store stays the `--privy-store`; the
-   builder reads `<privy store>.expiry-rerun`, which must hold only the expiry row).
+   builder reads `<privy store>.expiry-rerun`, which must hold only the expiry row). The builder also reads
+   the expiry capture from both stores. With the recorded unreadable 401 it then emits `expiry_freshness`
+   under `decision_required` with `PRIVY_REFUSAL_REASON_NOT_READABLE`.
 
    It writes `<control>.proof.json` (the exact canonical bytes whose SHA-256 is the proof hash) for proven and
    decision-required controls, `opaque_program.support.json` when available, and `controls.json`. It prints
@@ -457,7 +525,7 @@ from the frozen inputs.
 | `scripts/privy_unfunded_proof/chain_proof.py` | Read-only chain client, frozen operations, the pinned observed fee recipients and the one-store chain command. |
 | `scripts/privy_unfunded_proof/control_proofs.py` | The pure proof builder and its command. |
 | `docs/qualification/privy-unfunded-proof/ACTUAL_PROOF_OPERATION_INPUTS.json` | New `control_proof_operations` section; the v3 content is unchanged. |
-| `tests/privy_unfunded_proof/test_control_proof_packet.py`, `test_chain_proof.py`, `test_control_proofs.py`, `test_control_proof_expiry_rerun.py`, `_control_support.py` | Tests with recorded fakes only. |
+| `tests/privy_unfunded_proof/test_control_proof_packet.py`, `test_chain_proof.py`, `test_control_proofs.py`, `test_control_proof_expiry_rerun.py`, `test_control_proof_expiry_decision.py`, `_control_support.py` | Tests with recorded fakes only. |
 
 ## Checks
 
