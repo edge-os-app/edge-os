@@ -70,7 +70,9 @@ exit 0
 def run_refresh(tmp_path: Path, *, project: str = PROJECT, bridge_project: str | None = PROJECT,
                 env_project: str | None = None, worker_extra=(), postgres_extra=(),
                 missing=(), no_containers=False, docker_down=False,
-                worker_lines: str | None = None, postgres_lines: str | None = None):
+                worker_lines: str | None = None, postgres_lines: str | None = None,
+                bridge_module_ok: bool = True, bridge_sysctl_ok: bool = True,
+                bridge_sysctl_value: str = "1"):
     binaries = tmp_path / "bin"
     binaries.mkdir(exist_ok=True)
     log = tmp_path / "commands.log"
@@ -88,6 +90,15 @@ def run_refresh(tmp_path: Path, *, project: str = PROJECT, bridge_project: str |
                                 'echo "0 flow entries have been deleted." >&2\nexit 1\n')
     stub(binaries, "getent", 'echo "1.2.3.4 STREAM api.example"\n')
     stub(binaries, "flock", "exit 0\n")
+    stub(binaries, "modprobe", 'echo "modprobe $*" >> "$STUB_LOG"\n'
+                              + ("" if bridge_module_ok else
+                                 'echo "modprobe: FATAL: Module br_netfilter not found" >&2\n')
+                              + ("exit 0\n" if bridge_module_ok else "exit 1\n"))
+    stub(binaries, "sysctl", 'echo "sysctl $*" >> "$STUB_LOG"\n'
+                            f'case "$1" in\n'
+                            f'  -n) echo "{bridge_sysctl_value}"; exit 0 ;;\n'
+                            f'  -w) exit {0 if bridge_sysctl_ok else 1} ;;\n'
+                            f'esac\nexit 0\n')
     config = tmp_path / "egress.env"
     config.write_text(
         'EDGE_OS_EGRESS_HOSTS="api.example"\nEDGE_OS_EGRESS_RELAY_HOSTS=""\nEDGE_OS_EGRESS_PORTS="443"\n',
@@ -118,6 +129,45 @@ def test_refresh_finds_the_stack_from_the_fixed_bridge_label(tmp_path):
         assert f"-s {declared}" not in commands
     assert "-I DOCKER-USER 1 -j EDGE_OS_BYPASS_" in commands
     assert "-I INPUT 1 -j EDGE_OS_BYPASS_IN_" in commands
+
+
+def test_refresh_enables_bridge_filtering_and_drops_the_injected_addresses(tmp_path):
+    completed, commands = run_refresh(
+        tmp_path, worker_extra=[(PROJECT, "10.0.2.4")],
+        postgres_extra=[(PROJECT, "10.0.2.2")])
+    assert completed.returncode == 0, completed.stderr
+    assert "modprobe br_netfilter" in commands
+    assert "sysctl -w net.bridge.bridge-nf-call-iptables=1" in commands
+    assert "sysctl -w net.bridge.bridge-nf-call-ip6tables=1" in commands
+    for address in ("10.0.2.4", "10.0.2.2"):
+        assert f"-s {address} -j DROP" in commands
+        assert f"-d {address} -j DROP" in commands
+
+
+def test_refresh_fails_when_br_netfilter_cannot_load(tmp_path):
+    completed, commands = run_refresh(
+        tmp_path, bridge_module_ok=False,
+        worker_extra=[(PROJECT, "10.0.2.4")], postgres_extra=[(PROJECT, "10.0.2.2")])
+    assert completed.returncode != 0
+    assert "br_netfilter" in completed.stderr
+    assert "same-bridge" in completed.stderr
+    assert "-j DROP" not in commands
+
+
+def test_refresh_fails_when_a_bridge_sysctl_cannot_be_set(tmp_path):
+    completed, _ = run_refresh(
+        tmp_path, bridge_sysctl_ok=False,
+        worker_extra=[(PROJECT, "10.0.2.4")], postgres_extra=[(PROJECT, "10.0.2.2")])
+    assert completed.returncode != 0
+    assert "same-bridge" in completed.stderr
+
+
+def test_refresh_fails_when_a_bridge_sysctl_reads_back_disabled(tmp_path):
+    completed, _ = run_refresh(
+        tmp_path, bridge_sysctl_value="0",
+        worker_extra=[(PROJECT, "10.0.2.4")], postgres_extra=[(PROJECT, "10.0.2.2")])
+    assert completed.returncode != 0
+    assert "same-bridge" in completed.stderr
 
 
 def test_refresh_accepts_a_matching_explicit_project(tmp_path):
