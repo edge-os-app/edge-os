@@ -12,10 +12,16 @@
 #
 # Every rule matches the bridge name or its fixed subnet, so a bridge renamed by a later edit is still filtered.
 #
+# Coolify also attaches its own resource network (named the resource UUID) to every container. `apply` runs before
+# Docker, so only `refresh` can inspect the two containers. `refresh` finds execution-worker and postgres by their
+# Compose project and service labels and reads the addresses they hold on any network they do not declare. It drops
+# forwarding to and from exactly those addresses and keeps host-bound traffic replies-only. A missing container, an
+# unreachable daemon or an IPv6 address on the extra network fails the refresh; it never passes silently.
+#
 # Docker cannot restrict by host name; this script resolves the names on the host into an ipset. `apply` builds the
 # rules in the idle one of two chains and switches the jump to it, so a re-run never leaves an empty chain hooked.
-# `refresh` only adds addresses with a timeout; an empty answer never clears the set (it fails closed when entries
-# expire).
+# `refresh_allowlist` only adds addresses with a timeout; an empty answer never clears the set (it fails closed when
+# entries expire). `refresh` runs it and then enforces the Coolify resource-network addresses.
 #
 # The relay names resolve to this host's own public address, where Traefik's port 443 is published. Docker delivers a
 # worker connection there one of two ways, and both are admitted for TCP 443 to a relay address only:
@@ -46,6 +52,7 @@ TTL=900
 EGRESS_SUBNET=10.203.0.0/28
 HOSTDB_SUBNET=10.203.0.16/28
 PRIVATE_SUBNET=10.203.0.64/26
+PROJECT=${EDGE_OS_COMPOSE_PROJECT:-edge-os}
 LOCK=${EDGE_OS_EGRESS_LOCK:-/run/edge-os-egress-firewall.lock}
 
 resolvers() {
@@ -69,9 +76,84 @@ fill() {
   done
 }
 
-refresh() {
+refresh_allowlist() {
   fill "$SET" "$EDGE_OS_EGRESS_HOSTS"
   fill "$RELAY_SET" "$EDGE_OS_EGRESS_RELAY_HOSTS"
+}
+
+container_id() {
+  # container_id <compose service>: the running container id, or empty.
+  docker ps --quiet --no-trunc \
+    --filter "label=com.docker.compose.project=$PROJECT" \
+    --filter "label=com.docker.compose.service=$1" | head -n 1
+}
+
+declared_networks() {
+  # The Docker network names this project declares for each protected service.
+  case "$1" in
+    execution-worker) echo "$PROJECT"_private "$PROJECT"_egress ;;
+    postgres) echo "$PROJECT"_private "$PROJECT"_hostdb ;;
+    *) echo "unknown protected service: $1" >&2; return 1 ;;
+  esac
+}
+
+container_networks() {
+  docker inspect --type container \
+    --format '{{range $name, $endpoint := .NetworkSettings.Networks}}{{$name}} {{$endpoint.IPAddress}} {{$endpoint.GlobalIPv6Address}}{{"\n"}}{{end}}' \
+    "$1"
+}
+
+service_addresses() {
+  # The IPv4 addresses one protected service holds on networks it does not declare. Fails closed.
+  service=$1
+  id=$(container_id "$service")
+  [ -n "$id" ] || { echo "cannot find a running $service container in compose project $PROJECT" >&2; return 1; }
+  networks=$(container_networks "$id") || { echo "cannot inspect the $service container $id" >&2; return 1; }
+  if printf '%s\n' "$networks" | awk 'NF >= 3 && $3 != "" {found = 1} END {exit !found}'; then
+    echo "$service has an IPv6 address on an extra network; refusing to leave it unfiltered" >&2
+    return 1
+  fi
+  declared=$(declared_networks "$service") || return 1
+  printf '%s\n' "$networks" | while read -r name ip _; do
+    [ -n "$name" ] || continue
+    case " $declared " in *" $name "*) continue ;; esac
+    [ -n "$ip" ] || continue
+    echo "$ip"
+  done
+}
+
+injected_addresses() {
+  # Every address the worker and PostgreSQL hold outside their declared networks. Fails loudly on any gap.
+  docker info >/dev/null 2>&1 \
+    || { echo "docker daemon is unreachable; cannot enforce the Coolify resource network" >&2; return 1; }
+  if [ -z "$(docker ps --all --quiet --filter "label=com.docker.compose.project=$PROJECT")" ]; then
+    echo "no containers in compose project $PROJECT; nothing to enforce" >&2
+    return 0
+  fi
+  service_addresses execution-worker || return 1
+  service_addresses postgres || return 1
+}
+
+flush_flows() {
+  if ! out=$(conntrack -D -s "$1" 2>&1); then
+    case "$out" in *"0 flow entries"*) ;; *) echo "conntrack flush failed: $out" >&2; return 1 ;; esac
+  fi
+}
+
+enforce_injected_addresses() {
+  # Drop forwarding to and from each injected address; keep host-bound traffic to established replies only.
+  addresses=$(injected_addresses) || return 1
+  fwd=$(build DOCKER-USER EDGE_OS_BYPASS)
+  inbound=$(build INPUT EDGE_OS_BYPASS_IN)
+  for ip in $addresses; do
+    iptables -A "$fwd" -s "$ip" -j DROP
+    iptables -A "$fwd" -d "$ip" -j DROP
+    iptables -A "$inbound" -s "$ip" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    iptables -A "$inbound" -s "$ip" -j DROP
+    flush_flows "$ip" || return 1
+  done
+  hook DOCKER-USER EDGE_OS_BYPASS "$fwd"
+  hook INPUT EDGE_OS_BYPASS_IN "$inbound"
 }
 
 # Each rule set alternates between two chains, <name>_A and <name>_B. `build` returns the chain not hooked now, empty;
@@ -116,7 +198,7 @@ apply() {
   command -v conntrack >/dev/null 2>&1 || { echo "conntrack is required" >&2; exit 1; }
   servers=$(resolvers)
   [ -n "$servers" ] || { echo "no upstream resolver found" >&2; exit 1; }
-  refresh
+  refresh_allowlist
   iptables -nL DOCKER-USER >/dev/null 2>&1 || iptables -N DOCKER-USER
 
   # The worker's new TCP 443 connections to a relay address, marked before Docker's DNAT rewrites the destination.
@@ -167,6 +249,7 @@ flock 9
 
 case "${1:-}" in
   apply) apply ;;
-  refresh) refresh ;;
+  # `refresh` runs after Docker exists, so only it inspects containers. It never runs before Docker.
+  refresh) refresh_allowlist; enforce_injected_addresses ;;
   *) echo "usage: $0 apply|refresh" >&2; exit 2 ;;
 esac

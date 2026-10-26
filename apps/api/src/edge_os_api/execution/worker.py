@@ -963,6 +963,12 @@ def build_worker_ports(settings: Settings, factory: sessionmaker[Session] | None
     """
     if settings.execution_mode != "controlled":
         return None
+    if settings.env == "production":
+        # Coolify attaches its own resource network to every container. The compose network priority keeps it off
+        # the default route, and this check refuses controlled mode when that is not true on the running host.
+        from edge_os_api.execution import network_route
+
+        network_route.require_declared_egress_default()
     from edge_os_api.execution.released_execution_bootstrap import build_worker_execution_runtime
 
     built = build_worker_execution_runtime(role="worker", settings=settings, **bootstrap)

@@ -255,6 +255,8 @@ What `apply` installs:
 | `EDGE_OS_IN_A/B` (first rule of `INPUT`) | `! -i edgeos-egress ! -s 10.203.0.0/28 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-i edgeos-egress -s 10.203.0.0/28 -p tcp --dport 443 --match-set edgeos-egress-relay dst --dst-type LOCAL --ctstate NEW -j ACCEPT` (the relay through docker-proxy); `-j DROP` |
 | `EDGE_OS_IN_DB_A/B` (first rule of `INPUT`) | `! -i edgeos-hostdb ! -s 10.203.0.16/28 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
 | `EDGE_OS_IN_PRIVATE_A/B` (first rule of `INPUT`) | `! -i edgeos-private ! -s 10.203.0.64/26 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
+| `EDGE_OS_BYPASS_A/B` (first rule of `DOCKER-USER`, `refresh` only) | `-s <address>` and `-d <address>` `-j DROP` for each address the worker and PostgreSQL hold on a network they do not declare |
+| `EDGE_OS_BYPASS_IN_A/B` (first rule of `INPUT`, `refresh` only) | for each such address: `-s <address>` `ESTABLISHED,RELATED -j ACCEPT`; `-s <address>` `-j DROP` |
 
 - The upstream resolvers are every IPv4 `nameserver` in the file Docker uses (below), without loopback stubs.
   Docker's embedded resolver forwards from the container's namespace, so these queries cross `edgeos-egress`.
@@ -284,6 +286,17 @@ What `apply` installs:
   (SSH, Coolify, the loopback database). Replies to the loopback publish still arrive (`ESTABLISHED`).
 - The upstream resolvers follow Docker's rule: `/run/systemd/resolve/resolv.conf` only when `/etc/resolv.conf` names
   loopback stubs only; otherwise `/etc/resolv.conf`.
+- Coolify also attaches its own resource network (named the resource UUID, 10.0.x.0/24, NAT) to every container.
+  The Compose file gives the worker's `egress` and PostgreSQL's `hostdb` the highest `priority`, so that network is
+  never their default route. Because `apply` runs before Docker, only `refresh` inspects containers: it finds
+  `execution-worker` and `postgres` by the `com.docker.compose.project` and `com.docker.compose.service` labels,
+  reads the address each holds on every network it does not declare, and installs the `EDGE_OS_BYPASS` rules.
+  A missing container, an unreachable daemon or an IPv6 address on the extra network fails `refresh`; it never passes
+  silently. Idle no-op: before the first deploy the project has no containers, so `refresh` installs empty chains.
+- A residual window remains after a fresh deploy: the address rules exist once the next `refresh` runs (the timer
+  runs every five minutes, or `systemctl start edge-os-egress-refresh` runs it now). Until then the worker's
+  `egress` default route and the route guard below keep the internet off the extra network; the §4.1 checks are the
+  gate before controlled execution is enabled.
 
 Install (before the first deploy that puts the worker on `egress`):
 
@@ -295,6 +308,7 @@ cat > /etc/edge-os/egress.env <<'ENV'
 EDGE_OS_EGRESS_HOSTS="api.privy.io"
 EDGE_OS_EGRESS_RELAY_HOSTS="rpc-a.edgeos.fun rpc-b.edgeos.fun"
 EDGE_OS_EGRESS_PORTS="443"
+EDGE_OS_COMPOSE_PROJECT="edge-os"
 ENV
 # Root-owned copy: the unit never runs a script from the git checkout, which other steps switch between commits.
 install -m 0755 -o root -g root /opt/edge-os/deploy/host/edge-os-egress-firewall.sh /usr/local/sbin/edge-os-egress-firewall
@@ -337,9 +351,17 @@ Checks (record the output; repeat after a reboot):
 # §1a first; READY must be 1.
 ip link show edgeos-egress && ip link show edgeos-hostdb && ip link show edgeos-private  # the fixed bridge names
 iptables -S DOCKER-USER | head -3; iptables -S INPUT | head -3; ipset list edgeos-egress-allow | head
-# Coolify must not have attached another network (one with NAT would bypass these rules).
-docker inspect "$W" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'   # exactly <PROJECT>_private <PROJECT>_egress
-docker inspect "$PG" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'  # exactly <PROJECT>_private <PROJECT>_hostdb
+# Coolify may also attach its resource network. Prove that it carries no route instead of removing it.
+systemctl start edge-os-egress-refresh   # the timer does this every 5 minutes; run it now after a deploy
+docker inspect "$W" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'   # <PROJECT>_private <PROJECT>_egress, plus the resource network when attached
+docker inspect "$PG" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'  # <PROJECT>_private <PROJECT>_hostdb, plus the resource network when attached
+iptables -S EDGE_OS_BYPASS; iptables -S EDGE_OS_BYPASS_IN   # one DROP pair and one INPUT pair per injected address
+docker exec "$W" cat /proc/net/route    # one default route: gateway 0100CB0A (10.203.0.1)
+docker exec "$PG" cat /proc/net/route   # one default route: gateway 1100CB0A (10.203.0.17)
+INJECTED=$(docker inspect "$W" --format '{{range $n, $_ := .NetworkSettings.Networks}}{{$n}}{{"\n"}}{{end}}' \
+  | grep -v -x -e "${PROJECT}_private" -e "${PROJECT}_egress")
+[ -z "$INJECTED" ] || must_fail "$W" python -c "$PY_PROBE" \
+  "$(docker network inspect "$INJECTED" --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}')" 22
 running "$W" && docker exec "$W" python -c "
 import urllib.error as e, urllib.request as u
 try: print(u.urlopen('https://api.privy.io', timeout=5).status)
@@ -359,6 +381,14 @@ must_fail "$PG" bash -c "$SH_PROBE" 1.1.1.1 443            # the internet, from 
 
 Every `must_fail` line must print `pass: blocked`. Any `FAIL` line is a failed check: fix the cause, never record it
 as blocked. A refused connection (`FAIL: not proven blocked (1)`) means the packet reached its target.
+
+The route tables are the proof for the Coolify resource network: no default route may name anything except `0100CB0A`
+in the worker and `1100CB0A` in PostgreSQL. The worker refuses `EDGE_OS_EXECUTION_MODE=controlled` with
+`EXECUTION_BOOTSTRAP_ROUTE_UNEXPECTED` (or `EXECUTION_BOOTSTRAP_ROUTE_UNREADABLE`) otherwise, before it reads a key.
+Both healthchecks fail the same way on an extra default route. This depends on Coolify 4.4.7 preserving the Compose
+`priority`; if a deploy shows an extra default route, do not enable controlled execution and report it before a
+repair. The extra network is never removed by hand: a redeploy re-attaches it, and these checks must pass with no
+manual detach step.
 
 ### 4.2 Turning on controlled execution
 

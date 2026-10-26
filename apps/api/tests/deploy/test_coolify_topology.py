@@ -113,6 +113,31 @@ def test_only_the_execution_worker_joins_the_egress_network(compose):
     assert members == {"execution-worker"}
 
 
+def test_the_worker_default_route_stays_on_the_declared_egress_network(compose):
+    """Coolify appends its own resource network; only a higher gateway priority keeps it off the default route."""
+    networks = compose["services"]["execution-worker"]["networks"]
+    assert set(networks) == {"private", "egress"}
+    assert networks["egress"]["priority"] > max(
+        (attachment or {}).get("priority", 0) for name, attachment in networks.items() if name != "egress")
+    assert (networks["private"] or {}).get("priority", 0) < networks["egress"]["priority"]
+
+
+def test_postgres_default_route_stays_on_the_loopback_network(compose):
+    networks = compose["services"]["postgres"]["networks"]
+    assert set(networks) == {"private", "hostdb"}
+    assert networks["hostdb"]["priority"] > max(
+        (attachment or {}).get("priority", 0) for name, attachment in networks.items() if name != "hostdb")
+    assert (networks["private"] or {}).get("priority", 0) < networks["hostdb"]["priority"]
+
+
+def test_the_worker_and_postgres_healthchecks_assert_their_declared_default_route(compose):
+    worker = " ".join(compose["services"]["execution-worker"]["healthcheck"]["test"])
+    postgres = " ".join(compose["services"]["postgres"]["healthcheck"]["test"])
+    assert "edge_os_api.execution.network_route" in worker
+    assert "default_route_is_declared" in worker
+    assert "00000000" in postgres and "1100CB0A" in postgres
+
+
 def test_the_loopback_publish_network_has_no_route_out_and_only_postgres(compose):
     hostdb = compose["networks"]["hostdb"]
     assert hostdb["driver"] == "bridge"
