@@ -42,6 +42,12 @@ CACHE = {"mode": "explicit"}
 CACHED_FIELDS = ["model", "messages", "stream", "response_format", "provider", "reasoning", "max_tokens", "session_id",
                  "prompt_cache_options"]
 EXTRA = {"stream": False, "provider": ROUTING, "reasoning": {"effort": "low"}, "response_format": SCHEMA}
+OTHER_PLATFORM_IMAGE = "sha256:" + "0" * 64
+
+
+def pinned_images_for_host(host: str, image_id: str) -> tuple[tuple[str, str], tuple[str, str]]:
+    other = "linux/amd64" if host == "linux/arm64" else "linux/arm64"
+    return ((host, image_id), (other, OTHER_PLATFORM_IMAGE))
 
 
 def cached_record(**changes: Any) -> dict[str, Any]:
@@ -176,6 +182,21 @@ def test_the_application_binds_the_cache_value_and_refuses_it_changed_after_bind
     assert again.policy.required_extra["prompt_cache_options"] == CACHE and not again.unchanged()
 
 
+@pytest.mark.parametrize("system, machine, host", [
+    ("Darwin", "arm64", "linux/arm64"), ("Linux", "x86_64", "linux/amd64")])
+def test_the_shape_helper_pins_the_receipt_id_to_the_host_platform(
+        monkeypatch: pytest.MonkeyPatch, system: str, machine: str, host: str) -> None:
+    from edge_os_api.research import hermes_relay_composition as composition
+
+    monkeypatch.setattr(composition.platform, "system", lambda: system)
+    monkeypatch.setattr(composition.platform, "machine", lambda: machine)
+    receipt = "sha256:" + "7" * 64
+    given = definition(images=pinned_images_for_host(composition._host_platform(), receipt))
+    other = "linux/amd64" if host == "linux/arm64" else "linux/arm64"
+    assert composition.image_for_platform(given, host) == receipt
+    assert composition.image_for_platform(given, other) == OTHER_PLATFORM_IMAGE
+
+
 # --- Docker: the saved application through the genuine job and channel, one counted SYNTHETIC send ----------------
 
 
@@ -307,7 +328,8 @@ def shaped(image_id: str, env, migrated, pg, run_id: str, evidence_root: Path, r
     ca = b"SYNTHETIC CA bundle"
     changes = dict(getattr(request, "param", {}))
     record_changes = changes.pop("record_fields", {})
-    given = definition(images=(("linux/arm64", image_id), ("linux/amd64", image_id)), **changes, record_fields={
+    given = definition(images=pinned_images_for_host(composition._host_platform(), image_id), **changes,
+                       record_fields={
         "release_id": RELEASE_ID, "ca_bundle_sha256": hashlib.sha256(ca).hexdigest(),
         "prompt_cache_options": dict(CACHE), "allowed_fields": list(CACHED_FIELDS), **record_changes})
     monkeypatch.setattr(composition, "RELEASE_DEFINITIONS", (given,))

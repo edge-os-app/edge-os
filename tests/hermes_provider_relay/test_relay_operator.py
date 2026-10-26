@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 from collections.abc import Callable
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,8 @@ import pytest
 import relay_admission
 import relay_operator
 import relay_supervisor
+from edge_os_api.research import hermes_relay_composition as composition
+from edge_os_api.research.hermes_relay_composition import RelayApplicationDefinition
 from relay_operator import OperatorRefused, load_config, main, read_handoff
 from relay_supervisor import LABEL
 
@@ -370,9 +373,23 @@ def test_an_actual_configuration_for_a_record_outside_the_default_registry_is_re
     assert fake.calls == [] and not (tmp_path / "run").exists()
 
 
-def approve(monkeypatch: pytest.MonkeyPatch, value: dict[str, Any]) -> None:
-    """Test-only: patch the module registry, as the accepted ACTUAL tests do. No production caller can pass one."""
+def synthetic_definition(value: dict[str, Any]) -> RelayApplicationDefinition:
+    """A definition for a test-approved synthetic record, with a distinct id for each platform."""
+    host = composition._host_platform()
+    other = "linux/amd64" if host == "linux/arm64" else "linux/arm64"
+    return RelayApplicationDefinition(
+        record=Path(value["release_record"]["path"]).read_bytes(),
+        record_sha256=value["release_record"]["sha256"], price_snapshot=b"{}", response_format=None,
+        images=((host, IMAGE_ID), (other, OTHER_ID)), channel_root="synthetic-channel",
+        global_cap_usd=Decimal("2.00"), owner_cap_usd=Decimal("2.00"))
+
+
+def approve(monkeypatch: pytest.MonkeyPatch, value: dict[str, Any]) -> RelayApplicationDefinition:
+    """Test-only: patch the module registry and definitions, as the accepted ACTUAL tests do. No production caller can."""
+    definition = synthetic_definition(value)
     monkeypatch.setattr(relay_admission, "APPROVED_ACTUAL_RELEASES", frozenset({value["release_record"]["sha256"]}))
+    monkeypatch.setattr(composition, "RELEASE_DEFINITIONS", (definition,))
+    return definition
 
 
 @pytest.mark.parametrize("mismatch", ["record_bytes", "ca_named_hash", "ca_file_bytes", "settings_given"])
@@ -403,6 +420,54 @@ def test_an_approved_actual_record_starts_the_e1_topology_with_no_stand_in_and_h
     assert handoff.kind == "ACTUAL" and handoff.release == loaded.release.settings()
     assert handoff.release_record == (Path(value["release_record"]["path"]), value["release_record"]["sha256"])
     assert handoff.ca_bundle_sha256 == value["ca_bundle"]["sha256"]
+
+
+def test_an_actual_configuration_with_the_releases_pinned_id_for_this_host_is_accepted(
+        tmp_path: Path, key: Path, fake: FakeDocker, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    value = actual_config(tmp_path, key)
+    definition = approve(monkeypatch, value)
+    assert value["image"]["id"] == composition.image_for_platform(definition, composition._host_platform())
+    assert main([str(write(tmp_path, value))]) == 0
+    assert "kind ACTUAL" in capsys.readouterr().out
+    assert fake.calls == []
+
+
+def test_an_actual_configuration_with_the_other_platforms_pinned_id_is_refused(
+        tmp_path: Path, key: Path, fake: FakeDocker, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    value = actual_config(tmp_path, key)
+    definition = approve(monkeypatch, value)
+    host = composition._host_platform()
+    other = "linux/amd64" if host == "linux/arm64" else "linux/arm64"
+    value["image"]["id"] = composition.image_for_platform(definition, other)
+    assert main([str(write(tmp_path, value)), "start"]) == 2
+    error = capsys.readouterr().err
+    assert "pinned id" in error and "host platform" in error
+    assert fake.calls == [] and not (tmp_path / "run").exists()
+
+
+def test_an_actual_configuration_with_an_unlisted_image_id_is_refused(
+        tmp_path: Path, key: Path, fake: FakeDocker, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    value = actual_config(tmp_path, key)
+    approve(monkeypatch, value)
+    value["image"]["id"] = "sha256:" + "9" * 64
+    assert main([str(write(tmp_path, value)), "start"]) == 2
+    error = capsys.readouterr().err
+    assert "pinned id" in error and "host platform" in error
+    assert fake.calls == [] and not (tmp_path / "run").exists()
+
+
+def test_an_actual_configuration_without_a_code_owned_definition_is_refused(
+        tmp_path: Path, key: Path, fake: FakeDocker, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    value = actual_config(tmp_path, key)
+    approve(monkeypatch, value)
+    monkeypatch.setattr(composition, "RELEASE_DEFINITIONS", ())
+    assert main([str(write(tmp_path, value)), "start"]) == 2
+    assert "no code-owned release definition" in capsys.readouterr().err
+    assert fake.calls == [] and not (tmp_path / "run").exists()
 
 
 def test_stop_needs_neither_the_key_file_nor_a_still_approved_record(
