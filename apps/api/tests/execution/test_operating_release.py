@@ -378,6 +378,14 @@ def test_a_decision_proof_relabelled_on_an_enforced_control_refuses(monkeypatch)
         admit(monkeypatch, release)
 
 
+def test_a_registered_decision_proof_on_a_different_enforced_control_refuses(monkeypatch):
+    source = actual_definition()
+    source["controls"]["gas_action_capacity"]["proof_sha256"] = DECISION[2]
+    release = OperatingRelease(source)
+    with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
+        admit(monkeypatch, release)
+
+
 def test_a_copied_decision_triple_in_an_unregistered_release_refuses(monkeypatch):
     release = OperatingRelease(decision_definition())
     with pytest.raises(ReleaseRefused, match="ACTUAL_EXECUTION_RELEASE_NOT_APPROVED"):

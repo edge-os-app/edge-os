@@ -383,9 +383,9 @@ def _validate_controls(controls: Any, kind: Any) -> None:
                      and (control["proof_sha256"] is None or _hash(control["proof_sha256"])))
 
 
-def _registered_decision_proof(name: str, proof: str) -> bool:
-    """A registered decision artifact can never pass as an ENFORCED provider proof for the same control."""
-    return any(entry[0] == name and entry[2] == proof for entry in APPROVED_CONTROL_DECISIONS)
+def _registered_decision_proof(proof: str) -> bool:
+    """A registered decision artifact can never pass as an ENFORCED provider proof under any control."""
+    return any(entry[2] == proof for entry in APPROVED_CONTROL_DECISIONS)
 
 
 def control_is_qualified(name: str, control: Mapping[str, Any], release: Mapping[str, Any]) -> bool:
@@ -401,4 +401,4 @@ def control_is_qualified(name: str, control: Mapping[str, Any], release: Mapping
                 and type(reason) is str and _hash(proof)
                 and (name, reason, proof) in APPROVED_CONTROL_DECISIONS)
     return (control.get("state") == "ENFORCED" and control.get("evidence_class") == release.get("evidence_class")
-            and _hash(proof) and not _registered_decision_proof(name, proof))
+            and _hash(proof) and not _registered_decision_proof(proof))
