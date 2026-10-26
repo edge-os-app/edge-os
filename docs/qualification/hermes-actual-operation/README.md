@@ -102,7 +102,11 @@ Focused, no Docker: `tests/hermes_provider_relay/test_relay_operator.py -k "not 
 
 The approved application release pins exactly two Docker image ids, keyed by platform. The Mac (arm64) id is
 `sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0` (tag `edge-os-p05-hermes:l1live7c0d2edb1`).
-The VPS (amd64) id is `sha256:224ede5ab50f69f4a73bcce46a054140b20e2337ead5684147df062879b2f0e1`. Binding reads the host
+The VPS (amd64) id is `sha256:42541c05f27ee56bfe02ce9d7223728c0432a040abef6515fff67a7f992f9aff` (rebuilt on
+2026-10-26; the 2026-10-23 id was lost to image cleanup and the build is not byte-reproducible, so it is not
+recoverable). The image stays held on the host by the stopped container `edge-os-hermes-image-hold`, with the `docker
+save` backup `/var/backups/edge-os/images/hermes-relay-job-42541c05.tar` (recorded sha256 starting `08a004bc`). A held image
+cannot be removed by a later cleanup; any new build needs a new reviewed pin. Binding reads the host
 platform from code and selects that platform's id. An unknown platform, a third platform, or any id outside the pair is
 refused with a named reason. The image id never comes from an environment value or a file; the operator configuration
 only names it, and the application refuses a handoff with any id other than the host's pinned id. The operator refuses

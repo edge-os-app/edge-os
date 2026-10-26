@@ -39,7 +39,8 @@ PRICES_SHA256 = "e53259b2605d7a54c7597e04b75dc5b57e8b6ff7484c90be6a788b3388d54fe
 FORMAT_SHA256 = "cdffe6fd07f14b796cae3f97268148f6ad8893100b8080e1bc652c7d3e9cbc60"
 CA_SHA256 = "7cef540c6af3bf0a3c7d0070bd3fd7aae34f8aa805b408d1c27a01c8aeb305df"
 IMAGE = "sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0"  # built on the arm64 Mac
-AMD64_IMAGE = "sha256:224ede5ab50f69f4a73bcce46a054140b20e2337ead5684147df062879b2f0e1"  # built on the amd64 VPS
+AMD64_IMAGE = "sha256:42541c05f27ee56bfe02ce9d7223728c0432a040abef6515fff67a7f992f9aff"  # rebuilt on the amd64 VPS
+LOST_AMD64_IMAGE = "sha256:224ede5ab50f69f4a73bcce46a054140b20e2337ead5684147df062879b2f0e1"  # 2026-10-23; lost to image cleanup
 MODEL = "openai/gpt-6.1-sol"
 ROUTING = {"only": ["openai"], "allow_fallbacks": False, "require_parameters": True, "data_collection": "deny",
            "max_price": {"prompt": 2, "completion": 10}}
@@ -138,6 +139,15 @@ def test_the_adopted_release_binds_its_exact_request_shape_price_caps_and_image_
     assert (release.limits.global_cap_usd, release.limits.owner_cap_usd) == (Decimal("2.00"), Decimal("2.00"))
     assert (release.image, release.channel_root) == (IMAGE, "edge-os-research")
     assert release.config.live_release is not None and release.config.live_release.recorded_in == APPROVAL_PATH
+
+
+def test_the_vps_platform_binds_the_new_amd64_id_and_the_mac_keeps_the_arm64_id(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(composition, "_host_platform", lambda: "linux/amd64")
+    image = bind_release(adopted()).image
+    assert image == AMD64_IMAGE and image != LOST_AMD64_IMAGE
+    monkeypatch.setattr(composition, "_host_platform", lambda: "linux/arm64")
+    assert bind_release(adopted()).image == IMAGE  # the arm64 id and its approval entry stay unchanged
 
 
 def test_one_request_reserves_at_most_the_adopted_worst_case_of_usd_0_17216() -> None:

@@ -4,6 +4,7 @@ like Docker does, and plays the containers' readiness files. Synthetic key, reco
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import itertools
 import json
@@ -30,6 +31,10 @@ from conftest import SENTINEL
 
 IMAGE_ID = "sha256:" + "1" * 64
 OTHER_ID = "sha256:" + "2" * 64
+LOST_AMD64_IMAGE = "sha256:224ede5ab50f69f4a73bcce46a054140b20e2337ead5684147df062879b2f0e1"  # 2026-10-23; lost
+REAL_RECORD = (Path(__file__).resolve().parents[2] / "docs" / "qualification" / "hermes-actual-operation" /
+               "release" / "hermes_first_call_record.json")
+REAL_RECORD_SHA256 = "3fa94dd73e53a72ca8af6cda9c8633770de89c262fa5303756c1965bb92fed8f"
 SETTINGS = {"release_id": "local-relay-1", "route_id": "authored-local-1", "kind": "AUTHORED",
             "model": "fixture-model/1", "max_output_tokens": 4096, "max_request_bytes": 12_000, "max_reply_bytes": 65_536}
 SCHEMA = {"type": "json_schema", "json_schema": {"name": "answer", "strict": True, "schema": {"type": "object"}}}
@@ -445,6 +450,22 @@ def test_an_actual_configuration_with_the_other_platforms_pinned_id_is_refused(
     error = capsys.readouterr().err
     assert "pinned id" in error and "host platform" in error
     assert fake.calls == [] and not (tmp_path / "run").exists()
+
+
+def test_an_actual_configuration_with_the_lost_amd64_id_is_refused_for_the_vps(
+        tmp_path: Path, key: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ca = tmp_path / "ca-bundle.pem"
+    ca.write_text("synthetic CA bundle")
+    actual = dataclasses.replace(relay_admission.load_actual_release(REAL_RECORD.read_bytes(), REAL_RECORD_SHA256),
+                                 ca_bundle_sha256=hashlib.sha256(ca.read_bytes()).hexdigest())
+    monkeypatch.setattr(relay_operator, "load_actual_release", lambda _raw, _sha: actual)
+    monkeypatch.setattr(relay_operator, "_host_platform", lambda: "linux/amd64")
+    value = config(tmp_path, key, kind="ACTUAL", release=None,
+                   release_record={"path": str(REAL_RECORD), "sha256": REAL_RECORD_SHA256},
+                   ca_bundle={"path": str(ca), "sha256": actual.ca_bundle_sha256},
+                   image={"reference": "edge-os-hermes-relay-job:lost", "id": LOST_AMD64_IMAGE})
+    with pytest.raises(OperatorRefused, match="pinned id for this host platform"):
+        load_config(json.dumps(value).encode())
 
 
 def test_an_actual_configuration_with_an_unlisted_image_id_is_refused(
