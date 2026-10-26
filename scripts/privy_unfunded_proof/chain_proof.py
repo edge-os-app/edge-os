@@ -28,6 +28,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from eth_utils import keccak
@@ -49,6 +50,15 @@ ZERO_ADDRESS = "0x" + "0" * 40
 PROGRAM_HEX = "0x023bd359c1119da7da1d913d1c4d2b7c461115433a01ffff0097199b34564911936bc850ac45ede785892b5aad00003e80"
 PROGRAM_FEE_PPM = 16000
 INPUT_RAW = 10 * 10**18
+# The WMON fee payouts of the swap and each one's bound in ppm of the input. Source: the controller's live
+# `chain.swap_trace` of 2026-10-23 (Monad mainnet, QuickNode), whose net WMON movements were wallet -10e18,
+# pool +9.865e18 and these two addresses +0.1e18 (1.00%) and +0.035e18 (0.35%). They are observed, not
+# justified: neither address nor rate is in this repository's sources (no nad.fun pair source or ABI is checked
+# in), so a trace that pays them leaves `recipient` decision_required. Every other WMON or MOE gain is refused.
+OBSERVED_FEE_RECIPIENTS_PPM: Mapping[str, int] = MappingProxyType({
+    "0xe1c8b73343f5a83ebe165be90470d84b00e33022": 10_000,
+    "0x681c3f796ae388026634c26025504d7c45248998": 3_500,
+})
 SWAP_GAS_LIMIT = 700_000
 
 EXECUTE_SWAP_SELECTOR = "0xce1e7030"

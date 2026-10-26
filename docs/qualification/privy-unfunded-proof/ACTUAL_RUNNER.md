@@ -45,7 +45,7 @@ The synthetic driver keeps its boundary. `run_specimen` still accepts only `SYNT
 
 ## Capture and classification
 
-The runner writes `<id>.capture.json` before any JSON parse. The capture holds only fixed metadata: status, media type, content-type SHA-256, byte count, raw-body SHA-256, metadata validity and the capture time. It never holds reply text, credentials, the authorization signature or signed bytes.
+The runner writes `<id>.capture.json` before it classifies the reply. The capture holds fixed metadata: status, media type, content-type SHA-256, byte count, raw-body SHA-256, metadata validity and the capture time. For an error reply (status 400 or above, bounded JSON) it also holds `error_code` and `error_type`, each only when it is letter words joined by underscores (at most 64 characters), else null; a reply below 400 is never parsed for the capture. It never holds reply text, headers, credentials, the authorization signature or signed bytes. On the control-proof expiry row, a 401 whose code says the request or its authorization signature expired is `UNKNOWN` / `EXPIRY_REFUSAL`; any other 401 is `UNRECOGNIZED_REPLY`. See `docs/qualification/inapp-trade/CONTROL_PROOFS_PLAN.md` (Finding 2) for the rule and the one-row expiry re-run.
 
 The transport sends only `eth_signTransaction`, only to the exact approved wallet RPC URL, and uses a frozen `privy-request-expiry` header when the specimen carries one. A refusal before dispatch is `OPERATION_NOT_APPROVED`, `DESTINATION_NOT_APPROVED` or `TRANSPORT_REFUSED`. Every transport failure is raised outside its handler, so no provider or authorizer text remains in `__cause__` or `__context__`.
 

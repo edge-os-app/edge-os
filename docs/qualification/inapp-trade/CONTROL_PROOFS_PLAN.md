@@ -1,9 +1,10 @@
 # Provider-actual proofs for in-app trade controls 4-8 and 10-12
 
 Task `CLOUD-CONTROL-PROOFS`, builder-approved 2026-10-23 ("collect the proofs"). Base
-`3a495cd355262b712afbc966ea49932e19dea575` (`integration/edge-os-mvp`). Status: **collection built, not run.**
-Nothing here was run against Privy or Monad. No network, provider, credential or key was used. This document
-grants no trade authority and changes no release hash.
+`3a495cd355262b712afbc966ea49932e19dea575` (`integration/edge-os-mvp`). Status: **first live run done
+2026-10-23 (controller); two findings fixed in `CLOUD-CONTROL-PROOFS-2`; one Privy row to re-run.** See
+"Live run of 2026-10-23: findings and resolution". The cloud sessions used no network, provider, credential or
+key. This document grants no trade authority and changes no release hash.
 
 `check_release` admits an ACTUAL release only when all 12 controls are `ENFORCED`, carry evidence class
 `PROVIDER_ACTUAL` and have a proof hash. Controls 1-3 and 9 come from the recorded v3 result (controller,
@@ -15,7 +16,7 @@ pending step 1 of `INAPP_TRADE_RELEASE.md`). This plan covers the other eight.
 | --- | --- | --- | --- |
 | 4 | `input_output_assets` | **Builder decision** (input side only; the output token has no provider bound) | Chain simulations + one Privy refusal |
 | 5 | `raw_input` | Provable | Chain simulations |
-| 6 | `recipient` | Provable if the node supports `debug_traceCall` | Chain trace + two Privy refusals |
+| 6 | `recipient` | **Builder decision** when the trace pays the pinned fee recipients (the live trace does): `FEE_RECIPIENTS_OBSERVED_NOT_SOURCE_BOUND`; provable when it pays only the pool | Chain trace + two Privy refusals |
 | 7 | `minimum_output` | Provable | Chain simulations |
 | 8 | `fees` | **Builder decision** (sum bound only; fee values and recipients have no provider bound) | Chain simulations |
 | 10 | `gas_action_capacity` | Provable for the native gas budget | Chain estimates and base fee |
@@ -28,6 +29,97 @@ evidence the builder emits the artifact and its hash under `decision_required`, 
 state; putting that hash into the release is a builder decision and a separate reviewed change. Any other
 result leaves the control in `unproven` with a fixed reason. The builder never writes a state for a control it
 did not prove.
+
+## Live run of 2026-10-23: findings and resolution
+
+The controller ran both stores on 2026-10-23: real Monad mainnet reads through QuickNode, and a sign-only
+Privy run. Privy signed nothing but the revoke-to-zero positive control.
+
+### Finding 1: the release swap pays two fee recipients, and the trace check refused them
+
+- Observed: all 27 chain operations matched their expectation. The builder then returned `recipient` =
+  `unproven`, `TRACE_TRANSFERS_INVALID`. The net ERC20 movements of `chain.swap_trace` (the release swap of
+  10 WMON at minimum output `595679419908705379337` MOE) were:
+  - MOE: wallet `+595679419908705379337`, pool `-595679419908705379337`.
+  - WMON: wallet `-10000000000000000000`, pool `+9865000000000000000`,
+    `0xe1c8b73343f5a83ebe165be90470d84b00e33022` `+100000000000000000` (1.00% of the input),
+    `0x681c3f796ae388026634c26025504d7c45248998` `+35000000000000000` (0.35% of the input).
+- Cause: the trace check allowed only the pool to gain WMON, so the swap's own fee payouts failed it.
+- What the repository can establish: nothing about these two addresses. Neither address, nor a 1.00% or
+  0.35% rate, appears anywhere in the repository; no nad.fun pair source or ABI is checked in (the pool is
+  described only as a "nad.fun pair" in `docs/qualification/kuru-flow/DIRECT_ROUTE.md`). So the recipients
+  cannot be justified from source, only from the observed trace.
+- How 1.00% + 0.35% relates to `PROGRAM_FEE_PPM = 16000`: the two payouts total 13500 ppm of the input, below
+  the 16000 ppm program fee field. `DIRECT_ROUTE.md` records that 16000 ppm is the lowest value that passed
+  the builder's fee search (0 to 10000 ppm reverted with `NadFunPair: K`); the search step is in the
+  builder-only `fee_search.py`. One reading fits: the pair pays 1.35% of the input out and then charges an
+  LP fee `f` on the 98.65% it keeps; the program fee covers both when `(1 - 0.0135)(1 - f) >= 1 - 0.016`,
+  that is `f <= 0.2534%` (a 0.25% LP fee gives an effective 15966 ppm, which a coarse search would round up
+  to 16000). This is arithmetic only. Without the pair source or the reserves at the pinned block (they are in
+  the controller's chain store, not here), the LP fee, which contract makes the payouts, and whether the rates
+  are fixed or configurable cannot be established from the repository.
+- Resolution (`chain_proof.OBSERVED_FEE_RECIPIENTS_PPM`, `control_proofs._trace_findings`): the two
+  recipients are pinned with bounds of 10000 and 3500 ppm of the input (exactly the observed 0.1 and 0.035
+  WMON), with the live trace named as their source. The check still requires the wallet to gain exactly the
+  output in MOE and nobody else to gain MOE, and the wallet to pay exactly the input in WMON. A WMON gain is
+  accepted only for the pool or a pinned recipient within its bound (net per address, so split payouts sum).
+  Any other WMON or MOE gain, or a pinned recipient above its bound, stays `TRACE_TRANSFERS_INVALID`. Every log
+  must be readable (a list of mappings whose topics are 32-byte hex words; the Transfer topic is matched
+  without regard to case); a `logs` or `calls` field that is not a list, or a log the check cannot read, refuses
+  the trace instead of being skipped, so it cannot hide a transfer. Because
+  the pins are observed, not justified, a trace that pays them makes `recipient` **decision_required**
+  (`FEE_RECIPIENTS_OBSERVED_NOT_SOURCE_BOUND`, option A the builder accepted for decision-required
+  controls). The artifact lists each observed recipient, amount, ppm bound and raw bound in
+  `findings.fee_transfers`, and the pool's WMON gain in `findings.wmon_received_by_pool_raw`. A trace that
+  pays only the pool stays `ENFORCED`.
+- Smallest way to make it provable: check in the nad.fun pair source or verified ABI that names the fee
+  recipients and rates (or a read of them from the pair or factory at the pinned block, added as a frozen
+  chain operation), then cite that source next to the pins.
+- No chain re-run is needed: rebuild the proofs from the saved chain store (step 4).
+
+### Finding 2: the expiry row got a 401 the runner did not know, and its code was not saved
+
+- Observed: `ctl_allow_revoke_zero` (`ALLOW`, `SIGNED_FIELDS_MATCH`) and the three deny rows (`POLICY_DENY`,
+  `PRIVY_POLICY_VIOLATION`) matched. `ctl_deny_expired_request` got HTTP 401 with a 113-byte
+  `application/json` body: `UNKNOWN` / `UNRECOGNIZED_REPLY`, and the run stopped as designed. The capture kept
+  only the body hash, so the Privy error code is unknown. Privy did not sign.
+- Resolution, saved fields (`actual_runner._capture_error_fields`, `actual_profile.error_fields`): for an
+  error reply (status 400 or above, JSON, within the 16384-byte bound) the capture now also saves
+  `error_code` (read as `reply_code` reads it: `code`, the string `error`, or `error.code`) and `error_type`
+  (`type` or `error.type`), next to `status` and `raw_body_sha256`. Each is saved only when it is letter words
+  joined by underscores (at most 64 characters, 24 per word); anything else (free text, digits, hex, base64)
+  is saved as null. Headers, messages, keys and signed bytes are never saved, and a reply below 400 is never
+  parsed for the capture.
+- Resolution, recognition (`actual_profile.is_expiry_refusal`): on the expiry row only, a 401 whose saved
+  code has an expiry word (`expired`, `expire`, `expires`, `expiry`, `expiration`) and a subject word
+  (`request`, `signature`, `signatures`, `authorization`), and no word naming another credential (`token`,
+  `jwt`, `session`, `key`, `secret`, `access`, ...) or a malformed or out-of-range expiry (`invalid`,
+  `missing`, `too`, `future`, ...), is `UNKNOWN` / `EXPIRY_REFUSAL`, after the positive-control check. A body
+  with `data` or `method` is never one. Every other 401 stays `UNKNOWN` / `UNRECOGNIZED_REPLY` and stops the
+  run. The documented 400 `request_expired` still matches. A 401 expiry code on any other row stays
+  `UNRECOGNIZED_REPLY`.
+- Resolution, one-row re-run (`actual_run --rerun-expiry-from`): the expiry row is sent alone, once, into the
+  new store `<earlier store>.expiry-rerun`. That path is fixed by the earlier store and `--store` is refused, so
+  each earlier store has exactly one re-run: a second attempt finds the store or its claimed row and is refused,
+  and a re-run that signed or lost its reply cannot be replaced by a later clean one. The earlier store is only
+  read and must show: the expiry row ended `UNKNOWN` /
+  `UNRECOGNIZED_REPLY` on a captured 401 (an error status, so nothing was signed); every other row matched;
+  no unresolved or breached attempt; and the qualified positive-control `ALLOW`, which the re-run reuses. The
+  new intent and outcome carry `rerun_of`: the SHA-256 of the earlier expiry outcome record and of the
+  earlier positive-control outcome record. No other row can be re-run this way. The proof builder reads the
+  re-run with `--with-expiry-rerun` (from `<privy store>.expiry-rerun`); it refuses a re-run store holding any
+  other row, an earlier expiry capture that no longer hashes to its record or does not show 401, and accepts the
+  re-run record only when both cited hashes match the earlier store. The artifact's evidence carries `rerun_of`.
+- The packet, its hash and the row's request bytes are unchanged, so the re-run sends the same idempotency key
+  (`control-proofs-1:raw.ctl_deny_expired_request`). Privy may answer with its stored reply for that key,
+  which is the same 401 whose code is now saved. If the saved code is not an expiry code (for example an
+  authorization-signature or idempotency error), the row stays `UNRECOGNIZED_REPLY`, the run stops, and the
+  saved `error_code` tells the builder why; `expiry_freshness` then stays unproven until a reviewed change.
+  If Privy's body carries only a human-readable message (for example `{"error": "Request expired"}`), no code is
+  saved (`error_code` null, by the code/type-only rule), the row stays `UNRECOGNIZED_REPLY`, and the builder
+  must decide from the status and the raw-body hash; the runner never saves message text.
+- The saved code is in the capture, which the proof cites by hash; the builder reads it there, not in the
+  `expiry_freshness` findings.
 
 ## Why these kinds of evidence
 
@@ -156,8 +248,11 @@ tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherw
 ### 6 `recipient`
 
 - Evidence: `chain.swap_trace` (net MOE gain only at the wallet and equal to `R`; net WMON loss of the wallet
-  exactly `10e18`; only the pool gains WMON; only WMON and MOE move); `raw.ctl_deny_swap_receiver_wallet` and
+  exactly `10e18`; only the pool and the two pinned fee recipients gain WMON, each recipient at most 1.00% or
+  0.35% of the input; only WMON and MOE move); `raw.ctl_deny_swap_receiver_wallet` and
   `raw.ctl_deny_moe_transfer_sink` are `POLICY_DENY`.
+- Builder decision when the trace pays the pinned fee recipients (`FEE_RECIPIENTS_OBSERVED_NOT_SOURCE_BOUND`):
+  the recipients and bounds come from the live trace of 2026-10-23, not from source. See Finding 1.
 - Why: the deployed code pays the whole output to `msg.sender`, the wallet. Privy lets the agent sign neither
   the receiver variant (even to itself) nor a later move of the output.
 - Not proven: if the node does not support `debug_traceCall` with `stateOverrides` and `withLog`, the control
@@ -205,7 +300,8 @@ tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherw
 
 ### 11 `expiry_freshness` (builder decision: `PROVIDER_COVERS_SIGNING_CUTOFF_ONLY`)
 
-- Evidence: `raw.ctl_deny_expired_request` is refused with `request_expired`; the authored release binds
+- Evidence: `raw.ctl_deny_expired_request` is refused with an expiry code (400 `request_expired`, or a 401
+  whose code says the request or its authorization signature expired; see Finding 2); the authored release binds
   `transaction.request_expires_at`, `valid_until` and `route.freshness.intent_expires_at` to the same
   `valid_until` fill.
 - Why: the worker sends the release's `request_expires_at` as `privy-request-expiry`
@@ -216,10 +312,10 @@ tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherw
   control's proof is the builder's call, so the artifact is emitted under `decision_required`, not as a state.
   The smallest alternative is that decision; no provider can see the quote time.
 - Not proven: the quote age (30 s) and input age (60 s) are host checks. The Flow intent has no on-chain
-  deadline; after signing, the minimum output (7) is the on-chain protection. The Privy reply code
-  `request_expired` is documented, not yet observed. The expiry row has no same-calldata allow twin in this
-  packet; that its body is in policy rests on R3 and the v3 row `raw.allow_swap_zero_value`. A different code stops the run (`UNRECOGNIZED_REPLY`)
-  and needs a reviewed profile update.
+  deadline; after signing, the minimum output (7) is the on-chain protection. The live run got a 401 whose code
+  was not saved; the re-run saves it. The expiry row has no same-calldata allow twin in this
+  packet; that its body is in policy rests on R3 and the v3 row `raw.allow_swap_zero_value`. A code that is not
+  an expiry code stops the run (`UNRECOGNIZED_REPLY`) and needs a reviewed profile update.
 
 ### 12 `opaque_program`: not provable this way
 
@@ -230,7 +326,10 @@ tokens are WMON and MOE; both overrides took effect; the probe succeeded. Otherw
 - Supporting evidence (not a proof): when the trace is valid, the builder writes
   `opaque_program.support.json` (state `UNPROVEN_SUPPORT`, evidence class null) showing that the approved
   program calls only the entrypoint, router, pool, WMON and MOE and pays the whole output to the wallet, and
-  reports its hash as `supporting_evidence_sha256`.
+  reports its hash as `supporting_evidence_sha256`. If the live trace calls any other address (for example a
+  pair factory or fee contract, which the fee payouts of Finding 1 may involve), the support file is not
+  written. When the trace pays the pinned fee recipients, the support file lists them in
+  `findings.fee_transfers` and a limit line says they are observed, not sourced.
 - Smallest alternatives, each a builder decision:
   1. Accept "host-exact program + provider-actual trace of that exact program" as control 12's proof. This
      changes the rule and is a separate reviewed change to the release module or this builder.
@@ -273,6 +372,21 @@ From the checkout root, with `<venv>` = `apps/api/.venv`. Each store is a new di
    It stops on the first `BREACH`, unexpected outcome or unknown reply. The expected `EXPIRY_REFUSAL` on the
    last row does not count as a stop.
 
+   **Expiry row re-run (after the 2026-10-23 run; the builder runs it once).** Only
+   `raw.ctl_deny_expired_request` is sent, into the new store `<the 2026-10-23 privy store>.expiry-rerun`
+   (created by the command; do not pass `--store`). The earlier store is only read and no other row is sent:
+
+   ```sh
+   PRIVY_APP_ID=... PRIVY_APP_SECRET=... PRIVY_AGENT_KEY_FILE=<agent pem> \
+   PYTHONPATH=apps/api/src:. apps/api/.venv/bin/python -B -s -m scripts.privy_unfunded_proof.actual_run \
+     --packet control-proofs --confirm-unfunded --rerun-expiry-from <the 2026-10-23 privy store>
+   ```
+
+   It prints one line for `raw.ctl_deny_expired_request`. The capture
+   `<the 2026-10-23 privy store>.expiry-rerun/raw.ctl_deny_expired_request.capture.json` holds `status`,
+   `error_code` and `error_type`. A refusal before sending prints `REFUSED raw.ctl_deny_expired_request <code>`.
+   A second run prints `STORE_ALREADY_EXISTS`: each earlier store has one re-run.
+
 3. Chain reads. The endpoint must support `eth_call` and `eth_estimateGas` with `stateDiff` overrides (the
    operator endpoint did on 2026-10-22) and, for control 6, `debug_traceCall` with `callTracer`, `withLog` and
    `stateOverrides`. The URL may hold a key; it is never printed or saved.
@@ -289,6 +403,9 @@ From the checkout root, with `<venv>` = `apps/api/.venv`. Each store is a new di
      --authored docs/qualification/inapp-trade/release.authored.json \
      --privy-store <new privy store> --chain-store <new chain store> --out <new proofs dir>
    ```
+
+   After the expiry re-run, add `--with-expiry-rerun` (the earlier store stays the `--privy-store`; the
+   builder reads `<privy store>.expiry-rerun`, which must hold only the expiry row).
 
    It writes `<control>.proof.json` (the exact canonical bytes whose SHA-256 is the proof hash) for proven and
    decision-required controls, `opaque_program.support.json` when available, and `controls.json`. It prints
@@ -334,11 +451,13 @@ from the frozen inputs.
 | File | Role |
 | --- | --- |
 | `scripts/privy_unfunded_proof/actual_packet.py` | The sealed control-proof packet (new rows), registered next to the unchanged v3 packet. |
-| `scripts/privy_unfunded_proof/actual_run.py` | `--packet control-proofs`; an expected expiry refusal does not stop the run. |
-| `scripts/privy_unfunded_proof/chain_proof.py` | Read-only chain client, frozen operations and the one-store chain command. |
+| `scripts/privy_unfunded_proof/actual_run.py` | `--packet control-proofs`; an expected expiry refusal does not stop the run; `--rerun-expiry-from` re-runs the expiry row alone. |
+| `scripts/privy_unfunded_proof/actual_runner.py` | Saves the identifier-shaped error code and type of an error reply; recognizes a 401 expiry code on the expiry row; the `rerun_of` admission. |
+| `scripts/privy_unfunded_proof/actual_profile.py` | `error_fields`, `safe_reply_field`, `is_expiry_refusal`. |
+| `scripts/privy_unfunded_proof/chain_proof.py` | Read-only chain client, frozen operations, the pinned observed fee recipients and the one-store chain command. |
 | `scripts/privy_unfunded_proof/control_proofs.py` | The pure proof builder and its command. |
 | `docs/qualification/privy-unfunded-proof/ACTUAL_PROOF_OPERATION_INPUTS.json` | New `control_proof_operations` section; the v3 content is unchanged. |
-| `tests/privy_unfunded_proof/test_control_proof_packet.py`, `test_chain_proof.py`, `test_control_proofs.py`, `_control_support.py` | Tests with recorded fakes only. |
+| `tests/privy_unfunded_proof/test_control_proof_packet.py`, `test_chain_proof.py`, `test_control_proofs.py`, `test_control_proof_expiry_rerun.py`, `_control_support.py` | Tests with recorded fakes only. |
 
 ## Checks
 

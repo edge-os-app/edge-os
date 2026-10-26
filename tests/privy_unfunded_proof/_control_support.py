@@ -85,9 +85,11 @@ class FakeChain:
     """An authored JSON-RPC peer. ``overrides`` replace a reply per op-shaped key for negative tests."""
 
     def __init__(self, *, trace_logs: bool = True, state_overrides_honoured: bool = True,
-                 debug_supported: bool = True) -> None:
+                 debug_supported: bool = True, pool_fee_payouts: dict[str, int] | None = None) -> None:
         self.requests: list[dict[str, Any]] = []
         self.trace_logs = trace_logs
+        # WMON the pool pays out of the input in the trace, as in the live trace of 2026-10-23.
+        self.pool_fee_payouts = pool_fee_payouts or {}
         self.state_overrides_honoured = state_overrides_honoured
         self.debug_supported = debug_supported
         self.replace: dict[str, Any] = {}
@@ -204,7 +206,9 @@ class FakeChain:
                  "gas": "0x1", "gasUsed": "0x1",
                  "calls": [{"type": "CALL", "from": router, "to": pool, "value": "0x0", "input": "0x",
                             "output": "0x", "gas": "0x1", "gasUsed": "0x1",
-                            "logs": [transfer(chain_proof.MOE, pool, router, out)] if self.trace_logs else []}],
+                            "logs": ([transfer(chain_proof.WMON, pool, recipient, value)
+                                      for recipient, value in self.pool_fee_payouts.items()]
+                                     + [transfer(chain_proof.MOE, pool, router, out)]) if self.trace_logs else []}],
                  "logs": ([transfer(chain_proof.WMON, entry, pool, amount),
                            transfer(chain_proof.MOE, router, entry, out)] if self.trace_logs else [])}
         return {"type": "CALL", "from": wallet, "to": entry, "value": "0x0", "input": call["data"],
@@ -214,6 +218,12 @@ class FakeChain:
                            "logs": [transfer(chain_proof.WMON, wallet, entry, amount)] if self.trace_logs else []},
                           inner],
                 "logs": [transfer(chain_proof.MOE, entry, wallet, out)] if self.trace_logs else []}
+
+
+# The net WMON fee payouts of the controller's live chain.swap_trace (2026-10-23): 1.00% and 0.35% of the 10 WMON
+# input. The pool kept 9.865 WMON.
+LIVE_FEE_PAYOUTS = {"0xe1c8b73343f5a83ebe165be90470d84b00e33022": 100_000_000_000_000_000,
+                    "0x681c3f796ae388026634c26025504d7c45248998": 35_000_000_000_000_000}
 
 
 def chain_client(fake: FakeChain) -> chain_proof.ReadOnlyChainClient:
