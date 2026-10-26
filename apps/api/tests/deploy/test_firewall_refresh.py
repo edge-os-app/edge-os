@@ -33,8 +33,8 @@ def docker_stub(*, project: str, bridge_project: str | None, worker: list[tuple[
     def rows(pairs: list[tuple[str, ...]]) -> str:
         return " ".join("'" + "|".join((pair + ("", ""))[:3]) + "'" for pair in pairs)
 
-    worker_out = f"printf '%s\\n' {worker_lines or rows(worker)}"
-    postgres_out = f"printf '%s\\n' {postgres_lines or rows(postgres)}"
+    worker_rows = worker_lines or rows(worker)
+    postgres_rows = postgres_lines or rows(postgres)
     worker_ps = "" if no_containers or "execution-worker" in missing else "echo workerid"
     postgres_ps = "" if no_containers or "postgres" in missing else "echo postgresid"
     networks = "" if bridge_project is None else (
@@ -56,10 +56,12 @@ case "$1" in
   inspect)
     for a do last=$a; done
     case "$last" in
-      workerid) {worker_out} ;;
-      postgresid) {postgres_out} ;;
+      workerid) data=$(printf '%s\\n' {worker_rows}) ;;
+      postgresid) data=$(printf '%s\\n' {postgres_rows}) ;;
       *) exit 1 ;;
-    esac ;;
+    esac
+    case "$*" in *'|'*) ;; *) data=$(printf '%s\\n' "$data" | tr '|' ' ') ;; esac
+    printf '%s\\n' "$data" ;;
 esac
 exit 0
 """
