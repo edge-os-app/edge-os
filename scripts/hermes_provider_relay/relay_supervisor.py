@@ -62,9 +62,12 @@ HARDENING = ("--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges"
 # The relay process and the application process share one group (the units set it as `Group=`). The relay's own folders
 # stay owner-only; the three the application shares are group-readable, and grants/revocations are group-writable for
 # the application. `state` stays read-only for the application because the relay is its only writer. All modes are
-# explicit: the units set `UMask=0077`, so `mkdir(mode=...)` alone would drop the group bits.
+# explicit: the units set `UMask=0077`, so `mkdir(mode=...)` alone would drop the group bits. The unit keeps
+# `RestrictSUIDSGID=yes`, which denies S_ISGID in a mode argument; the shared primary gid makes the setgid bit
+# unnecessary, so no mode here requests it.
 RELAY_ROOT_MODE = 0o750
-SHARED_FOLDER_MODES = {"grants": 0o2770, "revocations": 0o2770, "state": 0o2750, "secrets": 0o750}
+CHANNEL_ROOT_MODE = 0o770
+SHARED_FOLDER_MODES = {"grants": 0o770, "revocations": 0o770, "state": 0o750, "secrets": 0o750}
 PRIVATE_FOLDER_MODE = 0o700
 ADMISSION_KEY_MODE = 0o440
 
@@ -151,7 +154,7 @@ class RelaySupervisor:
             make_provider_tls(self.path("tls"), (ONLINE_HOST if self.online else PROVIDER_HOST,))
         for root in self.channel_roots.values():
             root.mkdir(parents=True, exist_ok=True)
-            os.chmod(root, 0o2770)  # the job runner, the job and the relay share one group
+            os.chmod(root, CHANNEL_ROOT_MODE)  # the job runner, the job and the relay share one group
         if self.online:
             destination = ProviderDestination(ONLINE_HOST, ONLINE_PORT, ONLINE_PATH)
             target = {"gateway_socket": f"/relay/egress/{GATEWAY_SOCKET}", "egress_probes": []}  # it has no network

@@ -53,6 +53,7 @@ def test_every_host_unit_uses_the_shared_group_and_keeps_its_own_group_for_the_p
         assert settings["ProtectSystem"] == "strict", path.name
         assert settings["ProtectHome"] == "yes", path.name
         assert settings["NoNewPrivileges"] == "yes", path.name
+        assert settings["RestrictSUIDSGID"] == "yes", path.name
 
 
 def test_every_host_unit_names_its_own_docker_config() -> None:
@@ -137,6 +138,8 @@ def test_the_runbook_creates_the_group_folders_and_start_order() -> None:
         "/var/lib/edge-os/relay/run-1/relay/secrets/admission-key",
         "sudo -g edge-os-relay-share -u edge-os-research test -w /var/lib/edge-os/relay/run-1/relay/grants",
         "`channel.path` must name a new child folder under it",
+        "`RestrictSUIDSGID=yes`, which denies a `chmod`/`mkdir` mode argument with S_ISGID",
+        "`ReadWritePaths=/var/lib/edge-os/relay` is a stable",
     ):
         assert expected in text, expected
     copy = text.index("printed handoff line")
@@ -151,8 +154,8 @@ def test_the_readme_path_table_names_the_shared_owners_groups_and_modes() -> Non
         "/var/lib/edge-os/channel",
         "<run root>/relay/grants/<attempt>.json",
         "0640",
-        "2770",
-        "2750",
+        "0770",
+        "0750",
         "0440",
     ):
         assert expected in text, expected

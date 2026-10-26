@@ -335,23 +335,10 @@ def test_the_channel_folder_must_be_new_and_task_owned(tmp_path: Path, key: Path
     assert fake.effects() == [] and not (tmp_path / "run").exists()
 
 
-def _same_mode(path: Path, mode: int) -> bool:
-    """APFS (the Mac test host) drops a directory's setgid bit; Linux keeps it. The group bits must always match."""
-    actual = stat.S_IMODE(path.stat().st_mode)
-    return actual & 0o777 == mode & 0o777 and (actual == mode or sys.platform == "darwin")
-
-
 def test_a_channel_folder_inside_the_run_root_is_created_by_the_operator(tmp_path: Path, key: Path,
                                                                           fake: FakeDocker) -> None:
     loaded, _, _ = started(tmp_path, key, channel={"name": "jobs", "path": str(tmp_path / "run" / "jobs")})
-    assert _same_mode(tmp_path / "run" / "jobs", 0o2770) and owned_state(fake, loaded)["container"]
-
-
-def test_the_code_requests_the_setgid_bit_for_the_shared_folders() -> None:
-    from relay_supervisor import SHARED_FOLDER_MODES
-
-    assert relay_operator.CHANNEL_MODE == 0o2770
-    assert SHARED_FOLDER_MODES == {"grants": 0o2770, "revocations": 0o2770, "state": 0o2750, "secrets": 0o750}
+    assert stat.S_IMODE((tmp_path / "run" / "jobs").stat().st_mode) == 0o770 and owned_state(fake, loaded)["container"]
 
 
 def test_the_run_root_and_shared_folders_have_the_reviewed_group_and_modes(tmp_path: Path, key: Path,
@@ -360,17 +347,35 @@ def test_the_run_root_and_shared_folders_have_the_reviewed_group_and_modes(tmp_p
     relay = tmp_path / "run" / "relay"
     expected = {
         tmp_path / "run": 0o750,
-        tmp_path / "jobs": 0o2770,
+        tmp_path / "jobs": 0o770,
         relay: 0o750,
-        relay / "grants": 0o2770,
-        relay / "revocations": 0o2770,
-        relay / "state": 0o2750,
+        relay / "grants": 0o770,
+        relay / "revocations": 0o770,
+        relay / "state": 0o750,
         relay / "secrets": 0o750,
         relay / "tls": 0o700,
         relay / "secrets" / "admission-key": 0o440,
     }
     for path, mode in expected.items():
-        assert _same_mode(path, mode), (path, oct(stat.S_IMODE(path.stat().st_mode)))
+        assert stat.S_IMODE(path.stat().st_mode) == mode, (path, oct(stat.S_IMODE(path.stat().st_mode)))
+
+
+def test_a_start_succeeds_under_the_unit_setgid_filter(tmp_path: Path, key: Path, fake: FakeDocker,
+                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    """`RestrictSUIDSGID=yes` denies any mode argument with S_ISGID (and S_ISUID). The operator must not request one."""
+    real = os.chmod
+
+    def filtered(path: Any, mode: int, *args: Any, **kwargs: Any) -> None:
+        if mode & 0o6000:
+            raise PermissionError(1, "Operation not permitted", str(path))
+        real(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "chmod", filtered)
+    loaded, _, _ = started(tmp_path, key)
+    assert owned_state(fake, loaded)["container"]
+    for path in (tmp_path / "run", tmp_path / "jobs", tmp_path / "run" / "relay" / "grants",
+                 tmp_path / "run" / "relay" / "state"):
+        assert stat.S_IMODE(path.stat().st_mode) & 0o6000 == 0
 
 
 # --- ACTUAL: only the default registry, the record and its CA bundle ----------------------------------------------------

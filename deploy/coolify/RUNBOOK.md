@@ -232,8 +232,11 @@ The research root and its `tmp` keep the setgid bit (`2750`), so files the appli
 `channel.path` must name a new child folder under it, for example `/var/lib/edge-os/channel/hermes-channel-1`; the
 operator refuses a channel folder that already exists, and the root itself is never a channel path. The relay run root is `0750` with group
 `edge-os-relay-share`, so the application can traverse it to read `handoff.json`; the relay's configs, `tls/`, `provider/`,
-`gateway/` and `secrets/` stay owner-only. `grants/` and `revocations/` are `2770`, `state/` is `2750` (the relay is its
-only writer). The socket proxies' docker-config folders stay `0700` for their own user.
+`gateway/` and `secrets/` stay owner-only. `grants/` and `revocations/` are `0770`, `state/` is `0750` (the relay is its
+only writer). Both units keep `RestrictSUIDSGID=yes`, which denies a `chmod`/`mkdir` mode argument with S_ISGID; every
+writer already has primary gid `edge-os-relay-share`, so no code requests the setgid bit. Only the root-made channel
+root above keeps `2770` (its `install` runs outside the unit). The socket proxies' docker-config folders stay `0700` for
+their own user.
 
 The proxy writes its socket at `/run/edge-os/<role>/docker.sock` with mode `0660`. The socket file belongs to the
 proxy uid and the role group, so the service can use it and cannot read the real Docker socket. Each unit keeps its own
@@ -393,8 +396,10 @@ The operator owns the relay's start and writes the handoff once. The application
 3. Start the application: `systemctl start edge-os-hermes-app.service`. It listens on `127.0.0.1:8011` only. A new
    operation changes the path and the hash, so repeat steps 1-2 and restart the unit.
 
-The application never stops, restarts or removes relay resources. Run `relay_operator stop` then `start` after a host
-reboot, then repeat steps 1-3.
+The application never stops, restarts or removes relay resources. Its `ReadWritePaths=/var/lib/edge-os/relay` is a stable
+path because the run root changes per operation; DAC still limits it to `grants/` and `revocations/` (state `0750`,
+configs `0600`, private folders `0700`, run root `0750`). Run `relay_operator stop` then `start` after a host reboot,
+then repeat steps 1-3.
 
 These read-only commands record H2 item 6 (the research side cannot read the provider key) and the shared layout. Run
 them as the operator and record the output:

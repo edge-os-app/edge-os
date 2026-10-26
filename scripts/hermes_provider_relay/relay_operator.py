@@ -89,9 +89,10 @@ VOLUME_CLAIM_LABEL = "edge-os.relay-operator.claim"  # a fresh random value per 
 CONFIG_FILES = {"relay": "relay-config.json", "gateway": "gateway-config.json", "provider": "provider-config.json"}
 # The application user joins the relay's shared group. The run root stays readable and traversable for it, and the
 # channel is group-writable for the job runner, the job and the relay. Both are re-chmodded after `mkdir` because the
-# units set `UMask=0077`.
+# units set `UMask=0077`. The relay unit keeps `RestrictSUIDSGID=yes`, which denies a mode argument with S_ISGID:
+# every writer already has primary gid `edge-os-relay-share`, so no mode here requests the setgid bit.
 RUN_ROOT_MODE = 0o750
-CHANNEL_MODE = 0o2770
+CHANNEL_MODE = 0o770
 
 
 class OperatorRefused(ValueError):

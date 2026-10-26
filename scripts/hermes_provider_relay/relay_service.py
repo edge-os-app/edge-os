@@ -61,7 +61,7 @@ GUARD_HEADERS = {"accept": "application/json", "content-type": "application/json
 # The relay and the application process share one group. State and channel records stay readable for the application,
 # and one attempt's folder stays traversable for it. `UMask=0077` hides the group bits, so each mode is set again.
 STATE_FILE_MODE = 0o640
-ATTEMPT_FOLDER_MODE = 0o2750
+ATTEMPT_FOLDER_MODE = 0o750
 HEARTBEAT_MODE = 0o640
 
 
