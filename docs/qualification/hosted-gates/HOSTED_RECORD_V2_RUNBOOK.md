@@ -297,7 +297,9 @@ What `apply` installs:
   `--project-name <service uuid>`, so the Compose file name is not the project name. It then finds `execution-worker`
   and `postgres` by that project and their `com.docker.compose.service` labels, reads the address each holds on every
   network it does not declare, and installs the `EDGE_OS_BYPASS` rules. The idle no-op happens only when no fixed
-  bridges exist (before the first deploy). A fixed bridge without a project label, a missing or duplicate
+  bridges and no `execution-worker` or `postgres` service container exist (before the first deploy). On a fresh
+  Coolify host, Coolify's own `coolify-db` is a Compose service named `postgres`, so the pre-deploy refresh fails
+  closed and logs until this stack's fixed bridges exist; that is expected, and the timer retries. A fixed bridge without a project label, a missing or duplicate
   container, a container not on its declared networks, an optional `EDGE_OS_COMPOSE_PROJECT` that differs from the
   bridge label, an unreachable daemon or an IPv6 address on the extra network fails `refresh`; it never passes
   silently or reports success with empty rules.
@@ -363,9 +365,12 @@ Checks (record the output; repeat after a reboot):
 ip link show edgeos-egress && ip link show edgeos-hostdb && ip link show edgeos-private  # the fixed bridge names
 iptables -S DOCKER-USER | head -3; iptables -S INPUT | head -3; ipset list edgeos-egress-allow | head
 # Coolify may also attach its resource network. Prove that it carries no route instead of removing it.
-systemctl start edge-os-egress-refresh   # the timer does this every 5 minutes; run it now after a deploy
-systemctl is-active --quiet edge-os-egress-refresh || { echo "refresh failed: read its journal"; exit 1; }
-# `refresh` must exit 0 only after it found the stack by the edgeos-hostdb label and installed the address rules.
+# The timer does this every 5 minutes. A failed oneshot makes `systemctl start` fail; a successful oneshot is
+# inactive (dead), so check its recorded Result, not is-active.
+systemctl start edge-os-egress-refresh || echo "STOP: refresh failed; read its journal"
+[ "$(systemctl show -p Result --value edge-os-egress-refresh)" = success ] \
+  || echo "STOP: refresh did not record success"
+# `refresh` must record success only after it found the stack by the edgeos-hostdb label and installed the rules.
 docker inspect "$W" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'   # <PROJECT>_private <PROJECT>_egress, plus the resource network when attached
 docker inspect "$PG" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'  # <PROJECT>_private <PROJECT>_hostdb, plus the resource network when attached
 iptables -S EDGE_OS_BYPASS; iptables -S EDGE_OS_BYPASS_IN   # one DROP pair and one INPUT pair per injected address

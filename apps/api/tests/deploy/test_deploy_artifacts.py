@@ -180,3 +180,14 @@ def test_the_runbook_documents_the_coolify_network_control_without_a_manual_disc
                   "edgeos-hostdb", "idle no-op"):
         assert topic in text, topic
     assert "docker network disconnect" not in text
+
+
+def test_the_refresh_check_reads_the_oneshot_result_not_is_active():
+    """A successful Type=oneshot without RemainAfterExit is inactive (dead), so is-active cannot prove success."""
+    text = HOSTED_RECORD_V2.read_text(encoding="utf-8")
+    assert "systemctl is-active --quiet edge-os-egress-refresh" not in text
+    assert "systemctl start edge-os-egress-refresh" in text
+    assert "systemctl show -p Result --value edge-os-egress-refresh" in text
+    unit = (support.REPO / "deploy" / "host" / "edge-os-egress-refresh.service").read_text(encoding="utf-8")
+    assert "Type=oneshot" in unit
+    assert "RemainAfterExit" not in unit
