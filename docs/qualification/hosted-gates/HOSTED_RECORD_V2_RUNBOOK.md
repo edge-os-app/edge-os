@@ -255,6 +255,8 @@ What `apply` installs:
 | `EDGE_OS_IN_A/B` (first rule of `INPUT`) | `! -i edgeos-egress ! -s 10.203.0.0/28 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-i edgeos-egress -s 10.203.0.0/28 -p tcp --dport 443 --match-set edgeos-egress-relay dst --dst-type LOCAL --ctstate NEW -j ACCEPT` (the relay through docker-proxy); `-j DROP` |
 | `EDGE_OS_IN_DB_A/B` (first rule of `INPUT`) | `! -i edgeos-hostdb ! -s 10.203.0.16/28 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
 | `EDGE_OS_IN_PRIVATE_A/B` (first rule of `INPUT`) | `! -i edgeos-private ! -s 10.203.0.64/26 -j RETURN`; `ESTABLISHED,RELATED -j ACCEPT`; `-j DROP` |
+| `EDGE_OS_BYPASS_A/B` (first rule of `DOCKER-USER`, `refresh` only) | `-s <address>` and `-d <address>` `-j DROP` for each address the worker and PostgreSQL hold on a network they do not declare |
+| `EDGE_OS_BYPASS_IN_A/B` (first rule of `INPUT`, `refresh` only) | for each such address: `-s <address>` `ESTABLISHED,RELATED -j ACCEPT`; `-s <address>` `-j DROP` |
 
 - The upstream resolvers are every IPv4 `nameserver` in the file Docker uses (below), without loopback stubs.
   Docker's embedded resolver forwards from the container's namespace, so these queries cross `edgeos-egress`.
@@ -284,6 +286,28 @@ What `apply` installs:
   (SSH, Coolify, the loopback database). Replies to the loopback publish still arrive (`ESTABLISHED`).
 - The upstream resolvers follow Docker's rule: `/run/systemd/resolve/resolv.conf` only when `/etc/resolv.conf` names
   loopback stubs only; otherwise `/etc/resolv.conf`.
+- Coolify also attaches its own resource network (named the resource UUID, 10.0.x.0/24, NAT) to every container.
+  The Compose file sets `gw_priority: 1000` on the worker's `egress` and PostgreSQL's `hostdb`. Docker Compose maps
+  `gw_priority` to the engine's `GwPriority`; the engine selects the default gateway from the highest value. The
+  generic `priority` field only orders network attachment and does **not** select the default route on the tested
+  engine. Before a deploy, render `compose.deployed.yml` with the host's `docker compose config`: a rejected
+  `gw_priority` stops the deploy. After the deploy, `docker inspect` must show `GwPriority=1000` on `egress` and
+  `hostdb` (checks below). Because `apply` runs before Docker, only `refresh` inspects containers. It derives the
+  Compose project from the `edgeos-hostdb` bridge label, exactly as §1a does: Coolify starts a Service with
+  `--project-name <service uuid>`, so the Compose file name is not the project name. It then finds `execution-worker`
+  and `postgres` by that project and their `com.docker.compose.service` labels, reads the address each holds on every
+  network it does not declare, and installs the `EDGE_OS_BYPASS` rules. The idle no-op happens only when no fixed
+  bridges and no `execution-worker` or `postgres` service container exist (before the first deploy). On a fresh
+  Coolify host, Coolify's own `coolify-db` is a Compose service named `postgres`, so the pre-deploy refresh fails
+  closed and logs until this stack's fixed bridges exist; that is expected, and the timer retries. A fixed bridge without a project label, a missing or duplicate
+  container, a container not on its declared networks, an optional `EDGE_OS_COMPOSE_PROJECT` that differs from the
+  bridge label, an unreachable daemon or an IPv6 address on the extra network fails `refresh`; it never passes
+  silently or reports success with empty rules.
+- A residual window remains after a fresh deploy: the address rules exist once the next `refresh` runs (the timer
+  runs every five minutes, or `systemctl start edge-os-egress-refresh` runs it now). No reliable host-side event
+  hook exists without a Docker event watcher, so none is added. Until the rules exist the worker's `egress` default
+  route and the route guard below keep the internet off the extra network; the §4.1 checks are the gate before
+  controlled execution is enabled.
 
 Install (before the first deploy that puts the worker on `egress`):
 
@@ -295,6 +319,9 @@ cat > /etc/edge-os/egress.env <<'ENV'
 EDGE_OS_EGRESS_HOSTS="api.privy.io"
 EDGE_OS_EGRESS_RELAY_HOSTS="rpc-a.edgeos.fun rpc-b.edgeos.fun"
 EDGE_OS_EGRESS_PORTS="443"
+# Optional cross-check. Leave it unset: refresh derives the project from the edgeos-hostdb bridge label (§1a).
+# If set, it must equal that label, or refresh fails. Do not set the Compose file name `edge-os` as a guess.
+# EDGE_OS_COMPOSE_PROJECT="<the com.docker.compose.project label from §1a>"
 ENV
 # Root-owned copy: the unit never runs a script from the git checkout, which other steps switch between commits.
 install -m 0755 -o root -g root /opt/edge-os/deploy/host/edge-os-egress-firewall.sh /usr/local/sbin/edge-os-egress-firewall
@@ -337,9 +364,24 @@ Checks (record the output; repeat after a reboot):
 # §1a first; READY must be 1.
 ip link show edgeos-egress && ip link show edgeos-hostdb && ip link show edgeos-private  # the fixed bridge names
 iptables -S DOCKER-USER | head -3; iptables -S INPUT | head -3; ipset list edgeos-egress-allow | head
-# Coolify must not have attached another network (one with NAT would bypass these rules).
-docker inspect "$W" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'   # exactly <PROJECT>_private <PROJECT>_egress
-docker inspect "$PG" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'  # exactly <PROJECT>_private <PROJECT>_hostdb
+# Coolify may also attach its resource network. Prove that it carries no route instead of removing it.
+# The timer does this every 5 minutes. A failed oneshot makes `systemctl start` fail; a successful oneshot is
+# inactive (dead), so check its recorded Result, not is-active.
+systemctl start edge-os-egress-refresh || echo "STOP: refresh failed; read its journal"
+[ "$(systemctl show -p Result --value edge-os-egress-refresh)" = success ] \
+  || echo "STOP: refresh did not record success"
+# `refresh` must record success only after it found the stack by the edgeos-hostdb label and installed the rules.
+docker inspect "$W" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'   # <PROJECT>_private <PROJECT>_egress, plus the resource network when attached
+docker inspect "$PG" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'  # <PROJECT>_private <PROJECT>_hostdb, plus the resource network when attached
+iptables -S EDGE_OS_BYPASS; iptables -S EDGE_OS_BYPASS_IN   # one DROP pair and one INPUT pair per injected address
+docker inspect "$W" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} GwPriority={{$e.GwPriority}}{{"\n"}}{{end}}'   # egress 1000
+docker inspect "$PG" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} GwPriority={{$e.GwPriority}}{{"\n"}}{{end}}'  # hostdb 1000
+docker exec "$W" cat /proc/net/route    # one default route: gateway 0100CB0A (10.203.0.1)
+docker exec "$PG" cat /proc/net/route   # one default route: gateway 1100CB0A (10.203.0.17)
+INJECTED=$(docker inspect "$W" --format '{{range $n, $_ := .NetworkSettings.Networks}}{{$n}}{{"\n"}}{{end}}' \
+  | grep -v -x -e "${PROJECT}_private" -e "${PROJECT}_egress")
+for net in $INJECTED; do must_fail "$W" python -c "$PY_PROBE" \
+  "$(docker network inspect "$net" --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}')" 22; done
 running "$W" && docker exec "$W" python -c "
 import urllib.error as e, urllib.request as u
 try: print(u.urlopen('https://api.privy.io', timeout=5).status)
@@ -359,6 +401,17 @@ must_fail "$PG" bash -c "$SH_PROBE" 1.1.1.1 443            # the internet, from 
 
 Every `must_fail` line must print `pass: blocked`. Any `FAIL` line is a failed check: fix the cause, never record it
 as blocked. A refused connection (`FAIL: not proven blocked (1)`) means the packet reached its target.
+
+The route tables are the proof for the Coolify resource network: no default route may name anything except `0100CB0A`
+in the worker and `1100CB0A` in PostgreSQL. The worker refuses `EDGE_OS_EXECUTION_MODE=controlled` with
+`EXECUTION_BOOTSTRAP_ROUTE_UNEXPECTED` (or `EXECUTION_BOOTSTRAP_ROUTE_UNREADABLE`) otherwise, before it reads a key.
+Both healthchecks fail the same way on an extra default route. This depends on the host's Compose accepting
+`gw_priority` and mapping it to the engine's `GwPriority`, and on Coolify 4.4.7 preserving it. The `GwPriority=1000`
+lines above are the direct evidence; if a deploy shows `GwPriority=0`, an extra default route or a rejected key, do
+not enable controlled execution and report it before a repair. The route guard and these checks read the IPv4
+`/proc/net/route`; the declared networks set `enable_ipv6: false`, and `refresh` fails loudly on an IPv6 address on
+an extra network. If Docker's IPv6 is enabled, add the `ip6tables` rules named at the top of §4.1. The extra network
+is never removed by hand: a redeploy re-attaches it, and these checks must pass with no manual detach step.
 
 ### 4.2 Turning on controlled execution
 

@@ -146,6 +146,17 @@ def test_the_egress_firewall_is_fail_closed_and_starts_before_docker():
                  'replies_only EDGE_OS_IN_PRIVATE edgeos-private "$PRIVATE_SUBNET"'):
         assert rule in text, rule
     assert "ipset flush" not in text and "ipset swap" not in text
+    # The refresh unit (Docker up) finds the two containers by Compose labels and drops exactly the addresses they
+    # hold on networks they do not declare. `apply` runs before Docker and must never call the daemon.
+    for rule in ("EDGE_OS_COMPOSE_PROJECT", "com.docker.compose.service", "EDGE_OS_BYPASS",
+                 "EDGE_OS_BYPASS_IN", "GlobalIPv6Address", 'hook DOCKER-USER EDGE_OS_BYPASS',
+                 'hook INPUT EDGE_OS_BYPASS_IN', "refresh_allowlist", "enforce_injected_addresses",
+                 "cannot inspect", "docker network ls --quiet --filter driver=bridge",
+                 "does not match the fixed bridge project", "no fixed bridges",
+                 "expected one running", "no compose project label"):
+        assert rule in text, rule
+    apply_body = text.split("apply() {", 1)[1].split("\n}", 1)[0]
+    assert "docker " not in apply_body
     unit = (host / "edge-os-egress-firewall.service").read_text(encoding="utf-8")
     assert "Before=docker.service" in unit and "RequiredBy=docker.service" in unit
     # A failed Condition* skips the unit as a success, so Docker would start without rules.
@@ -156,3 +167,27 @@ def test_the_egress_firewall_is_fail_closed_and_starts_before_docker():
     assert "/opt/edge-os" not in "".join(line for line in unit.splitlines() if line.startswith("Exec"))
     timer = (host / "edge-os-egress-refresh.timer").read_text(encoding="utf-8")
     assert "OnUnitActiveSec=5min" in timer
+    # The refresh inspects containers, so it must wait for Docker. Never move that call into the apply path.
+    refresh_unit = (host / "edge-os-egress-refresh.service").read_text(encoding="utf-8")
+    assert "After=edge-os-egress-firewall.service docker.service" in refresh_unit
+    assert "ExecStart=/usr/local/sbin/edge-os-egress-firewall refresh" in refresh_unit
+
+
+def test_the_runbook_documents_the_coolify_network_control_without_a_manual_disconnect():
+    text = HOSTED_RECORD_V2.read_text(encoding="utf-8")
+    for topic in ("Coolify resource network", "EDGE_OS_COMPOSE_PROJECT", "/proc/net/route",
+                  "EXECUTION_BOOTSTRAP_ROUTE_UNEXPECTED", "residual window", "gw_priority", "GwPriority",
+                  "edgeos-hostdb", "idle no-op"):
+        assert topic in text, topic
+    assert "docker network disconnect" not in text
+
+
+def test_the_refresh_check_reads_the_oneshot_result_not_is_active():
+    """A successful Type=oneshot without RemainAfterExit is inactive (dead), so is-active cannot prove success."""
+    text = HOSTED_RECORD_V2.read_text(encoding="utf-8")
+    assert "systemctl is-active --quiet edge-os-egress-refresh" not in text
+    assert "systemctl start edge-os-egress-refresh" in text
+    assert "systemctl show -p Result --value edge-os-egress-refresh" in text
+    unit = (support.REPO / "deploy" / "host" / "edge-os-egress-refresh.service").read_text(encoding="utf-8")
+    assert "Type=oneshot" in unit
+    assert "RemainAfterExit" not in unit

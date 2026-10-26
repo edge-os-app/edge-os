@@ -131,7 +131,10 @@ services:
       private:
         # The unique alias. Never `postgres`: on the `coolify` network that name is Coolify's own database.
         aliases: [edge-os-postgres]
-      hostdb: {}
+      hostdb:
+        # Coolify attaches its own resource network to every container. `gw_priority` sets the engine's GwPriority,
+        # which selects the default gateway; the healthcheck asserts the no-NAT hostdb gateway (10.203.0.17).
+        gw_priority: 1000
     restart: unless-stopped
     healthcheck:
       test:
@@ -139,6 +142,7 @@ services:
         - >-
           pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
           && [ "$$(psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc 'show ssl')" = "on" ]
+          && [ "$$(awk '$$2 == "00000000" {print toupper($$3)}' /proc/net/route)" = "1100CB0A" ]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -261,7 +265,12 @@ services:
     mem_reservation: 128m
     pids_limit: 256
     # `private` for PostgreSQL; `egress` for api.privy.io and the Monad RPC only, enforced on the host (see below).
-    networks: [private, egress]
+    # Coolify also attaches its own resource network. `gw_priority` sets the engine's GwPriority, which selects the
+    # default gateway; the startup guard and healthcheck refuse when the running route table does not agree.
+    networks:
+      private: {}
+      egress:
+        gw_priority: 1000
     restart: unless-stopped
     depends_on:
       postgres: {condition: service_healthy}
@@ -271,9 +280,16 @@ services:
         - CMD
         - python
         - -c
-        - >-
-          import os,sys,time; p='/tmp/edge-os-worker-heartbeat';
-          sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 60 else 1)
+        - |-
+          import os, sys, time
+          from edge_os_api.execution.network_route import default_route_is_declared, read_route_table
+          try:
+              route = default_route_is_declared(read_route_table())
+          except OSError:
+              route = False
+          heartbeat = "/tmp/edge-os-worker-heartbeat"
+          ok = route and os.path.exists(heartbeat) and time.time() - os.path.getmtime(heartbeat) < 60
+          sys.exit(0 if ok else 1)
       interval: 10s
       timeout: 5s
       retries: 3
@@ -317,6 +333,7 @@ networks:
   # provider egress. Only the execution worker has a route out (`egress`); PostgreSQL's `hostdb` has no NAT.
   private:
     internal: true
+    enable_ipv6: false
     # A fixed bridge name and subnet so the host firewall keeps its gateway from reaching host services.
     driver_opts:
       com.docker.network.bridge.name: edgeos-private
