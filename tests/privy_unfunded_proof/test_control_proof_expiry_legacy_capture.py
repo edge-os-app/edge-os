@@ -66,15 +66,15 @@ def test_a_current_set_earlier_capture_still_gives_the_same_decision_and_names_i
     assert reply["earlier_error_fields"] == "recorded"
 
 
-@pytest.mark.parametrize("which,changes", [
-    ("earlier", {"raw_body_sha256": "1" * 64}),
-    ("earlier", {"byte_count": 114}),
-    ("earlier", {"content_type_sha256": "2" * 64}),
+@pytest.mark.parametrize("changes", [
+    {"raw_body_sha256": "1" * 64},
+    {"byte_count": 114},
+    {"content_type_sha256": "2" * 64},
 ])
 def test_a_legacy_earlier_capture_whose_body_differs_from_the_rerun_stays_unproven(
-        which: str, changes: dict[str, Any]) -> None:
-    state = _recorded()
-    state["expiry_captures"][which].update(changes)
+        changes: dict[str, Any]) -> None:
+    state = _without_error_fields(_recorded())
+    state["expiry_captures"]["earlier"].update(changes)
     result = _build(_recite(state))
     assert result["unproven"]["expiry_freshness"] == {"reason": "PRIVY_RECORD_INVALID"}
 
