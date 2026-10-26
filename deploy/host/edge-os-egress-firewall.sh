@@ -19,7 +19,7 @@
 # addresses they hold on any network they do not declare. It drops forwarding to and from exactly those addresses and
 # keeps host-bound traffic replies-only. The idle no-op happens only when none of the fixed bridges exists. A fixed
 # bridge without a project label, a missing or duplicate container, a missing declared network, an unreachable daemon
-# or an IPv6 address on the extra network fails the refresh; it never passes silently.
+# or an IPv6 address fails the refresh; it never passes silently.
 #
 # Docker cannot restrict by host name; this script resolves the names on the host into an ipset. `apply` builds the
 # rules in the idle one of two chains and switches the jump to it, so a re-run never leaves an empty chain hooked.
@@ -120,8 +120,10 @@ declared_networks() {
 }
 
 container_networks() {
+  # One endpoint per line, split by `|`: a network name cannot contain it and an address value can contain a
+  # space (Docker 29 prints an unset address as "invalid IP"), so no field can shift into another.
   docker inspect --type container \
-    --format '{{range $name, $endpoint := .NetworkSettings.Networks}}{{$name}} {{$endpoint.IPAddress}} {{$endpoint.GlobalIPv6Address}}{{"\n"}}{{end}}' \
+    --format '{{range $name, $endpoint := .NetworkSettings.Networks}}{{$name}}|{{$endpoint.IPAddress}}|{{$endpoint.GlobalIPv6Address}}{{"\n"}}{{end}}' \
     "$1"
 }
 
@@ -130,21 +132,51 @@ service_addresses() {
   service=$1
   id=$(container_id "$service") || return 1
   networks=$(container_networks "$id") || { echo "cannot inspect the $service container $id" >&2; return 1; }
-  if printf '%s\n' "$networks" | awk 'NF >= 3 && $3 != "" {found = 1} END {exit !found}'; then
-    echo "$service has an IPv6 address on an extra network; refusing to leave it unfiltered" >&2
-    return 1
-  fi
   declared=$(declared_networks "$service") || return 1
   for required in $declared; do
-    printf '%s\n' "$networks" | awk -v want="$required" '$1 == want {found = 1} END {exit !found}' \
+    printf '%s\n' "$networks" | awk -F'|' -v want="$required" 'NF && $1 == want {found = 1} END {exit !found}' \
       || { echo "$service is not on its declared network $required" >&2; return 1; }
   done
-  printf '%s\n' "$networks" | while read -r name ip _; do
-    [ -n "$name" ] || continue
-    case " $declared " in *" $name "*) continue ;; esac
-    [ -n "$ip" ] || continue
-    echo "$ip"
-  done
+  printf '%s\n' "$networks" | awk -F'|' -v service="$service" -v declared=" $declared " '
+    function quad(ip,   part, n, i) {
+      n = split(ip, part, ".")
+      if (n != 4) return 0
+      for (i = 1; i <= 4; i++) {
+        if (part[i] !~ /^[0-9][0-9]?[0-9]?$/) return 0
+        if (length(part[i]) > 1 && substr(part[i], 1, 1) == "0") return 0
+        if ((part[i] + 0) > 255) return 0
+      }
+      return 1
+    }
+    function refuse(text) { printf "%s\n", text > "/dev/stderr"; failed = 1 }
+    NF == 0 { next }
+    NF < 2 || NF > 3 {
+      refuse(service " has a malformed network endpoint line: " $0)
+      next
+    }
+    {
+      name = $1
+      v4 = $2
+      v6 = (NF == 3 ? $3 : "")
+      if (v4 == "invalid IP") v4 = ""
+      if (v6 == "invalid IP") v6 = ""
+      if (v6 != "") {
+        if (index(declared, " " name " "))
+          refuse(service " has an IPv6 address on its declared network " name "; refusing because declared networks disable IPv6")
+        else
+          refuse(service " has an IPv6 address on an extra network; refusing to leave it unfiltered")
+        next
+      }
+      if (v4 == "") next
+      if (!quad(v4)) {
+        refuse(service " has an IPv4 address that is not a dotted quad on network " name ": " v4)
+        next
+      }
+      if (index(declared, " " name " ")) next
+      print v4
+    }
+    END { exit failed }
+  '
 }
 
 injected_addresses() {
