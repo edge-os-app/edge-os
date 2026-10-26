@@ -298,11 +298,57 @@ EDGE_OS_HANDOFF_PATH=/var/lib/edge-os/relay/run-1/handoff.json
 EDGE_OS_HANDOFF_SHA256=<the sha256 the operator printed at start>
 EDGE_OS_RUN_ID=vps-hermes-app-1
 EDGE_OS_INTERPRETER=hermes_local
+EDGE_OS_APP_BIND_HOST=127.0.0.1
 # plus the research worker's EDGE_OS_* names: database URL, hosted deployment id and record path, Privy, CORS, build SHA
 ```
 
 The two handoff values are the operator's printed line, written by the controller. The application reads them from this
-root-owned file; the handoff itself is not trusted to name its own hash. The application listens on `127.0.0.1:8011`.
+root-owned file; the handoff itself is not trusted to name its own hash. The application listens on `127.0.0.1:8011` by
+default.
+
+**Public Hermes route (HERMES-ROUTE-L4).** The Coolify `api` service gets its own variable
+`EDGE_OS_HERMES_APP_URL=http://<coolify-gateway>:8011`. Derive the address on the host with
+`docker network inspect coolify --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'` (today `10.0.1.1`); do not commit
+it as a code fact. The launcher accepts only an IPv4 loopback or RFC 1918 literal and refuses IPv6, `0.0.0.0`, names and
+public addresses. The unit starts after `docker.service`, because the bridge address exists only after Docker creates
+the bridge.
+
+The API forwards exactly these six paths and methods, and every other API path stays on the `api`:
+
+```text
+GET  /v1/interpreter
+POST /v1/research/requests
+GET  /v1/research/requests
+GET  /v1/research/requests/{intake_id}
+POST /v1/research/requests/{intake_id}/clarifications
+POST /v1/research/requests/{intake_id}/interpretation-retries
+```
+
+The forward requires the Privy principal and the write limit before it sends a byte. It forwards only `Authorization`,
+`Content-Type` and `Accept`; it returns only `Content-Type` and `Retry-After`; it adds no owner header. It never follows
+a redirect and never reads `HTTP_PROXY` or `NO_PROXY`. A connect failure is `503 interpreter_unavailable`, a read
+timeout is `504 interpreter_timeout`, and any other transport failure is `502 interpreter_route_failed`. The host
+application serves only the six paths plus `GET /healthz` and `GET /readyz`; everything else is 404.
+
+Rollout: the controller deploys the new API image only after the host application is READY and the public checks pass.
+Until then the running API image stays. With `EDGE_OS_HERMES_APP_URL` empty in production, the six paths return
+`503 interpreter_unavailable`; local and test runs keep the fixture behaviour.
+
+Host firewall and public-port checks, run by the controller only:
+
+```sh
+ufw status numbered
+iptables -S INPUT   # or: nft list ruleset
+ss -ltnp | grep ':8011'   # only <coolify-gateway>:8011, never 0.0.0.0:8011 or [::]:8011
+nc -vz <VPS public IP> 8011   # must fail from another machine
+```
+
+One INPUT rule allows TCP 8011 from the `coolify` subnet (today `10.0.1.0/24`) to the gateway only. The default policy
+stays deny.
+
+The `host_gates.h2_runner_isolation` evidence file must hold: the six paths and methods; the bind address; the `ss`
+output; the outside `nc` failure; the firewall rule; the forward settings; the 503 state when the URL is empty; the host
+guard 404 for an outside path; and the tests that prove authentication and the write limit run before the forward.
 
 `/etc/edge-os/relay/provider-ca.pem` is `root:edge-os-relay-share` mode `0640` (a public CA bundle), because the relay
 container runs with the shared group:

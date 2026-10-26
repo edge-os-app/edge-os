@@ -204,6 +204,13 @@ The registry is empty in this candidate, so production still refuses the route t
 `/etc/edge-os/research-worker.enabled` absent until the builder's record is registered. The record's one TLS mode
 also binds the Coolify services, so they use the same `sslmode` on `edge-os-postgres`.
 
+**Public Hermes route (HERMES-ROUTE-L4).** The Coolify `api` forwards the six paths listed in
+`deploy/coolify/RUNBOOK.md` §6.3 to `EDGE_OS_HERMES_APP_URL`. The host application binds `EDGE_OS_APP_BIND_HOST`
+(default `127.0.0.1`; the hosted value is the IPv4 `coolify` bridge gateway) and serves only those six paths plus
+`GET /healthz` and `GET /readyz`. The record's `host_gates.h2_runner_isolation` evidence file must hold the route, bind,
+firewall and public-port checks listed in §6.3. The record's `hermes_relay` field still binds only the release id and
+record hash; the route is bound by the H2 evidence hash. Lane 2 writes the evidence file and the record.
+
 ## 4. Execution worker environment and egress
 
 The execution worker has its own environment block (`x-worker-environment`), not the API block. It holds only

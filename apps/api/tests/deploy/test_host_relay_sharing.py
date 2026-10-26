@@ -83,7 +83,10 @@ def test_the_app_unit_runs_the_launcher_on_loopback_with_the_handoff_from_its_en
                      "--run-id ${EDGE_OS_RUN_ID}", "--port 8011"):
         assert argument in start
     assert _env(_unit(APP_UNIT))["DOCKER_HOST"] == "unix:///run/edge-os/research/docker.sock"
-    assert re.search(r'^HOST = "127\.0\.0\.1"$', LAUNCHER.read_text(encoding="utf-8"), re.MULTILINE)
+    assert _env(_unit(APP_UNIT))["EDGE_OS_APP_BIND_HOST"] == "127.0.0.1"
+    assert "Wants=docker.service" in _unit(APP_UNIT)
+    assert "docker.service" in settings["After"].split()
+    assert re.search(r'^DEFAULT_BIND_HOST = "127\.0\.0\.1"$', LAUNCHER.read_text(encoding="utf-8"), re.MULTILINE)
 
 
 def test_the_app_writes_only_its_own_evidence_the_channel_and_the_shared_grant_folders() -> None:
