@@ -19,6 +19,7 @@ block; Privy records cannot, so the controller commits the raw store with the ar
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import re
@@ -34,6 +35,7 @@ from scripts.privy_unfunded_proof.actual_packet import (
     CONTROL_PROOF_ORDER,
     PROVIDER_PROOF_UNQUALIFIED,
     CONTROL_PROOF_PACKET,
+    CONTROL_PROOF_EXPIRED_HEADER,
     CONTROL_PROOF_TABLE,
     UNFUNDED_POLICY_PROFILE_ID,
 )
@@ -48,6 +50,7 @@ _TOPIC = re.compile(r"0x[0-9a-fA-F]{64}")
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
 _QUANTITY = re.compile(r"0x(?:0|[1-9a-f][0-9a-f]*)")
 _ACTIVE_STEPS = ("approve", "swap", "revoke")
+EXPIRY_SPECIMEN = "raw.ctl_deny_expired_request"
 
 # Each proven artifact states what its evidence shows and what it does not.
 _CLAIMS: Mapping[str, tuple[str, ...]] = {
@@ -147,6 +150,31 @@ _LIMITS: Mapping[str, tuple[str, ...]] = {
     ),
 }
 
+# The texts of an expiry artifact whose refusal reason Privy did not state (EXPIRY_REASON_DECISION).
+_EXPIRY_UNREADABLE_CLAIMS: tuple[str, ...] = (
+    "Privy answered the in-policy release swap with a past privy-request-expiry with HTTP 401 twice, in the "
+    "earlier run and in its one re-run, with the same body (findings.provider_reply.raw_body_sha256). A 401 is an "
+    "error reply: the runner never reads a signature from it, and neither outcome record holds a signed hash.",
+    "In the same packet, under the same policy id and policy hash, the positive control was signed "
+    "(ALLOW / SIGNED_FIELDS_MATCH), and both expiry records cite it.",
+    "The expired request is the frozen release swap body with one frozen header, privy-request-expiry, set in "
+    "the past; a fresh request is the same body with the packet's future expiry (findings.request_difference).",
+    "The app refuses an expired request itself before any signing call (findings.app_expiry_checks).",
+)
+_EXPIRY_UNREADABLE_LIMITS: tuple[str, ...] = (
+    "Privy did not say why it refused: the body has no code or type field the capture rule accepts "
+    "(error_code and error_type are null), so the refusal is not shown to be an expiry refusal. A 401 can also "
+    "mean an authorization or credential failure; that the same key and credentials signed the positive control "
+    "is the controller's statement, and the records do not name the key.",
+    "The fresh twin of the expired request was never sent, so no reply shows that the same body is signed with a "
+    "future expiry; that the body is in policy rests on rule R3 and the v3 row raw.allow_swap_zero_value.",
+    "The re-run sent the same request and idempotency key, so Privy may have answered with its stored reply; the "
+    "two replies are then one refusal, not two.",
+    "Control 11 is defined at the HOST layer (quote age, input age, intent and mandate expiry). This covers the "
+    "provider-side signing cutoff only, and as a builder decision.",
+    "The app checks are cited by path, line and test at this commit; the proof builder does not run them.",
+)
+
 
 # Complete evidence that covers only part of the control. Adopting it as the control's proof is a builder decision.
 DECISION_REQUIRED: Mapping[str, str] = {
@@ -161,8 +189,58 @@ DECISION_REQUIRED: Mapping[str, str] = {
 FEE_RECIPIENTS_DECISION = "FEE_RECIPIENTS_OBSERVED_NOT_SOURCE_BOUND"
 
 
+# Complete evidence for the expiry row whose refusal reason Privy did not state: the expired request was refused
+# twice with the same 401 body and no signature, after the positive control signed. Builder decision of 2026-10-26.
+EXPIRY_REASON_DECISION = "PRIVY_REFUSAL_REASON_NOT_READABLE"
+
+
 def _evidence_decision(name: str, findings: Mapping[str, Any]) -> str | None:
-    return FEE_RECIPIENTS_DECISION if name == "recipient" and findings.get("fee_transfers") else None
+    if name == "recipient" and findings.get("fee_transfers"):
+        return FEE_RECIPIENTS_DECISION
+    if name == "expiry_freshness" and findings.get("refusal_reason_readable") is False:
+        return EXPIRY_REASON_DECISION
+    return None
+
+
+# The app's own expiry refusals, each before any call that could sign. Paths are repository-relative; each line is
+# where the refusal is returned at this commit, and the tests are the ones that show nothing reaches the signer.
+APP_EXPIRY_CHECKS: tuple[Mapping[str, Any], ...] = (
+    {"path": "apps/api/src/edge_os_api/execution/privy_signer.py", "line": 214, "refusal": "REQUEST_EXPIRED",
+     "where": "PrivySignerClient._stop: wall clock >= request_expiry_ms, checked before the local authorization "
+              "(line 153) and again immediately before the send (line 183); the request is then unsent",
+     "expiry_source": "apps/api/src/edge_os_api/core/provider_ports.py:735 sets request_expiry_ms from "
+                      "release.transaction.request_expires_at",
+     "tests": ("apps/api/tests/execution/test_privy_signer.py::test_a_stop_before_authorization_sends_nothing",
+               "apps/api/tests/execution/test_privy_signer.py::"
+               "test_a_stop_that_arrives_during_authorization_sends_nothing",
+               "apps/api/tests/execution/test_privy_signer.py::test_a_stop_before_authorization_never_reaches_the_key",
+               "apps/api/tests/execution/test_privy_signer.py::"
+               "test_a_stop_during_signing_sends_nothing_and_keeps_the_original_expiry")},
+    {"path": "apps/api/src/edge_os_api/execution/original_transaction.py", "line": 603, "refusal": "INTENT_EXPIRED",
+     "where": "_prepare: now >= intent_expires_at, before the route quote and any signer call",
+     "tests": ("apps/api/tests/execution/test_approve_swap_revoke.py::"
+               "test_existing_refusals_still_precede_the_steps",)},
+    {"path": "apps/api/src/edge_os_api/execution/original_transaction.py", "line": 753, "refusal": "INTENT_EXPIRED",
+     "where": "_recheck: now >= intent_expires_at, run at line 504 after SIGN_REQUESTED is saved and before "
+              "signer.rpc at line 513; no test isolates this return",
+     "tests": ()},
+    {"path": "apps/api/src/edge_os_api/execution/original_transaction.py", "line": 755, "refusal": "MANDATE_EXPIRED",
+     "where": "_recheck: now >= mandate_expires_at, at the same point before signer.rpc",
+     "tests": ("apps/api/tests/execution/test_saved_attempt_signing.py::"
+               "test_mandate_expiry_during_quote_preserves_exact_refusal",
+               "apps/api/tests/test_original_transaction_journey.py::"
+               "test_an_authority_change_during_a_stage_save_allows_no_next_effect"
+               "[SIGN_REQUESTED-expiry-expected0]")},
+    {"path": "apps/api/src/edge_os_api/execution/operating_release.py", "line": 223,
+     "refusal": "EXECUTION_RELEASE_EXPIRED",
+     "where": "check_release: now >= valid_until or now >= transaction.request_expires_at refuses the release",
+     "tests": ("apps/api/tests/execution/test_operating_release.py::"
+               "test_signer_request_expiry_is_enforced_before_release_expiry",)},
+    {"path": "apps/api/src/edge_os_api/execution/service.py", "line": 656, "refusal": "INTENT_EXPIRED",
+     "where": "ExecutionService._revalidate (submission-time freshness, called from _begin_submission at line "
+              "442, before tick's submit): an intent at or past its validity is denied; no attempt is created",
+     "tests": ("apps/api/tests/execution/test_revalidation.py::test_expired_intent_denies_before_submission",)},
+)
 
 
 class ProofRefused(ValueError):
@@ -413,10 +491,32 @@ def _expected_reply(specimen_id: str) -> tuple[str, str]:
             "POLICY_DENY": ("POLICY_DENY", "PRIVY_POLICY_VIOLATION")}[expected]
 
 
+_OUTCOME_KEYS = frozenset({"specimen_id", "profile", "packet_id", "reply_profile_id", "policy_id", "policy_sha256",
+                           "request_sha256", "expected", "outcome", "reason", "matches_expectation",
+                           "capture_record_sha256", "evidence_class", "provider_proof", "completed_at"})
+_CAPTURE_KEYS = frozenset({"specimen_id", "profile", "packet_id", "policy_id", "request_sha256", "status",
+                           "media_type", "content_type_sha256", "byte_count", "raw_body_sha256", "error_code",
+                           "error_type", "metadata_valid", "captured_at", "evidence_class"})
+
+
+def _epoch_ms(value: Any) -> int | None:
+    """A UTC time as the runner's clock writes it (``isoformat()``, or with ``Z``), in Unix milliseconds."""
+    if (type(value) is not str
+            or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)", value) is None):
+        return None
+    try:
+        moment = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (moment - dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)) // dt.timedelta(milliseconds=1)
+
+
 class _Privy:
     def __init__(self, records: Mapping[str, Mapping[str, Any]], captures: Mapping[str, str],
-                 earlier: Mapping[str, Mapping[str, Any]]) -> None:
+                 earlier: Mapping[str, Mapping[str, Any]],
+                 expiry_captures: Mapping[str, Mapping[str, Any]] | None = None) -> None:
         self.records, self.captures, self.earlier = records, captures, earlier
+        self.expiry_captures = expiry_captures or {}
         self.used: set[str] = set()
 
     def _rerun_valid(self, specimen_id: str, record: Mapping[str, Any]) -> bool:
@@ -465,6 +565,69 @@ class _Privy:
         if not (self._valid(positive) and self._valid(specimen_id)):
             raise _Unproven("PRIVY_RECORD_INVALID")
         self.used.update({positive, specimen_id})
+
+    def _unrecognized_401(self, record: Any, capture: Any, keys: frozenset[str]) -> bool:
+        """An expiry attempt that ended UNKNOWN / UNRECOGNIZED_REPLY on a captured JSON 401 with no readable code.
+
+        The record has exactly the runner's error-reply keys, so it holds no signed hash; its capture hashes to
+        the record's ``capture_record_sha256``.
+        """
+        packet, specimen_id = CONTROL_PROOF_PACKET, EXPIRY_SPECIMEN
+        return (isinstance(record, Mapping) and set(record) == keys
+                and record["specimen_id"] == specimen_id and record["profile"] == "raw"
+                and record["packet_id"] == packet.packet_id
+                and record["reply_profile_id"] == UNFUNDED_POLICY_PROFILE_ID
+                and record["policy_id"] == packet.profile_policies["raw"]
+                and record["policy_sha256"] == packet.profile_policy_sha256["raw"]
+                and record["request_sha256"] == packet.requests[specimen_id].request_sha256
+                and record["expected"] == "EXPIRY_REFUSAL" == packet.specimen_expected[specimen_id]
+                and record["outcome"] == "UNKNOWN" and record["reason"] == "UNRECOGNIZED_REPLY"
+                and record["matches_expectation"] is False
+                and record["evidence_class"] == ACTUAL_EVIDENCE_CLASS
+                and record["provider_proof"] == PROVIDER_PROOF_UNQUALIFIED
+                and type(record["capture_record_sha256"]) is str
+                and _HEX64.fullmatch(record["capture_record_sha256"]) is not None
+                and isinstance(capture, Mapping) and set(capture) == _CAPTURE_KEYS
+                and _sha256(capture) == record["capture_record_sha256"]
+                and capture["specimen_id"] == specimen_id and capture["profile"] == "raw"
+                and capture["packet_id"] == packet.packet_id and capture["policy_id"] == packet.profile_policies["raw"]
+                and capture["request_sha256"] == record["request_sha256"]
+                and type(capture["status"]) is int and capture["status"] == 401
+                and capture["media_type"] == "application/json" and capture["metadata_valid"] is True
+                and capture["evidence_class"] == ACTUAL_EVIDENCE_CLASS
+                and type(capture["byte_count"]) is int and capture["byte_count"] > 0
+                and type(capture["raw_body_sha256"]) is str and _HEX64.fullmatch(capture["raw_body_sha256"]) is not None
+                and capture["error_code"] is None and capture["error_type"] is None
+                and (_epoch_ms(capture["captured_at"]) or 0) > int(CONTROL_PROOF_EXPIRED_HEADER))
+
+    def refused_unreadably(self) -> dict[str, Any]:
+        """The expiry row was refused twice with the same unreadable 401, after the positive control signed.
+
+        Holds only for a valid positive control, an earlier attempt and its one re-run that both ended
+        UNKNOWN / UNRECOGNIZED_REPLY on a JSON 401 with null code and type, the same body hash, byte count and
+        media, and a re-run record that cites the earlier record and the positive control by hash. Anything else is
+        ``PRIVY_RECORD_INVALID``, as without this path.
+        """
+        positive, specimen_id = CONTROL_PROOF_ORDER[0], EXPIRY_SPECIMEN
+        record, earlier = self.records.get(specimen_id), self.earlier.get(specimen_id)
+        first, again = self.expiry_captures.get("earlier"), self.expiry_captures.get("rerun")
+        if not (self._valid(positive)
+                and self._unrecognized_401(earlier, first, _OUTCOME_KEYS)
+                and self._unrecognized_401(record, again, _OUTCOME_KEYS | {"rerun_of"})
+                and self.captures.get(specimen_id) == record["capture_record_sha256"]
+                and self._rerun_valid(specimen_id, record)
+                and all(first[key] == again[key] for key in ("raw_body_sha256", "byte_count", "content_type_sha256"))
+                and _epoch_ms(first["captured_at"]) < _epoch_ms(again["captured_at"])):
+            raise _Unproven("PRIVY_RECORD_INVALID")
+        self.used.update({positive, specimen_id})
+        return {
+            "status": 401, "media_type": "application/json", "byte_count": again["byte_count"],
+            "raw_body_sha256": again["raw_body_sha256"], "error_code": None, "error_type": None,
+            "attempts": [{"attempt": name, "outcome_record_sha256": _sha256(item),
+                          "capture_record_sha256": item["capture_record_sha256"], "captured_at": capture["captured_at"],
+                          "outcome": item["outcome"], "reason": item["reason"]}
+                         for name, item, capture in (("earlier", earlier, first), ("rerun", record, again))],
+        }
 
     def evidence(self) -> list[dict[str, Any]]:
         return [{"kind": "privy", "operation": specimen_id,
@@ -565,10 +728,53 @@ def _expiry_freshness(privy: _Privy, authored: Mapping[str, Any]) -> dict[str, A
     if not (release["transaction"]["request_expires_at"] == release["valid_until"] == marker
             == release["route"]["freshness"]["intent_expires_at"]):
         raise _Unproven("AUTHORED_EXPIRY_NOT_BOUND")
-    privy.refused("raw.ctl_deny_expired_request")
-    return {"expired_request_header_ms": dict(CONTROL_PROOF_PACKET.requests["raw.ctl_deny_expired_request"]
-                                              .headers)["privy-request-expiry"],
-            "signing_cutoff": "release.transaction.request_expires_at = valid_until = intent_expires_at"}
+    findings = {"expired_request_header_ms": dict(CONTROL_PROOF_PACKET.requests["raw.ctl_deny_expired_request"]
+                                                  .headers)["privy-request-expiry"],
+                "signing_cutoff": "release.transaction.request_expires_at = valid_until = intent_expires_at"}
+    record = privy.records.get(EXPIRY_SPECIMEN)
+    if not (isinstance(record, Mapping) and record.get("reason") == "UNRECOGNIZED_REPLY" and "rerun_of" in record):
+        privy.refused(EXPIRY_SPECIMEN)
+        return findings
+    reply = privy.refused_unreadably()
+    difference = expiry_request_difference()
+    positive = CONTROL_PROOF_ORDER[0]
+    return {**findings, "refusal_reason_readable": False, "provider_reply": reply,
+            "positive_control": {"specimen_id": positive, "outcome_record_sha256": _sha256(privy.records[positive]),
+                                 "outcome": "ALLOW", "reason": "SIGNED_FIELDS_MATCH"},
+            "request_difference": difference,
+            "app_expiry_checks": [{**check, "tests": list(check["tests"])} for check in APP_EXPIRY_CHECKS]}
+
+
+def _transaction_of(specimen_id: str) -> Mapping[str, Any]:
+    """The transaction inside the sealed packet's frozen request body."""
+    return json.loads(CONTROL_PROOF_PACKET.requests[specimen_id].body)["params"]["transaction"]
+
+
+def expiry_request_difference() -> dict[str, Any]:
+    """How the expired request differs from a fresh request and from the positive control, from the sealed packet.
+
+    The transport sends a frozen ``privy-request-expiry`` header when the row has one and the packet's
+    ``auth_header_expiry`` otherwise, with the same app id and the row's idempotency key. So the expired row is a
+    fresh request with that one header in the past, provided its only frozen header is that expiry.
+    """
+    packet, positive = CONTROL_PROOF_PACKET, CONTROL_PROOF_ORDER[0]
+    expired, control = packet.requests[EXPIRY_SPECIMEN], packet.requests[positive]
+    if (expired.headers != (("privy-request-expiry", CONTROL_PROOF_EXPIRED_HEADER),) or control.headers != ()
+            or int(CONTROL_PROOF_EXPIRED_HEADER) >= int(packet.auth_header_expiry)
+            or expired.url != control.url or expired.http_method != control.http_method):
+        raise _Unproven("EXPIRY_REQUEST_NOT_ISOLATED")
+    sent, signed = _transaction_of(EXPIRY_SPECIMEN), _transaction_of(positive)
+    return {
+        "body_sha256": hashlib.sha256(expired.body).hexdigest(),
+        "sent_request_expiry_ms": CONTROL_PROOF_EXPIRED_HEADER,
+        "fresh_request_expiry_ms": packet.auth_header_expiry,
+        "fresh_request_differs_in": ["privy-request-expiry"],
+        "fresh_request_sent": False,
+        "positive_control_differs_in": {
+            "transaction_fields": sorted(key for key in set(sent) | set(signed) if sent.get(key) != signed.get(key)),
+            "headers": ["privy-request-expiry", "privy-idempotency-key"]},
+        "note": "privy-authorization-signature signs the headers, so it differs whenever they do",
+    }
 
 
 def _artifact(name: str, authored: Mapping[str, Any], chain: _Chain | None, privy: _Privy | None,
@@ -593,12 +799,15 @@ def _artifact(name: str, authored: Mapping[str, Any], chain: _Chain | None, priv
 def build_control_proofs(*, authored: Mapping[str, Any], privy_records: Mapping[str, Mapping[str, Any]],
                          privy_capture_sha256: Mapping[str, str],
                          chain_records: Sequence[Mapping[str, Any]],
-                         privy_earlier_records: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
+                         privy_earlier_records: Mapping[str, Mapping[str, Any]] | None = None,
+                         privy_expiry_captures: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
     """Proofs for the controls the records prove, and a fixed reason for every other control.
 
     ``privy_capture_sha256`` maps each specimen id to the SHA-256 of its saved capture file; an outcome record
     counts only when its ``capture_record_sha256`` equals it. ``privy_earlier_records`` holds the earlier
     outcome record of a row that was re-run alone (the expiry row only); the re-run record must cite it.
+    ``privy_expiry_captures`` holds the expiry row's ``earlier`` and ``rerun`` capture records; only an
+    unrecognized 401 re-run reads them (see ``_Privy.refused_unreadably``).
     """
     earlier = privy_earlier_records or {}
     if not chain_proof.release_inputs_match(authored):
@@ -609,17 +818,20 @@ def build_control_proofs(*, authored: Mapping[str, Any], privy_records: Mapping[
     unproven: dict[str, dict[str, Any]] = {}
 
     def attempt(name: str, rule: Any, needs_chain: bool = True) -> None:
-        chain, privy = _Chain(authored, by_id), _Privy(privy_records, privy_capture_sha256, earlier)
+        chain = _Chain(authored, by_id)
+        privy = _Privy(privy_records, privy_capture_sha256, earlier, privy_expiry_captures)
         try:
             base = chain.preconditions() if needs_chain else None
             findings = rule(chain, privy, base)
         except _Unproven as missing:
             unproven[name] = {"reason": missing.reason}
             return
-        decision = DECISION_REQUIRED.get(name) or _evidence_decision(name, findings)
+        decision = _evidence_decision(name, findings) or DECISION_REQUIRED.get(name)
+        claims, limits = ((_EXPIRY_UNREADABLE_CLAIMS, _EXPIRY_UNREADABLE_LIMITS) if decision == EXPIRY_REASON_DECISION
+                          else (_CLAIMS[name], _LIMITS[name]))
         artifact = _artifact(name, authored, chain if needs_chain else None, privy, base, findings,
                              state="DECISION_REQUIRED" if decision else "ENFORCED", evidence_class="PROVIDER_ACTUAL",
-                             claims=_CLAIMS[name], limits=_LIMITS[name], decision=decision)
+                             claims=claims, limits=limits, decision=decision)
         entry = {"artifact": artifact, "proof_sha256": _sha256(artifact)}
         if decision:
             decision_required[name] = {**entry, "reason": decision}
@@ -712,6 +924,13 @@ def merge_expiry_rerun(records: dict[str, Any], captures: dict[str, str], privy_
     return earlier
 
 
+def load_expiry_captures(privy_root: Path) -> dict[str, Any]:
+    """The expiry row's capture records in the earlier store and in its one re-run store."""
+    name = f"{EXPIRY_SPECIMEN}.capture.json"
+    return {"earlier": json.loads((privy_root / name).read_text(encoding="utf-8")),
+            "rerun": json.loads((expiry_rerun_store(privy_root) / name).read_text(encoding="utf-8"))}
+
+
 def load_chain_store(root: Path) -> list[Any]:
     saved = json.loads((root / chain_proof.RESULTS_FILE).read_text(encoding="utf-8"))
     if not isinstance(saved, dict) or saved.get("schema") != chain_proof.RESULTS_SCHEMA:
@@ -735,10 +954,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         records, captures = load_privy_store(args.privy_store)
         earlier = merge_expiry_rerun(records, captures, args.privy_store) if args.with_expiry_rerun else None
+        expiry_captures = load_expiry_captures(args.privy_store) if args.with_expiry_rerun else None
         result = build_control_proofs(authored=json.loads(args.authored.read_text(encoding="utf-8")),
                                       privy_records=records, privy_capture_sha256=captures,
                                       chain_records=load_chain_store(args.chain_store),
-                                      privy_earlier_records=earlier)
+                                      privy_earlier_records=earlier, privy_expiry_captures=expiry_captures)
     except ProofRefused as refused:
         print(json.dumps({"status": "REFUSED", "code": refused.code}))
         return 2
