@@ -210,16 +210,33 @@ groupadd --system edge-os-relay
 useradd --system --no-create-home --shell /usr/sbin/nologin --gid edge-os-relay edge-os-relay
 useradd --system --no-create-home --shell /usr/sbin/nologin --gid edge-os-relay edge-os-proxy-relay
 
+# The Hermes application (edge-os-research) and the relay (edge-os-relay) share only the relay files they must
+# exchange. Neither user joins the other's group, so the research side never reads /etc/edge-os/relay.
+groupadd --system edge-os-relay-share
+
 stat -c '%g' /var/run/docker.sock   # set EDGE_OS_DOCKER_GID to this number
 
 install -d -m 0750 -o edge-os-proxy-research -g edge-os-research /run/edge-os/research
-install -d -m 0750 -o edge-os-research -g edge-os-research /var/lib/edge-os/research /var/lib/edge-os/research/tmp
+install -d -m 2750 -o edge-os-research -g edge-os-research /var/lib/edge-os/research /var/lib/edge-os/research/tmp
+install -d -m 0700 -o edge-os-research -g edge-os-research /var/lib/edge-os/research/docker-config
 install -d -m 0750 -o edge-os-proxy-relay -g edge-os-relay /run/edge-os/relay
-install -d -m 0750 -o edge-os-relay -g edge-os-relay /var/lib/edge-os/relay /etc/edge-os/relay
+install -d -m 0750 -o edge-os-relay -g edge-os-relay-share /var/lib/edge-os/relay
+install -d -m 0700 -o edge-os-relay -g edge-os-relay /var/lib/edge-os/relay/docker-config
+install -d -m 0750 -o edge-os-relay -g edge-os-relay /etc/edge-os/relay
+install -d -m 2770 -o edge-os-relay -g edge-os-relay-share /var/lib/edge-os/channel
 ```
 
+The research root and its `tmp` keep the setgid bit (`2750`), so files the application writes there stay in the
+`edge-os-research` group and the relay cannot read research evidence. The shared channel root (`/var/lib/edge-os/channel`,
+`2770`) is the only place the job, the application and the relay all write. The relay run root is `0750` with group
+`edge-os-relay-share`, so the application can traverse it to read `handoff.json`; the relay's configs, `tls/`, `provider/`,
+`gateway/` and `secrets/` stay owner-only. `grants/` and `revocations/` are `2770`, `state/` is `2750` (the relay is its
+only writer). The socket proxies' docker-config folders stay `0700` for their own user.
+
 The proxy writes its socket at `/run/edge-os/<role>/docker.sock` with mode `0660`. The socket file belongs to the
-proxy uid and the role group, so the service can use it and cannot read the real Docker socket.
+proxy uid and the role group, so the service can use it and cannot read the real Docker socket. Each unit keeps its own
+group as `SupplementaryGroups=` (`edge-os-research` or `edge-os-relay`) for this access, and sets
+`Group=edge-os-relay-share` as its primary group for the shared folder.
 
 ### 6.2 Code and Python environment
 
@@ -263,6 +280,33 @@ paths. The relay operator configuration `/etc/edge-os/relay.json` is described b
 `scripts/hermes_provider_relay/relay_operator.py`; it names the release, image id, run root, channel and provider key
 path. The provider key is a host-held file at `/etc/edge-os/relay/provider-key`, mode `0600`, readable by
 `edge-os-relay` only.
+
+Every host unit sets `DOCKER_CONFIG` in its own unit file, because `ProtectHome=yes` hides `~/.docker/config.json`:
+`/var/lib/edge-os/relay/docker-config` for the relay and `/var/lib/edge-os/research/docker-config` for the research
+worker and the application. Without it the Docker CLI prints a permission warning and the operator reads every
+answer as `unknown`.
+
+`/etc/edge-os/hermes-app.env` (mode `0600`, owner `root:edge-os-research`) holds the application's names:
+
+```text
+EDGE_OS_HANDOFF_PATH=/var/lib/edge-os/relay/run-1/handoff.json
+EDGE_OS_HANDOFF_SHA256=<the sha256 the operator printed at start>
+EDGE_OS_RUN_ID=vps-hermes-app-1
+EDGE_OS_INTERPRETER=hermes_local
+# plus the research worker's EDGE_OS_* names: database URL, hosted deployment id and record path, Privy, CORS, build SHA
+```
+
+The two handoff values are the operator's printed line, written by the controller. The application reads them from this
+root-owned file; the handoff itself is not trusted to name its own hash. The application listens on `127.0.0.1:8011`.
+
+`/etc/edge-os/relay/provider-ca.pem` is `root:edge-os-relay-share` mode `0640` (a public CA bundle), because the relay
+container runs with the shared group:
+
+```sh
+chown root:edge-os-relay-share /etc/edge-os/relay/provider-ca.pem
+chmod 0640 /etc/edge-os/relay/provider-ca.pem
+``` The release record under `/opt/edge-os` is a tracked file with git mode `0644`,
+so the relay container reads it unchanged. `/etc/edge-os/relay/relay.json` and `provider-key` stay `edge-os-relay` only.
 
 ### 6.4 Docker API calls and the derived allow-list
 
@@ -317,6 +361,7 @@ off every public network.
 install -m 0644 /opt/edge-os/deploy/host/edge-os-socket-proxy.service /etc/systemd/system/
 install -m 0644 /opt/edge-os/deploy/host/edge-os-research-worker.service /etc/systemd/system/
 install -m 0644 /opt/edge-os/deploy/host/edge-os-hermes-relay.service /etc/systemd/system/
+install -m 0644 /opt/edge-os/deploy/host/edge-os-hermes-app.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now edge-os-socket-proxy.service
 ```
@@ -329,9 +374,42 @@ docker pull <pinned hermes image>@sha256:<digest>
 docker pull <pinned relay image>@sha256:<digest>
 ```
 
-The research worker and relay units have `ConditionPathExists=/etc/edge-os/research-worker.enabled` and
-`ConditionPathExists=/etc/edge-os/hermes-relay.enabled`. Do not create those marker files until the builder approves
-the exact hosted deployment and the provider release. This candidate creates neither.
+The research worker, relay and application units have `ConditionPathExists=/etc/edge-os/research-worker.enabled`,
+`/etc/edge-os/hermes-relay.enabled` and `/etc/edge-os/hermes-app.enabled`. Do not create those marker files until the
+builder approves the exact hosted deployment and the provider release. This candidate creates none.
+
+### 6.6 Relay application start order
+
+The operator owns the relay's start and writes the handoff once. The application may start only after that:
+
+1. Start the relay: `systemctl start edge-os-hermes-relay.service`. The operator prints
+   `handoff <path> sha256 <hex>` to the journal.
+2. Copy its printed handoff line into `/etc/edge-os/hermes-app.env`: the path as `EDGE_OS_HANDOFF_PATH` and the hash as
+   `EDGE_OS_HANDOFF_SHA256`. Copy its printed handoff first; never type a hash from another start.
+3. Start the application: `systemctl start edge-os-hermes-app.service`. It listens on `127.0.0.1:8011` only. A new
+   operation changes the path and the hash, so repeat steps 1-2 and restart the unit.
+
+The application never stops, restarts or removes relay resources. Run `relay_operator stop` then `start` after a host
+reboot, then repeat steps 1-3.
+
+These read-only commands record H2 item 6 (the research side cannot read the provider key) and the shared layout. Run
+them as the operator and record the output:
+
+```sh
+sudo -u edge-os-research test -r /etc/edge-os/relay/provider-key; echo "key_read=$?"      # must print key_read=1
+sudo -u edge-os-research test -r /var/lib/edge-os/relay/run-1/relay/relay-config.json; echo "config_read=$?"
+sudo -u edge-os-research test -r /var/lib/edge-os/relay/run-1/relay/provider-config.json; echo "provider_read=$?"
+sudo -u edge-os-research test -r /var/lib/edge-os/relay/run-1/relay/secrets/admission-key; echo "admission_read=$?"
+sudo -u edge-os-research test -w /var/lib/edge-os/relay/run-1/relay/grants; echo "grants_write=$?"
+sudo -u edge-os-research test -w /var/lib/edge-os/relay/run-1/relay/state; echo "state_write=$?"          # must be 1
+stat -c '%U:%G %a %n' /var/lib/edge-os/relay /var/lib/edge-os/relay/run-1/relay /var/lib/edge-os/relay/run-1/relay/grants   /var/lib/edge-os/relay/run-1/relay/state /var/lib/edge-os/relay/run-1/relay/secrets/admission-key /var/lib/edge-os/channel
+```
+
+Expected: `key_read=1`, `config_read=1`, `provider_read=1`, `admission_read=0`, `grants_write=0`,
+`state_write=1`; the shared paths show the owners, groups and modes in §6.1. The Hermes job container mounts only its
+own turn folder (under the channel) and the read-only job code; it never mounts the admission key, `grants/`,
+`revocations/`, `state/` or the provider key, and the research proxy's bind prefixes exclude
+`/var/lib/edge-os/relay`.
 
 After a host reboot, the relay containers are stopped. Run the operator `stop` then `start` (or `restart` for a
 complete, unchanged operation) before expecting relay health; a blind `start` refuses an existing run root by design.

@@ -58,6 +58,11 @@ DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 PROBE_SECONDS = 2.0
 UNREACHABLE = {errno.ENETUNREACH, errno.EHOSTUNREACH}  # the kernel has no route: nothing left this namespace
 GUARD_HEADERS = {"accept": "application/json", "content-type": "application/json"}
+# The relay and the application process share one group. State and channel records stay readable for the application,
+# and one attempt's folder stays traversable for it. `UMask=0077` hides the group bits, so each mode is set again.
+STATE_FILE_MODE = 0o640
+ATTEMPT_FOLDER_MODE = 0o2750
+HEARTBEAT_MODE = 0o640
 
 
 def _write_new(folder: int, name: str, value: dict[str, Any]) -> bool:
@@ -67,8 +72,17 @@ def _write_new(folder: int, name: str, value: dict[str, Any]) -> bool:
     """
     temporary = f".{name}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=folder)
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, STATE_FILE_MODE, dir_fd=folder)
     except OSError:
+        return False
+    try:
+        os.fchmod(fd, STATE_FILE_MODE)  # the unit's UMask would drop the group bit
+    except OSError:
+        os.close(fd)
+        try:
+            os.unlink(temporary, dir_fd=folder)
+        except OSError:
+            pass
         return False
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -180,7 +194,8 @@ class Relay:
 
     def _attempt_dir(self, attempt: str) -> int:
         try:
-            os.mkdir(self.state / attempt, 0o700)
+            os.mkdir(self.state / attempt, ATTEMPT_FOLDER_MODE)
+            os.chmod(self.state / attempt, ATTEMPT_FOLDER_MODE)  # the unit's UMask would drop the group bit
         except FileExistsError:
             pass
         return os.open(self.state / attempt, DIR_FLAGS)
@@ -237,6 +252,7 @@ class Relay:
                  "egress_probe": self.egress, "pid": os.getpid()}
         temporary = self.state / ".heartbeat.tmp"
         temporary.write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
+        os.chmod(temporary, HEARTBEAT_MODE)  # the unit's UMask would drop the group bit
         os.replace(temporary, self.state / "heartbeat.json")
 
     # --- serving ------------------------------------------------------------------------------------------------------

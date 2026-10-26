@@ -78,21 +78,28 @@ Mode 0444 prevents routine accidental writes. It does not protect against the sa
 
 Read-only ownership applies to the handoff, the configuration and the release record. The accepted runtime writers keep their single-purpose files, each owned per attempt.
 
-| Path | Writer | Readers |
-|---|---|---|
-| operator configuration file | operator owner (outside the run root) | operator |
-| `<run root>/owner.json`, `resources.json`, `handoff.json`, `start-failed.json`, `stopped.json`, `stop-incomplete-<ns>.json` | operator, each once | operator; application reads `handoff.json` only |
-| `<run root>/relay/relay-config.json`, `provider-config.json`, `tls/`, `secrets/admission-key` | `RelaySupervisor._prepare` (operator process) | relay, stand-in (mounted read-only); application reads the admission key file only |
-| `<run root>/relay/gateway-config.json` | `RelaySupervisor._start_gateway` (operator process) | gateway (read-only mount) |
-| `<run root>/relay/grants/<attempt>.json` | application `RelayTurnRunner.run_turn`, once per attempt | relay (read-only mount) |
-| `<run root>/relay/revocations/<attempt>.json` | application `RelayTurnRunner._close`, once per attempt | relay |
-| `<run root>/relay/state/` (`heartbeat.json`, `events.jsonl`, `<attempt>/started.json`, `finished.json`, `closed.json`) | relay | application `RelayTurnRunner` (heartbeat and records) |
-| `<run root>/relay/gateway/receipts/`, `provider/receipts/` | gateway, AUTHORED stand-in | evidence |
-| `<run root>/relay/provider/scripts/<attempt>.json` | AUTHORED test scaffolding only (the test's script owner, e.g. `relay_harness.Rig.script_for`); not in the handoff; it sits beside the handoff's `state` folder | AUTHORED stand-in; no ACTUAL equivalent |
-| `<channel path>/` (the job evidence folder and channel files) | application job runner (`GuardedDockerTurnRunner`) and the job; relay writes channel replies | application, relay |
-| provider key file | its owner outside the repository | relay only (read-only mount; AUTHORED stand-in reads the synthetic key) |
+In the hosted layout the application runs as `edge-os-research` and the relay as `edge-os-relay`. Both units set `Group=edge-os-relay-share`, so the files they exchange are one group. The modes below are the reviewed host modes; the code sets them because the units use `UMask=0077`.
+
+| Path | Owner:group | Mode | Writer | Readers |
+|---|---|---|---|---|
+| operator configuration file | root:edge-os-relay | 0640 | root | operator |
+| `<run root>/owner.json`, `resources.json`, `start-failed.json`, `stopped.json`, `stop-incomplete-<ns>.json` | edge-os-relay:edge-os-relay-share | 0600 / 0400 | operator, each once | operator |
+| `<run root>/handoff.json` | edge-os-relay:edge-os-relay-share | 0444 | operator, once | operator; application |
+| `<run root>/relay/relay-config.json`, `provider-config.json`, `gateway-config.json` | edge-os-relay:edge-os-relay | 0600 | `RelaySupervisor` (operator process) | relay, stand-in, gateway (read-only mount) |
+| `<run root>/relay/tls/`, `provider/`, `gateway/` | edge-os-relay:edge-os-relay | 0700 | `RelaySupervisor` | relay, gateway (read-only mounts); not the application |
+| `<run root>/relay/secrets/` | edge-os-relay:edge-os-relay-share | 0750 | `RelaySupervisor` | relay and application traverse |
+| `<run root>/relay/secrets/admission-key` | edge-os-relay:edge-os-relay-share | 0440 | `RelaySupervisor._prepare` | relay (owner); application (group) |
+| `<run root>/relay/grants/<attempt>.json` | edge-os-research:edge-os-relay-share | 2770 dir, 0640 file | application `RelayTurnRunner.run_turn`, once per attempt | relay (read-only mount) |
+| `<run root>/relay/revocations/<attempt>.json` | edge-os-research:edge-os-relay-share | 2770 dir, 0640 file | application `RelayTurnRunner._close`, once per attempt | relay |
+| `<run root>/relay/state/` (`heartbeat.json`, `events.jsonl`, `<attempt>/started.json`, `finished.json`, `closed.json`) | edge-os-relay:edge-os-relay-share | 2750 dir, 0640 files | relay | application `RelayTurnRunner` (heartbeat and records); the application cannot write it |
+| `<run root>/relay/gateway/receipts/`, `provider/receipts/` | edge-os-relay:edge-os-relay | 0700 | gateway, AUTHORED stand-in | evidence |
+| `<run root>/relay/provider/scripts/<attempt>.json` | edge-os-relay:edge-os-relay | 0700 | AUTHORED test scaffolding only (the test's script owner, e.g. `relay_harness.Rig.script_for`); not in the handoff | AUTHORED stand-in; no ACTUAL equivalent |
+| `<channel path>/` (the job evidence folder and channel files) | edge-os-relay:edge-os-relay-share | 2770 root; 0770 turn, `output/` and `output/relay-channel/` folders | application job runner (`GuardedDockerTurnRunner`) and the job; relay writes channel replies | application, job, relay |
+| provider key file | its owner outside the repository | 0600 | its owner | relay only (read-only mount; AUTHORED stand-in reads the synthetic key) |
 
 Shutdown: only the operator stops, restarts or removes relay, gateway, stand-in, network and volume. The application never does; its close disposes only its own engine. Job recovery (`recover_pending`) and the per-attempt grant and close stay with the application. UNKNOWN liability and no-resend rules are unchanged.
+
+The hosted application is the separate host unit `edge-os-hermes-app.service` (as `edge-os-research`, loopback only); `deploy/coolify/RUNBOOK.md` §6.1, §6.3 and §6.6 hold the host layout, the handoff line and the start order. The application reads `<run root>/handoff.json` and the admission key, writes `grants/` and `revocations/`, reads `state/`, and writes its own turn folders under the channel root `/var/lib/edge-os/channel`. It cannot read the relay configs, the provider key, `tls/`, `provider/` or `gateway/`, and it cannot write `state/`.
 
 ## 6. Checks
 

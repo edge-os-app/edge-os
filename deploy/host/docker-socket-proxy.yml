@@ -47,7 +47,9 @@ services:
       - "-socketpath=/var/run/docker.sock"
       - "-proxysocketendpoint=/run/edge-os/docker.sock"
       - "-proxysocketendpointfilemode=0660"
-      - "-allowbindmountfrom=/opt/edge-os,/var/lib/edge-os/research"
+      # The application's job runner binds only the one shared channel root outside its own evidence root. The relay
+      # run root stays outside this prefix, so a job can never bind the relay's config, key, grants or state.
+      - "-allowbindmountfrom=/opt/edge-os,/var/lib/edge-os/research,/var/lib/edge-os/channel"
       - "-allowhealthcheck"
       - "-watchdoginterval=60"
       - "-stoponwatchdog"

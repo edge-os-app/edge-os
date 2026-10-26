@@ -1,5 +1,5 @@
 [Unit]
-Description=Edge OS research worker (host-side guarded Hermes runner)
+Description=Edge OS research worker (host-side investigation jobs)
 Documentation=file:/opt/edge-os/deploy/coolify/RUNBOOK.md
 Requires=edge-os-socket-proxy.service
 After=edge-os-socket-proxy.service
@@ -10,10 +10,12 @@ ConditionPathExists=/etc/edge-os/research-worker.enabled
 [Service]
 Type=simple
 User=edge-os-research
-Group=edge-os-research
+Group=edge-os-relay-share
+SupplementaryGroups=edge-os-research
 WorkingDirectory=/opt/edge-os
 EnvironmentFile=/etc/edge-os/research-worker.env
 Environment=DOCKER_HOST=unix:///run/edge-os/research/docker.sock
+Environment=DOCKER_CONFIG=/var/lib/edge-os/research/docker-config
 Environment=TMPDIR=/var/lib/edge-os/research/tmp
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONPATH=/opt/edge-os/apps/api/src

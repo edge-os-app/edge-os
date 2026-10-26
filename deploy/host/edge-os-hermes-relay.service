@@ -10,9 +10,11 @@ ConditionPathExists=/etc/edge-os/hermes-relay.enabled
 Type=oneshot
 RemainAfterExit=yes
 User=edge-os-relay
-Group=edge-os-relay
+Group=edge-os-relay-share
+SupplementaryGroups=edge-os-relay
 WorkingDirectory=/opt/edge-os
 EnvironmentFile=/etc/edge-os/hermes-relay.env
+Environment=DOCKER_CONFIG=/var/lib/edge-os/relay/docker-config
 Environment=DOCKER_HOST=unix:///run/edge-os/relay/docker.sock
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONPATH=/opt/edge-os/apps/api/src:/opt/edge-os/scripts/hermes_job_support:/opt/edge-os/scripts/hermes_interpretation:/opt/edge-os/scripts/hermes_provider_relay
@@ -32,7 +34,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 LockPersonality=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
-ReadWritePaths=/var/lib/edge-os/relay
+ReadWritePaths=/var/lib/edge-os/relay /var/lib/edge-os/channel
 
 [Install]
 WantedBy=multi-user.target
