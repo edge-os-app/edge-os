@@ -308,10 +308,25 @@ def test_socket_path_must_be_absolute_and_private(tmp_path):
 
 def test_api_package_never_reads_the_app_secret():
     src = REPO / "apps" / "api" / "src" / "edge_os_api"
-    offenders = [p for p in src.rglob("*.py") if "PRIVY_APP_SECRET" in p.read_text() and p.name != "settings.py"]
+    # Worker process only: it refuses role="api" before any setting is read (INAPP_TRADE_RELEASE.md).
+    worker_only = src / "execution" / "released_execution_bootstrap.py"
+    offenders = [p for p in src.rglob("*.py")
+                 if "PRIVY_APP_SECRET" in p.read_text() and p.name != "settings.py" and p != worker_only]
     assert offenders == []
     settings_text = (src / "core" / "settings.py").read_text()
     assert "EDGE_OS_PRIVY_APP_SECRET" in settings_text  # only as a forbidden name
+
+    from edge_os_api.execution import released_execution_bootstrap
+
+    class _UnreadEnviron(dict):
+        def get(self, *args, **kwargs):
+            raise AssertionError("the API role must not read the execution settings")
+
+    with pytest.raises(released_execution_bootstrap.ExecutionBootstrapRefused) as refused:
+        released_execution_bootstrap.build_worker_execution_runtime(
+            role="api", settings=None,  # type: ignore[arg-type]
+            environ=_UnreadEnviron({"EDGE_OS_EXECUTION_PRIVY_APP_SECRET": "fake-secret"}))
+    assert refused.value.code == "EXECUTION_BOOTSTRAP_ROLE_NOT_WORKER"
 
 
 # API client --------------------------------------------------------------------------------------------------------

@@ -146,14 +146,26 @@ def test_t4_docs_are_enabled_only_locally(env, migrated):
 
 def test_t4_source_has_no_override_or_bypass():
     forbidden = ("dependency_overrides", "AUTH_DISABLED", "BYPASS", "PRIVY_APP_SECRET")
+    worker_only = SRC / "execution" / "released_execution_bootstrap.py"  # worker process only (INAPP_TRADE_RELEASE.md)
     for path in SRC.rglob("*.py"):
         text = path.read_text()
         for word in forbidden:
             if path.name == "settings.py" and word in {"AUTH_DISABLED", "BYPASS", "PRIVY_APP_SECRET"}:
                 continue  # settings.py only lists them to refuse them
+            if path == worker_only and word == "PRIVY_APP_SECRET":
+                continue  # the worker-only value; the API role is refused before any read
             assert word not in text, f"{word} in {path.name}"
         tree = ast.parse(text)
         assert not any(isinstance(n, ast.Attribute) and n.attr == "dependency_overrides" for n in ast.walk(tree))
+
+
+def test_the_api_process_never_loads_the_worker_secret_module():
+    """The API starts without the worker-only bootstrap; a subprocess hides any import another test made."""
+    code = ("import sys\nimport edge_os_api.main\n"
+            "assert 'edge_os_api.execution.released_execution_bootstrap' not in sys.modules\n")
+    env = {**harness.base_env(), "PYTHONPATH": str(SRC.parent)}
+    run = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
 
 
 def test_t9_cors_allow_list(client):

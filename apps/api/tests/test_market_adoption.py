@@ -6,12 +6,14 @@ Sources are SYNTHETIC recorded responses. Earlier drafts and published revisions
 from __future__ import annotations
 
 import copy
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from conftest import run_threads
+from edge_os_api.core.research import released_runtime_bootstrap
 from edge_os_api.core.settings import load_settings
 from edge_os_api.main import create_app
 from edge_os_api.records import contract_adapter as record_contract
@@ -24,8 +26,9 @@ def research(env, migrated):
     settings = load_settings({**env, "EDGE_OS_RESEARCH_HISTORY_MODE": "recorded",
                               "EDGE_OS_RESEARCH_BUDGET_PROVIDER_REQUESTS": "200",
                               "EDGE_OS_RESEARCH_BUDGET_COMPUTE_SECONDS": "9000"})
-    with TestClient(create_app(settings)) as client:
-        yield client
+    with mock.patch.dict(released_runtime_bootstrap.RELEASE_DEFINITIONS, {}, clear=True):
+        with TestClient(create_app(settings)) as client:
+            yield client
 
 
 def evidence_of(bundle, name):
