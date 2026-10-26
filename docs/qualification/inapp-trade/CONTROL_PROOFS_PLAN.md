@@ -140,9 +140,13 @@ Privy run. Privy signed nothing but the revoke-to-zero positive control.
      error-reply keys, so neither holds `signed_bytes_sha256` or `signed_field_reasons`. Each is
      `UNKNOWN` / `UNRECOGNIZED_REPLY`, not matched, and bound to the sealed packet, policy id, policy hash, reply
      profile and request hash. Its `completed_at` is a UTC time at or after its capture's `captured_at`.
-  2. Each capture has exactly the runner's capture keys, hashes to its record's `capture_record_sha256`, and
+  2. Each capture has the runner's capture keys, hashes to its record's `capture_record_sha256`, and
      shows integer status 401, `application/json`, valid metadata, null `error_code` and `error_type`, a time
-     after the request's frozen expiry, a positive byte count and a hex content-type hash. The two captures have the same
+     after the request's frozen expiry, a positive byte count and a hex content-type hash. The re-run must
+     have the current 15-key set; the earlier attempt may instead have the legacy 13-key pre-CP2 set without
+     `error_code` and `error_type`, as the 2026-10-23 capture does. For that set, the null code and type are
+     derived only from the re-run's identical `raw_body_sha256`, byte count and content-type hash, and the
+     artifact names the set (`earlier_capture_schema` = `pre_error_fields`). The two captures have the same
      `raw_body_sha256`, byte count and content-type hash, and the re-run was captured after the earlier
      attempt, after the earlier attempt completed. The re-run capture file hashes to the re-run record, as for
      every other row.

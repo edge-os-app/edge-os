@@ -505,6 +505,15 @@ _OUTCOME_KEYS = frozenset({"specimen_id", "profile", "packet_id", "reply_profile
 _CAPTURE_KEYS = frozenset({"specimen_id", "profile", "packet_id", "policy_id", "request_sha256", "status",
                            "media_type", "content_type_sha256", "byte_count", "raw_body_sha256", "error_code",
                            "error_type", "metadata_valid", "captured_at", "evidence_class"})
+# CLOUD-CONTROL-PROOFS-2 (2053ea2) began saving error_code and error_type. The earlier expiry capture of
+# 2026-10-23 predates that change, so only the earlier attempt may have this smaller, legacy set.
+_LEGACY_CAPTURE_KEYS = _CAPTURE_KEYS - {"error_code", "error_type"}
+_CAPTURE_SCHEMAS = {_CAPTURE_KEYS: "current", _LEGACY_CAPTURE_KEYS: "pre_error_fields"}
+
+
+def _capture_schema(capture: Any) -> str | None:
+    """The name of a capture's key set, or None when it has neither accepted set."""
+    return _CAPTURE_SCHEMAS.get(frozenset(capture)) if isinstance(capture, Mapping) else None
 
 
 def _epoch_us(value: Any) -> int | None:
@@ -577,11 +586,13 @@ class _Privy:
             raise _Unproven("PRIVY_RECORD_INVALID")
         self.used.update({positive, specimen_id})
 
-    def _unrecognized_401(self, record: Any, capture: Any, keys: frozenset[str]) -> bool:
+    def _unrecognized_401(self, record: Any, capture: Any, keys: frozenset[str],
+                          capture_keys: frozenset[str] = _CAPTURE_KEYS) -> bool:
         """An expiry attempt that ended UNKNOWN / UNRECOGNIZED_REPLY on a captured JSON 401 with no readable code.
 
         The record has exactly the runner's error-reply keys, so it holds no signed hash; its capture hashes to
-        the record's ``capture_record_sha256``.
+        the record's ``capture_record_sha256``. ``capture_keys`` is the exact set the capture must have; the
+        legacy set omits the two error fields, whose null values then come from the re-run's identical body.
         """
         packet, specimen_id = CONTROL_PROOF_PACKET, EXPIRY_SPECIMEN
         return (isinstance(record, Mapping) and set(record) == keys
@@ -598,7 +609,7 @@ class _Privy:
                 and record["provider_proof"] == PROVIDER_PROOF_UNQUALIFIED
                 and type(record["capture_record_sha256"]) is str
                 and _HEX64.fullmatch(record["capture_record_sha256"]) is not None
-                and isinstance(capture, Mapping) and set(capture) == _CAPTURE_KEYS
+                and isinstance(capture, Mapping) and set(capture) == capture_keys
                 and _sha256(capture) == record["capture_record_sha256"]
                 and capture["specimen_id"] == specimen_id and capture["profile"] == "raw"
                 and capture["packet_id"] == packet.packet_id and capture["policy_id"] == packet.profile_policies["raw"]
@@ -608,7 +619,8 @@ class _Privy:
                 and capture["evidence_class"] == ACTUAL_EVIDENCE_CLASS
                 and type(capture["byte_count"]) is int and capture["byte_count"] > 0
                 and type(capture["raw_body_sha256"]) is str and _HEX64.fullmatch(capture["raw_body_sha256"]) is not None
-                and capture["error_code"] is None and capture["error_type"] is None
+                and ("error_code" not in capture_keys
+                     or (capture["error_code"] is None and capture["error_type"] is None))
                 and type(capture["content_type_sha256"]) is str
                 and _HEX64.fullmatch(capture["content_type_sha256"]) is not None
                 and (_epoch_us(capture["captured_at"]) or 0) > int(CONTROL_PROOF_EXPIRED_HEADER) * 1000
@@ -619,14 +631,21 @@ class _Privy:
 
         Holds only for a valid positive control, an earlier attempt and its one re-run that both ended
         UNKNOWN / UNRECOGNIZED_REPLY on a JSON 401 with null code and type, the same body hash, byte count and
-        media, and a re-run record that cites the earlier record and the positive control by hash. Anything else is
-        ``PRIVY_RECORD_INVALID``, as without this path.
+        media, and a re-run record that cites the earlier record and the positive control by hash. The
+        earlier capture may have the legacy pre-CP2 key set; the re-run must have the current set, and its null
+        fields stand for the earlier attempt because its body, bytes and content type are identical. Anything
+        else is ``PRIVY_RECORD_INVALID``, as without this path.
         """
         positive, specimen_id = CONTROL_PROOF_ORDER[0], EXPIRY_SPECIMEN
         record, earlier = self.records.get(specimen_id), self.earlier.get(specimen_id)
         first, again = self.expiry_captures.get("earlier"), self.expiry_captures.get("rerun")
+        first_schema = _capture_schema(first)
+        if first_schema is None or _capture_schema(again) != "current":
+            raise _Unproven("PRIVY_RECORD_INVALID")
         if not (self._valid(positive)
-                and self._unrecognized_401(earlier, first, _OUTCOME_KEYS)
+                and self._unrecognized_401(earlier, first, _OUTCOME_KEYS,
+                                           _LEGACY_CAPTURE_KEYS if first_schema == "pre_error_fields"
+                                           else _CAPTURE_KEYS)
                 and self._unrecognized_401(record, again, _OUTCOME_KEYS | {"rerun_of"})
                 and self.captures.get(specimen_id) == record["capture_record_sha256"]
                 and self._rerun_valid(specimen_id, record)
@@ -638,6 +657,9 @@ class _Privy:
         return {
             "status": 401, "media_type": "application/json", "byte_count": again["byte_count"],
             "raw_body_sha256": again["raw_body_sha256"], "error_code": None, "error_type": None,
+            "earlier_capture_schema": first_schema,
+            "earlier_error_fields": ("recorded" if first_schema == "current"
+                                     else "derived_from_identical_body"),
             "attempts": [{"attempt": name, "outcome_record_sha256": _sha256(item),
                           "capture_record_sha256": item["capture_record_sha256"], "captured_at": capture["captured_at"],
                           "outcome": item["outcome"], "reason": item["reason"]}
