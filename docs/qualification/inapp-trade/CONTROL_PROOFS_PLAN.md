@@ -144,7 +144,8 @@ Privy run. Privy signed nothing but the revoke-to-zero positive control.
      shows integer status 401, `application/json`, valid metadata, null `error_code` and `error_type`, a time
      after the request's frozen expiry, a positive byte count and a hex content-type hash. The two captures have the same
      `raw_body_sha256`, byte count and content-type hash, and the re-run was captured after the earlier
-     attempt. The re-run capture file hashes to the re-run record, as for every other row.
+     attempt, after the earlier attempt completed. The re-run capture file hashes to the re-run record, as for
+     every other row.
   3. The positive control is valid as before (`ALLOW` / `SIGNED_FIELDS_MATCH`, signed hash, capture hash). The
      re-run's `rerun_of` cites the earlier expiry record and that positive control by hash.
   4. The expired request differs from a fresh request only in its expiry. This is checked from the sealed packet
@@ -158,18 +159,18 @@ Privy run. Privy signed nothing but the revoke-to-zero positive control.
   or mismatched positive control, a missing earlier record or capture, and a re-run record that fails its
   existing `rerun_of` checks all stay `PRIVY_RECORD_INVALID`. A recognized expiry code
   (`UNKNOWN` / `EXPIRY_REFUSAL`) still takes the unchanged path to `PROVIDER_COVERS_SIGNING_CUTOFF_ONLY`.
-- The app refuses an expired request itself before any signing call. The artifact lists these checks under
+- The app refuses an expired request itself before any Privy signing call. The artifact lists these checks under
   `findings.app_expiry_checks` (`control_proofs.APP_EXPIRY_CHECKS`), and a test checks that each cited line
   still returns the refusal:
 
-  | Refusal | Where | Test that shows nothing reaches the signer |
+  | Refusal | Where | Test that shows the refusal (and what else it shows) |
   | --- | --- | --- |
-  | `REQUEST_EXPIRED` | `execution/privy_signer.py:214`, `PrivySignerClient._stop`, checked before the local authorization (line 153) and immediately before the send (line 183). The expiry is the release's `transaction.request_expires_at` (`core/provider_ports.py:735`). | `test_privy_signer.py`: `test_a_stop_before_authorization_sends_nothing`, `test_a_stop_that_arrives_during_authorization_sends_nothing`, `test_a_stop_before_authorization_never_reaches_the_key`, `test_a_stop_during_signing_sends_nothing_and_keeps_the_original_expiry` |
-  | `INTENT_EXPIRED` | `execution/original_transaction.py:603`, `_prepare`, before the quote and any signer call | `test_approve_swap_revoke.py::test_existing_refusals_still_precede_the_steps` |
-  | `INTENT_EXPIRED` | `execution/original_transaction.py:753`, `_recheck`, run at line 504 after `SIGN_REQUESTED` is saved and before `signer.rpc` (line 513) | none isolates this return |
-  | `MANDATE_EXPIRED` | `execution/original_transaction.py:755`, `_recheck`; the unit test reaches it through the recheck after the quote (line 648), the journey test through the one at line 504 before `signer.rpc` | `test_saved_attempt_signing.py::test_mandate_expiry_during_quote_preserves_exact_refusal`; `test_original_transaction_journey.py::test_an_authority_change_during_a_stage_save_allows_no_next_effect[SIGN_REQUESTED-expiry-expected0]` (needs Docker Postgres) |
-  | `EXECUTION_RELEASE_EXPIRED` | `execution/operating_release.py:223`, `check_release`, at or after `valid_until` or `transaction.request_expires_at` | `test_operating_release.py::test_signer_request_expiry_is_enforced_before_release_expiry` |
-  | `INTENT_EXPIRED` | `execution/service.py:656`, `ExecutionService._revalidate`, called from `_begin_submission` (line 442) before submission | `test_revalidation.py::test_expired_intent_denies_before_submission` (needs Docker Postgres) |
+  | `REQUEST_EXPIRED` | `execution/privy_signer.py:214`, `PrivySignerClient._stop`, checked before the local authorization (line 153) and immediately before the send (line 183). The expiry is the release's `transaction.request_expires_at` (`core/provider_ports.py:735`). | `test_privy_signer.py`: `test_a_stop_before_authorization_sends_nothing`, `test_a_stop_that_arrives_during_authorization_sends_nothing`, `test_a_stop_before_authorization_never_reaches_the_key`, `test_a_stop_during_signing_sends_nothing_and_keeps_the_original_expiry`: no Privy call; an expiry during authorization comes after the local key signed |
+  | `INTENT_EXPIRED` | `execution/original_transaction.py:603`, `_prepare`, before the quote and any signer call | `test_approve_swap_revoke.py::test_existing_refusals_still_precede_the_steps`: no signer call |
+  | `INTENT_EXPIRED` | `execution/original_transaction.py:753`, `_recheck`, run at line 504 after `SIGN_REQUESTED` is saved and before `signer.rpc` (line 513), for the swap step (the revoke uses `_release_problem`) | none isolates this return |
+  | `MANDATE_EXPIRED` | `execution/original_transaction.py:755`, `_recheck`; the unit test reaches it through the recheck after the quote (line 648), the journey test through the one at line 504 before `signer.rpc` | `test_saved_attempt_signing.py::test_mandate_expiry_during_quote_preserves_exact_refusal` (no `signer.rpc`); `test_original_transaction_journey.py::test_an_authority_change_during_a_stage_save_allows_no_next_effect[SIGN_REQUESTED-expiry-expected0]` (needs Docker Postgres) |
+  | `EXECUTION_RELEASE_EXPIRED` | `execution/operating_release.py:223`, `check_release`, at or after `valid_until` or `transaction.request_expires_at`. The worker's signer factory admits the release (`core/provider_ports.py:730`, reaching `check_release` at `operating_release.py:299`) before it builds the Privy client (line 734). | `test_operating_release.py::test_signer_request_expiry_is_enforced_before_release_expiry`: the refusal only, not the call order |
+  | `INTENT_EXPIRED` | `execution/service.py:656`, `ExecutionService._revalidate`, called from `_begin_submission` (line 442) before submission | `test_revalidation.py::test_expired_intent_denies_before_submission` (needs Docker Postgres): no attempt is created |
 
 - What the decision does not show:
   - Privy did not say why it refused, so the refusal is not shown to be an expiry refusal. A 401 can also be

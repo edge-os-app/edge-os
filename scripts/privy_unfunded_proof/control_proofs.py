@@ -159,7 +159,7 @@ _EXPIRY_UNREADABLE_CLAIMS: tuple[str, ...] = (
     "(ALLOW / SIGNED_FIELDS_MATCH), and the re-run record cites it by hash; the earlier record does not cite it.",
     "The expired request is the frozen release swap body with one frozen header, privy-request-expiry, set in "
     "the past; a fresh request is the same body with the packet's future expiry (findings.request_difference).",
-    "The app refuses an expired request itself before any signing call (findings.app_expiry_checks).",
+    "The app refuses an expired request itself before any Privy signing call (findings.app_expiry_checks).",
 )
 _EXPIRY_UNREADABLE_LIMITS: tuple[str, ...] = (
     "Privy did not say why it refused: the body has no code or type field the capture rule accepts "
@@ -203,11 +203,13 @@ def _evidence_decision(name: str, findings: Mapping[str, Any]) -> str | None:
 
 
 # The app's own expiry refusals, each before any call that could sign. Paths are repository-relative; each line is
-# where the refusal is returned at this commit, and the tests are the ones that show nothing reaches the signer.
+# where the refusal is returned at this commit. Each test shows the refusal; the "where" text says whether it also
+# shows that no Privy call is made, or only that no attempt is created or the release is refused.
 APP_EXPIRY_CHECKS: tuple[Mapping[str, Any], ...] = (
     {"path": "apps/api/src/edge_os_api/execution/privy_signer.py", "line": 214, "refusal": "REQUEST_EXPIRED",
      "where": "PrivySignerClient._stop: wall clock >= request_expiry_ms, checked before the local authorization "
-              "(line 153) and again immediately before the send (line 183); the request is then unsent",
+              "(line 153) and again immediately before the send (line 183); the request is then unsent and no Privy "
+              "call is made (an expiry during authorization comes after the local key has signed the payload)",
      "expiry_source": "apps/api/src/edge_os_api/core/provider_ports.py:735 sets request_expiry_ms from "
                       "release.transaction.request_expires_at",
      "tests": ("apps/api/tests/execution/test_privy_signer.py::test_a_stop_before_authorization_sends_nothing",
@@ -222,7 +224,8 @@ APP_EXPIRY_CHECKS: tuple[Mapping[str, Any], ...] = (
                "test_existing_refusals_still_precede_the_steps",)},
     {"path": "apps/api/src/edge_os_api/execution/original_transaction.py", "line": 753, "refusal": "INTENT_EXPIRED",
      "where": "_recheck: now >= intent_expires_at, run at line 504 after SIGN_REQUESTED is saved and before "
-              "signer.rpc at line 513; no test isolates this return",
+              "signer.rpc at line 513, for the swap step (the revoke step uses _release_problem); no test isolates "
+              "this return",
      "tests": ()},
     {"path": "apps/api/src/edge_os_api/execution/original_transaction.py", "line": 755, "refusal": "MANDATE_EXPIRED",
      "where": "_recheck: now >= mandate_expires_at; the unit test reaches it through the recheck after the quote "
@@ -234,12 +237,16 @@ APP_EXPIRY_CHECKS: tuple[Mapping[str, Any], ...] = (
                "[SIGN_REQUESTED-expiry-expected0]")},
     {"path": "apps/api/src/edge_os_api/execution/operating_release.py", "line": 223,
      "refusal": "EXECUTION_RELEASE_EXPIRED",
-     "where": "check_release: now >= valid_until or now >= transaction.request_expires_at refuses the release",
+     "where": "check_release: now >= valid_until or now >= transaction.request_expires_at refuses the release; "
+              "the worker's signer factory admits the release (core/provider_ports.py:730, which reaches "
+              "check_release at operating_release.py:299) before it builds the Privy client at line 734. The test "
+              "shows the refusal only, not that call order",
      "tests": ("apps/api/tests/execution/test_operating_release.py::"
                "test_signer_request_expiry_is_enforced_before_release_expiry",)},
     {"path": "apps/api/src/edge_os_api/execution/service.py", "line": 656, "refusal": "INTENT_EXPIRED",
      "where": "ExecutionService._revalidate (submission-time freshness, called from _begin_submission at line "
-              "442, before tick's submit): an intent at or past its validity is denied; no attempt is created",
+              "442, before tick's submit): an intent at or past its validity is denied; the test shows no attempt "
+              "is created",
      "tests": ("apps/api/tests/execution/test_revalidation.py::test_expired_intent_denies_before_submission",)},
 )
 
@@ -621,7 +628,8 @@ class _Privy:
                 and self.captures.get(specimen_id) == record["capture_record_sha256"]
                 and self._rerun_valid(specimen_id, record)
                 and all(first[key] == again[key] for key in ("raw_body_sha256", "byte_count", "content_type_sha256"))
-                and _epoch_ms(first["captured_at"]) < _epoch_ms(again["captured_at"])):
+                and _epoch_ms(first["captured_at"]) < _epoch_ms(again["captured_at"])
+                and _epoch_ms(earlier["completed_at"]) <= _epoch_ms(again["captured_at"])):
             raise _Unproven("PRIVY_RECORD_INVALID")
         self.used.update({positive, specimen_id})
         return {

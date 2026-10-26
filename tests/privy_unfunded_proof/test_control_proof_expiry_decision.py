@@ -241,6 +241,8 @@ CHANGES = {
         completed_at="2020-01-01T00:00:00Z"),
     "earlier_completed_before_capture": lambda state: state["earlier"][EXPIRY].update(
         completed_at="2026-10-23T08:00:00.100000+00:00"),
+    "earlier_completed_after_the_rerun_reply": lambda state: state["earlier"][EXPIRY].update(
+        completed_at="2026-10-27T00:00:00+00:00"),
     # The records are not the expected unrecognized attempts.
     "rerun_matched": lambda state: state["records"][EXPIRY].update(matches_expectation=True),
     "rerun_outcome_breach": lambda state: state["records"][EXPIRY].update(outcome="BREACH"),
@@ -252,8 +254,9 @@ CHANGES = {
 UNRECITED = {
     # The evidence does not hang together by hash.
     "capture_file_differs": lambda state: state["captures"].update({EXPIRY: "7" * 64}),
-    "earlier_capture_changed": _capture_change("earlier", captured_at="2026-10-23T09:00:00+00:00"),
-    "rerun_capture_changed": _capture_change("rerun", captured_at="2026-10-26T10:00:00+00:00"),
+    # Each time stays inside its window, so only the capture-to-record hash refuses these.
+    "earlier_capture_changed": _capture_change("earlier", captured_at="2026-10-23T08:00:00.150000+00:00"),
+    "rerun_capture_changed": _capture_change("rerun", captured_at="2026-10-26T09:30:00.680000+00:00"),
     "rerun_cites_another_earlier": lambda state: state["records"][EXPIRY]["rerun_of"].update(
         earlier_outcome_record_sha256="8" * 64),
     "rerun_cites_another_positive": lambda state: state["records"][EXPIRY]["rerun_of"].update(
@@ -452,6 +455,17 @@ def test_an_earlier_capture_that_is_not_an_object_is_refused(tmp_path: Path, pri
     (root / f"{EXPIRY}.capture.json").write_text(content, encoding="utf-8")
     records, captures = control_proofs.load_privy_store(root)
     records[EXPIRY]["capture_record_sha256"] = captures[EXPIRY]  # the record cites the file, so only its shape refuses
+    with pytest.raises(control_proofs.ProofRefused) as refused:
+        control_proofs.merge_expiry_rerun(records, captures, root)
+    assert refused.value.code == "RERUN_EARLIER_ATTEMPT_INVALID"
+
+
+def test_an_earlier_capture_whose_record_cites_it_but_not_a_401_is_refused(tmp_path: Path, privy) -> None:  # noqa: ANN001
+    root = _stores(tmp_path, _unreadable_401(), _unreadable_401())
+    path = root / f"{EXPIRY}.capture.json"
+    path.write_bytes(path.read_bytes().replace(b'"status":401', b'"status":403'))
+    records, captures = control_proofs.load_privy_store(root)
+    records[EXPIRY]["capture_record_sha256"] = captures[EXPIRY]
     with pytest.raises(control_proofs.ProofRefused) as refused:
         control_proofs.merge_expiry_rerun(records, captures, root)
     assert refused.value.code == "RERUN_EARLIER_ATTEMPT_INVALID"
