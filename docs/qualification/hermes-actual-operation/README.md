@@ -105,7 +105,9 @@ The approved application release pins exactly two Docker image ids, keyed by pla
 The VPS (amd64) id is `sha256:224ede5ab50f69f4a73bcce46a054140b20e2337ead5684147df062879b2f0e1`. Binding reads the host
 platform from code and selects that platform's id. An unknown platform, a third platform, or any id outside the pair is
 refused with a named reason. The image id never comes from an environment value or a file; the operator configuration
-only names it, and the application refuses a handoff with any id other than the host's pinned id.
+only names it, and the application refuses a handoff with any id other than the host's pinned id. The operator refuses
+an ACTUAL configuration whose image id is not that code-owned definition's id for the code-read host platform, and an
+ACTUAL record with no definition; AUTHORED keeps its stand-in image and is not release-bound.
 
 Build the amd64 image on the VPS from tracked source only:
 

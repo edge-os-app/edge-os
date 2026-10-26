@@ -30,7 +30,8 @@ Foreign and unknown objects are never killed, removed, mounted or adopted, and a
 id just inspected (a volume by its name) and is then checked; only a stop that ends clean writes `stopped.json`.
 
 ACTUAL is accepted only through `relay_admission.load_actual_release` with its default registry, which names only the
-adopted release record: every other ACTUAL configuration is refused. The operator never reads the provider key; it only
+adopted release record: every other ACTUAL configuration is refused, and the configured image id must equal the release
+definition's pinned id for this host platform. The operator never reads the provider key; it only
 checks the file is outside the repository and readable by its owner only. No key, key path or environment value is written to the handoff or printed.
 `read_handoff` is the operator's strict reader of its own handoff (format `edge-os.relay-operator-handoff/1`).
 """
@@ -60,6 +61,9 @@ for folder in (REPO / "apps" / "api" / "src", HERE.parent / "hermes_job_support"
     if str(folder) not in sys.path:
         sys.path.insert(0, str(folder))
 
+# One host-platform source and one pinned pair: the operator must agree with the application that binds this handoff.
+from edge_os_api.research import hermes_relay_composition  # noqa: E402
+from edge_os_api.research.hermes_relay_composition import _host_platform, image_for_platform  # noqa: E402
 import relay_supervisor  # noqa: E402
 from relay_admission import ActualRelease, RelayRelease, load_actual_release  # noqa: E402
 from relay_supervisor import LABEL, RelaySupervisor  # noqa: E402
@@ -223,6 +227,20 @@ def _image(value: Any) -> tuple[str, str]:
     return value["reference"], value["id"]
 
 
+def _pinned_release_image(actual: ActualRelease) -> str:
+    """The id this ACTUAL release's code-owned definition pins for this host platform, or OperatorRefused."""
+    matches = [item for item in hermes_relay_composition.RELEASE_DEFINITIONS
+               if item.record_sha256 == actual.record_sha256]
+    if not matches:
+        raise OperatorRefused("the ACTUAL release record has no code-owned release definition")
+    if len(matches) > 1:
+        raise OperatorRefused("more than one code-owned release definition names this ACTUAL release record")
+    try:
+        return image_for_platform(matches[0], _host_platform())
+    except hermes_relay_composition.MountRefused as error:
+        raise OperatorRefused(f"the release definition pins no image for this host platform: {error}") from error
+
+
 def _key_file(value: Any) -> Path:
     """Checked, never read: outside the repository, a regular file (no link) readable by its owner only."""
     path = _absolute(value, "provider_key_file")
@@ -294,6 +312,8 @@ def load_config(raw: bytes) -> OperatorConfig:
         release = actual.release
     else:
         raise OperatorRefused("kind must be AUTHORED or ACTUAL")
+    if actual is not None and image_id != _pinned_release_image(actual):
+        raise OperatorRefused("the configured image id is not the release's pinned id for this host platform")
     return OperatorConfig(target, release, actual, record, ca, reference, image_id, channel["name"], channel_path, key)
 
 

@@ -229,6 +229,8 @@ def _pinned_images(definition: RelayApplicationDefinition) -> dict[str, str]:
         chosen[entry[0]] = entry[1]
     if set(chosen) != set(DOCKER_PLATFORMS):
         raise _Refused("the job images must name exactly linux/arm64 and linux/amd64, one Docker image id each")
+    if len(set(chosen.values())) != len(chosen):
+        raise _Refused("the job images must use a different Docker image id for each platform")
     return chosen
 
 

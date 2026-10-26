@@ -241,6 +241,12 @@ def test_a_definition_that_does_not_pin_exactly_the_two_platforms_is_refused(app
         bind_release(bad)
 
 
+def test_a_definition_that_pins_one_id_for_both_platforms_is_refused(approve) -> None:
+    [bad] = approve(definition(images=(("linux/arm64", IMAGE), ("linux/amd64", IMAGE))))
+    with pytest.raises(MountRefused, match="different Docker image id"):
+        composition.image_for_platform(bad, "linux/arm64")
+
+
 def test_a_listed_id_for_another_platform_is_refused_in_the_handoff(approve, tmp_path: Path,
                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
     [given] = approve(definition())

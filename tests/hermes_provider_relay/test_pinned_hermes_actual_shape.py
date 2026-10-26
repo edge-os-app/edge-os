@@ -180,6 +180,7 @@ def test_the_application_binds_the_cache_value_and_refuses_it_changed_after_bind
 
 
 RELEASE_ID = "SYNTHETIC-hermes-app-1"
+OTHER_PLATFORM_IMAGE = "sha256:" + "0" * 64
 IMAGE_RECEIPT = "HERMES_APP_IMAGE_RECEIPT"  # a kept `source_identity.json` of this candidate's pinned Hermes image
 SPEND_TABLES = ("usage_local.provider_spend_events, usage_local.provider_spend_reservations, "
                 "usage_local.provider_spend_settings")
@@ -307,7 +308,8 @@ def shaped(image_id: str, env, migrated, pg, run_id: str, evidence_root: Path, r
     ca = b"SYNTHETIC CA bundle"
     changes = dict(getattr(request, "param", {}))
     record_changes = changes.pop("record_fields", {})
-    given = definition(images=(("linux/arm64", image_id), ("linux/amd64", image_id)), **changes, record_fields={
+    given = definition(images=(("linux/arm64", image_id), ("linux/amd64", OTHER_PLATFORM_IMAGE)), **changes,
+                       record_fields={
         "release_id": RELEASE_ID, "ca_bundle_sha256": hashlib.sha256(ca).hexdigest(),
         "prompt_cache_options": dict(CACHE), "allowed_fields": list(CACHED_FIELDS), **record_changes})
     monkeypatch.setattr(composition, "RELEASE_DEFINITIONS", (given,))
