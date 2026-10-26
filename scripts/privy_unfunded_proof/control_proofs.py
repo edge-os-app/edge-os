@@ -224,8 +224,8 @@ APP_EXPIRY_CHECKS: tuple[Mapping[str, Any], ...] = (
                "test_existing_refusals_still_precede_the_steps",)},
     {"path": "apps/api/src/edge_os_api/execution/original_transaction.py", "line": 753, "refusal": "INTENT_EXPIRED",
      "where": "_recheck: now >= intent_expires_at, run at line 504 after SIGN_REQUESTED is saved and before "
-              "signer.rpc at line 513, for the swap step (the revoke step uses _release_problem); no test isolates "
-              "this return",
+              "signer.rpc at line 513, for the approve and swap steps (the revoke uses _release_problem); no test "
+              "isolates this return",
      "tests": ()},
     {"path": "apps/api/src/edge_os_api/execution/original_transaction.py", "line": 755, "refusal": "MANDATE_EXPIRED",
      "where": "_recheck: now >= mandate_expires_at; the unit test reaches it through the recheck after the quote "
@@ -240,7 +240,7 @@ APP_EXPIRY_CHECKS: tuple[Mapping[str, Any], ...] = (
      "where": "check_release: now >= valid_until or now >= transaction.request_expires_at refuses the release; "
               "the worker's signer factory admits the release (core/provider_ports.py:730, which reaches "
               "check_release at operating_release.py:299) before it builds the Privy client at line 734. The test "
-              "shows the refusal only, not that call order",
+              "shows the request_expires_at refusal only, not valid_until or that call order",
      "tests": ("apps/api/tests/execution/test_operating_release.py::"
                "test_signer_request_expiry_is_enforced_before_release_expiry",)},
     {"path": "apps/api/src/edge_os_api/execution/service.py", "line": 656, "refusal": "INTENT_EXPIRED",

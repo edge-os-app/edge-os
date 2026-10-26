@@ -250,6 +250,34 @@ CHANGES = {
     "earlier_other_reason": lambda state: state["earlier"][EXPIRY].update(reason="NON_JSON"),
     "earlier_other_request": lambda state: state["earlier"][EXPIRY].update(request_sha256="6" * 64),
     "earlier_extra_key": lambda state: state["earlier"][EXPIRY].update(rerun_of={"x": "y"}),
+    # The re-run record names another row, packet, profile, request or label.
+    "rerun_record_other_specimen": lambda state: state["records"][EXPIRY].update(specimen_id=POSITIVE),
+    "rerun_record_other_profile": lambda state: state["records"][EXPIRY].update(profile="v3"),
+    "rerun_record_other_packet": lambda state: state["records"][EXPIRY].update(packet_id="a" * 64),
+    "rerun_record_other_reply_profile": lambda state: state["records"][EXPIRY].update(reply_profile_id="other"),
+    "rerun_record_other_policy": lambda state: state["records"][EXPIRY].update(policy_id="other-policy"),
+    "rerun_record_other_expected": lambda state: state["records"][EXPIRY].update(expected="POLICY_DENY"),
+    "rerun_record_other_evidence_class": lambda state: state["records"][EXPIRY].update(evidence_class="SYNTHETIC"),
+    "rerun_record_other_provider_proof": lambda state: state["records"][EXPIRY].update(provider_proof="QUALIFIED"),
+    "rerun_record_other_request": lambda state: state["records"][EXPIRY].update(request_sha256="b" * 64),
+    "all_four_name_another_request": lambda state: [
+        item.update(request_sha256="c" * 64) for item in (state["records"][EXPIRY], state["earlier"][EXPIRY],
+                                                          *state["expiry_captures"].values())],
+    "rerun_capture_other_profile": _capture_change("rerun", profile="v3"),
+    "earlier_capture_other_evidence_class": _capture_change("earlier", evidence_class="SYNTHETIC"),
+    "rerun_capture_other_evidence_class": _capture_change("rerun", evidence_class="SYNTHETIC"),
+    # Values of the right truth but the wrong type.
+    "rerun_matches_none": lambda state: state["records"][EXPIRY].update(matches_expectation=None),
+    "earlier_matches_zero": lambda state: state["earlier"][EXPIRY].update(matches_expectation=0),
+    "metadata_valid_one": lambda state: [capture.update(metadata_valid=1)
+                                         for capture in state["expiry_captures"].values()],
+    "byte_count_true": lambda state: [capture.update(byte_count=True)
+                                      for capture in state["expiry_captures"].values()],
+    "status_true": lambda state: [capture.update(status=True) for capture in state["expiry_captures"].values()],
+    # The two attempts are not strictly ordered, though each is consistent on its own.
+    "rerun_captured_at_the_earlier_moment": lambda state: (
+        state["expiry_captures"]["earlier"].update(captured_at="2026-10-26T09:30:00.654321+00:00"),
+        state["earlier"][EXPIRY].update(completed_at="2026-10-26T09:30:00.654321+00:00")),
 }
 UNRECITED = {
     # The evidence does not hang together by hash.
@@ -297,6 +325,11 @@ def test_evidence_that_does_not_cite_itself_or_its_positive_control_stays_unprov
     result = _build(state)
     assert "expiry_freshness" not in result["decision_required"] and "expiry_freshness" not in result["controls"]
     assert result["unproven"]["expiry_freshness"] == {"reason": "PRIVY_RECORD_INVALID"}
+
+
+def test_a_packet_whose_expiry_row_has_another_header_stays_unproven(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(control_proofs, "CONTROL_PROOF_EXPIRED_HEADER", "1792000000001")
+    assert _build(_recorded())["unproven"]["expiry_freshness"] == {"reason": "EXPIRY_REQUEST_NOT_ISOLATED"}
 
 
 def test_the_recite_helper_alone_keeps_the_decision() -> None:
@@ -436,8 +469,13 @@ def test_the_cited_call_order_lines_hold() -> None:
     flow = (REPO / "apps/api/src/edge_os_api/execution/original_transaction.py").read_text(
         encoding="utf-8").splitlines()
     assert flow[503].strip() == "stop = recheck()" and "signer.rpc(" in flow[512]
+    assert flow[647].strip() == "refusal = self._recheck()"
     ports = (REPO / "apps/api/src/edge_os_api/core/provider_ports.py").read_text(encoding="utf-8").splitlines()
     assert 'request_expiry_ms=int(parse_utc(release["transaction"]["request_expires_at"])' in ports[734]
+    assert "self.binding.admit(" in ports[729] and "PrivySignerClient(" in ports[733]
+    release = (REPO / "apps/api/src/edge_os_api/execution/operating_release.py").read_text(
+        encoding="utf-8").splitlines()
+    assert release[298].strip().startswith("check_release(self.release,")
     service = (REPO / "apps/api/src/edge_os_api/execution/service.py").read_text(encoding="utf-8").splitlines()
     assert "self._revalidate(" in service[441] and "def _begin_submission(" in service[414]
     assert "def _revalidate(" in service[625]
