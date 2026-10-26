@@ -102,6 +102,18 @@ def test_an_unexpected_call_target_refuses_the_program_decision() -> None:
 
 def test_a_delegatecall_from_the_program_frame_refuses() -> None:
     records = _chain_records()
+    _trace(records)["calls"].append(_extra_call("DELEGATECALL", caller=chain_proof.ENTRYPOINT))
+    assert _build(records)["unproven"]["opaque_program"]["reason"] == "PROGRAM_FRAME_CALL_REFUSED"
+
+
+def test_a_staticcall_from_the_program_frame_refuses() -> None:
+    records = _chain_records()
+    _trace(records)["calls"].append(_extra_call("STATICCALL", caller=chain_proof.ENTRYPOINT))
+    assert _build(records)["unproven"]["opaque_program"]["reason"] == "PROGRAM_FRAME_CALL_REFUSED"
+
+
+def test_a_foreign_caller_frame_refuses() -> None:
+    records = _chain_records()
     _trace(records)["calls"].append(_extra_call("DELEGATECALL", caller=chain_proof.WALLET,
                                                 target=chain_proof.ENTRYPOINT))
     assert _build(records)["unproven"]["opaque_program"]["reason"] == "FRAME_CALLER_MISMATCH"

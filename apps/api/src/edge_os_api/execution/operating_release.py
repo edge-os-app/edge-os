@@ -354,7 +354,7 @@ APPROVED_CONTROL_DECISIONS: frozenset[tuple[str, str, str]] = frozenset({
     ("input_output_assets", "OUTPUT_TOKEN_NOT_PROVIDER_BOUND",
      "b7c303f625ff3a094c79f81f004fb5a65bdb81599a5a495faafc919292164c33"),
     ("opaque_program", "PROGRAM_BOUND_BY_HOST_AND_TRACE_ONLY",
-     "e231b94de51224b88e8d5ed2d86a354e9f4a4948ef110ae348cb5044c542544c"),
+     "c172e1d574c168d72b4dad9e7a7f3c6d8112be4f7d99c7a28ef3210536380997"),
     ("recipient", "FEE_RECIPIENTS_OBSERVED_NOT_SOURCE_BOUND",
      "4eaa956243fd0d92d767f73620e89b5685538b34bd4c7bab77259f0d17efc8bb"),
 })

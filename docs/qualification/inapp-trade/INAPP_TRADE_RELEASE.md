@@ -129,7 +129,7 @@ accept its own decision.
 | 9 | `approvals` | `ENFORCED` / `PROVIDER_ACTUAL` | v3 summary |
 | 10 | `gas_action_capacity` | `ENFORCED` / `PROVIDER_ACTUAL` | `f5a5e82b…` |
 | 11 | `expiry_freshness` | `DECISION_ACCEPTED` / `BUILDER_DECISION` | `c638035f…`, `PRIVY_REFUSAL_REASON_NOT_READABLE` |
-| 12 | `opaque_program` | `DECISION_ACCEPTED` / `BUILDER_DECISION` | `e231b94d…`, `PROGRAM_BOUND_BY_HOST_AND_TRACE_ONLY` |
+| 12 | `opaque_program` | `DECISION_ACCEPTED` / `BUILDER_DECISION` | `c172e1d5…`, `PROGRAM_BOUND_BY_HOST_AND_TRACE_ONLY` |
 
 ### The decision registry
 
@@ -458,7 +458,7 @@ stay empty until the builder approves the exact hashes (pending step 8).
 
 ### New release content
 
-**SHA-256 of `release.authored.json`: `4648eb16b9f27daa965620c8d39fb926543d7c00564cb3c2c7e6ca3fe1ba5e4d`**
+**SHA-256 of `release.authored.json`: `6951559b6c573ab1cc8dafbfa0aa05ea7e84ede883a43228bfa3a08d94ba58a1`**
 (`sha256sum docs/qualification/inapp-trade/release.authored.json`; a test checks that this document prints it).
 
 The release still carries `{"$fill": name}` markers. Its `release_sha256`, the hash the builder registers, exists

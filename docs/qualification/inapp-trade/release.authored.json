@@ -111,7 +111,7 @@
         "proof_sha256": "c638035f9f5d42651b53da6d7082ea0e3ec6b1f70db5e76781ce347c1d92b5e7",
         "decision_reason": "PRIVY_REFUSAL_REASON_NOT_READABLE"},
       "opaque_program": {"state": "DECISION_ACCEPTED", "evidence_class": "BUILDER_DECISION",
-        "proof_sha256": "e231b94de51224b88e8d5ed2d86a354e9f4a4948ef110ae348cb5044c542544c",
+        "proof_sha256": "c172e1d574c168d72b4dad9e7a7f3c6d8112be4f7d99c7a28ef3210536380997",
         "decision_reason": "PROGRAM_BOUND_BY_HOST_AND_TRACE_ONLY"}
     }
   }

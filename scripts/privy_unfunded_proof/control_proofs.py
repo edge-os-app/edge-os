@@ -101,9 +101,10 @@ _CLAIMS: Mapping[str, tuple[str, ...]] = {
         "build_program_hex for the release input token, pool, direction and program fee (LOCAL_TESTED).",
         "A call trace of that exact program at the pinned block shows that every CALL target is the entrypoint, "
         "router, pool, WMON, MOE or a pinned observed fee recipient; every DELEGATECALL and STATICCALL frame is "
-        "made by an admitted caller; no frame creates a contract, self-destructs or moves native value; the "
-        "whole MOE output reaches the wallet; and only the pool and the pinned fee recipients gain WMON within "
-        "their bounds.",
+        "made by an admitted caller other than the program frame, and a delegate or static call directly from "
+        "the program frame refuses; no frame creates a contract, self-destructs or moves native value; the whole "
+        "MOE output reaches the wallet; and only the pool and the pinned fee recipients gain WMON within their "
+        "bounds.",
     ),
 }
 _LIMITS: Mapping[str, tuple[str, ...]] = {
@@ -940,7 +941,7 @@ def _opaque_frames(trace: Any) -> dict[str, Any]:
     static_targets: set[str] = set()
     touched: dict[str, dict[str, Any]] = {}
 
-    def walk(frame: Any, admitted_parent: bool, context: str | None) -> None:
+    def walk(frame: Any, admitted_parent: bool, context: str | None, parent_is_program_frame: bool) -> None:
         if not isinstance(frame, Mapping):
             raise _Unproven("TRACE_TRANSFERS_INVALID")
         raw_to, raw_from = frame.get("to"), frame.get("from")
@@ -960,11 +961,15 @@ def _opaque_frames(trace: Any) -> dict[str, Any]:
             call_targets.add(to)
             admitted, child_context = True, to
         elif frame_type == "STATICCALL":
+            if parent_is_program_frame:
+                raise _Unproven("PROGRAM_FRAME_CALL_REFUSED")
             if not admitted_parent:
                 raise _Unproven("UNEXPECTED_FRAME_CALLER")
             static_targets.add(to)
             admitted, child_context = True, to
         else:
+            if parent_is_program_frame:
+                raise _Unproven("PROGRAM_FRAME_CALL_REFUSED")
             if not admitted_parent:
                 raise _Unproven("UNEXPECTED_FRAME_CALLER")
             delegate_targets.add(to)
@@ -973,10 +978,11 @@ def _opaque_frames(trace: Any) -> dict[str, Any]:
         entry = touched.setdefault(to, {"frame_types": set(), "callers": set()})
         entry["frame_types"].add(frame_type)
         entry["callers"].add(caller)
+        is_program_frame = context is None
         for child in frame.get("calls") or []:
-            walk(child, admitted, child_context)
+            walk(child, admitted, child_context, is_program_frame)
 
-    walk(trace, False, None)
+    walk(trace, False, None, False)
     if not call_targets:
         raise _Unproven("TRACE_TRANSFERS_INVALID")
     listing = []

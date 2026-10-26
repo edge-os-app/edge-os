@@ -551,7 +551,7 @@ DEFINED_PROOF_HASHES = {
     "recipient": "4eaa956243fd0d92d767f73620e89b5685538b34bd4c7bab77259f0d17efc8bb",
     "fees": "6232e2a96d9623fa7a442dc36bdb8f467085805ee685adf9b8ada314bcbf1675",
     "expiry_freshness": "c638035f9f5d42651b53da6d7082ea0e3ec6b1f70db5e76781ce347c1d92b5e7",
-    "opaque_program": "e231b94de51224b88e8d5ed2d86a354e9f4a4948ef110ae348cb5044c542544c",
+    "opaque_program": "c172e1d574c168d72b4dad9e7a7f3c6d8112be4f7d99c7a28ef3210536380997",
 }
 PROOFS_4_SHA256 = {
     "controls.json": "9182273d304f1ebea0268a7151d7cfb9709ae89cda7929ae8861378d7129c8f1",

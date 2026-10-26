@@ -33,8 +33,8 @@ control-proofs/
 
 | File | SHA-256 |
 | --- | --- |
-| `opaque_program.proof.json` | `e231b94de51224b88e8d5ed2d86a354e9f4a4948ef110ae348cb5044c542544c` |
-| `controls.json` | `10d0558cf789d66d9934fdf75e3e05944fdba465f0f636a536051e91dfd9ea16` |
+| `opaque_program.proof.json` | `c172e1d574c168d72b4dad9e7a7f3c6d8112be4f7d99c7a28ef3210536380997` |
+| `controls.json` | `06749a3efd7122a18d75e6ddae7c5a6da6e5790a475b38697ecf448fdabb2da7` |
 
 The seven artifact files in `proofs-5` are byte-identical to `proofs-4`. `tests/execution/test_inapp_trade_release.py`
 checks this, and `tests/privy_unfunded_proof` rebuilds the artifacts from the committed stores.
