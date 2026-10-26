@@ -46,6 +46,7 @@ from edge_os_api.research.interpretation_publication import (
     OfferedBook, RecordPublicationCheck, first_reading_records, questions_to_json, reply_records,
 )
 from edge_os_api.research.outcome_router import Routed
+from edge_os_api.research.turn_limits import TurnLimits
 
 log = logging.getLogger("edge_os")
 
@@ -62,10 +63,12 @@ TEXT_QUESTION_PREFIX = "ask-"
 UNCERTAIN = frozenset({"TIMED_OUT", "UNKNOWN", "INTERRUPTED"})
 
 MALFORMED = "malformed_model_output"
+BUDGET_EXHAUSTED = "budget_exhausted"
 UNAVAILABLE = "interpreter_unavailable"
 OUTCOME_UNKNOWN = "interpreter_outcome_unknown"
 REJECTION_DETAIL = "The model's answer could not be used (reason: {reason}). Nothing was changed. You can try again."
 UNAVAILABLE_TEXT = {
+    "budget_exhausted": "The model budget for this demo is used. The request is saved. No model call was made.",
     "provider_failed": "The model provider did not return a result. This is a system failure, not a verdict on the idea. "
                        "The request is saved. You can try again.",
     "timed_out": "It is not known whether the model provider finished. The request is saved. This attempt was not repeated.",
@@ -107,8 +110,10 @@ def retry_state(history: Sequence[AttemptView], has_interpretation: bool, head_r
     return RetryState(True, last.start.attempt_id, None)
 
 
-def failure_for(status: str, parse_result: str) -> tuple[str, str, str]:
+def failure_for(status: str, parse_result: str, error_class: str | None = None) -> tuple[str, str, str]:
     """The finding code, plain words and retry hint that a settled, unusable attempt maps to."""
+    if error_class == "SpendCapReached":
+        return BUDGET_EXHAUSTED, UNAVAILABLE_TEXT["budget_exhausted"], "NOT_RETRYABLE"
     if status == "PROVIDER_FAILED":
         return UNAVAILABLE, UNAVAILABLE_TEXT["provider_failed"], "SAFE_SAME_KEY"
     if parse_result.startswith("REJECTED:"):
@@ -179,14 +184,16 @@ class HermesResearch:
     """Saved Research workflow with Hermes as the interpreter. One instance serves one application."""
 
     def __init__(self, runner: HermesTurnRunner, session_factory: Callable[[], Session], guard: AdvisoryLockGuard,
-                 monotonic: Callable[[], float], config: HermesInterpreterConfig = LOCAL_FAKE_CONFIG) -> None:
+                 monotonic: Callable[[], float], config: HermesInterpreterConfig = LOCAL_FAKE_CONFIG,
+                 turn_limits: TurnLimits | None = None) -> None:
         self._session_factory = session_factory
         self.config = config
         self.guard = guard
         self.store = PostgresAttemptStore(session_factory)
         self.ledger = AttemptLedger(self.store, new_id=lambda: str(uuid.uuid4()), now=service.utcnow)
+        self.turn_limits = turn_limits or TurnLimits(session_factory)
         self.interpreter = HermesInterpreter(config, runner, self.ledger, monotonic, guard=guard,
-                                             publication=RecordPublicationCheck())
+                                             publication=RecordPublicationCheck(), limits=self.turn_limits)
 
     def label(self) -> dict[str, str]:
         """What the interpreter is configured to be. A LIVE release names its release, provider and model; it never
@@ -227,6 +234,13 @@ class HermesResearch:
     def _raise_or_record_unavailable(self, session: Session, principal: Principal, intake_id: uuid.UUID,
                                      result: Unavailable) -> None:
         reason = result.reason_code
+        if reason in {"turn_in_flight", "turn_capacity_full", "turn_limit_reached"}:
+            raise AppError(429, "INTERPRETATION", "UNAVAILABLE", reason, [finding(reason, "/", result.detail)],
+                           "SAFE_SAME_KEY")
+        if reason == "budget_exhausted":
+            self._record_failure(session, principal, intake_id, result.attempt_id, BUDGET_EXHAUSTED,
+                                 UNAVAILABLE_TEXT["budget_exhausted"], "NOT_RETRYABLE")
+            return
         if reason == "attempt_in_flight":
             raise _conflict("attempt_in_flight", "An earlier attempt for this request has not finished.")
         if reason == "retry_target_invalid":
@@ -379,8 +393,12 @@ class HermesResearch:
     def _publish_follow_up(self, session: Session, principal: Principal, intake_id: uuid.UUID, result: InterpretResult,
                            answer: ClarificationAnswer, question_id: str, question: str) -> tuple[int, dict[str, Any]]:
         if isinstance(result, Unavailable):
+            if result.reason_code == "budget_exhausted":
+                raise AppError(429, "INTERPRETATION", "UNAVAILABLE", BUDGET_EXHAUSTED,
+                               [finding(BUDGET_EXHAUSTED, "/", result.detail)], "NOT_RETRYABLE")
             if result.reason_code in {"attempt_in_flight", "retry_target_invalid", "revision_moved", "attempt_not_recorded",
-                                      "result_not_recorded"}:
+                                      "result_not_recorded", "turn_in_flight", "turn_capacity_full",
+                                      "turn_limit_reached"}:
                 self._raise_or_record_unavailable(session, principal, intake_id, result)
             return 200, service.load_bundle(session, principal, intake_id, self)
         if isinstance(result, OutputRejected):
@@ -615,7 +633,7 @@ class HermesResearch:
         if last.start.identity.purpose != "INTERPRET" or settled is None or (
                 settled.status == "COMPLETED" and settled.parse_result == "ACCEPTED"):
             return
-        code, detail, retry = failure_for(settled.status, settled.parse_result)
+        code, detail, retry = failure_for(settled.status, settled.parse_result, settled.error_class)
         self._record_failure(session, principal, intake_id, last.start.attempt_id, code, detail, retry)
 
     def _recover(self, session: Session, principal: Principal, intake_id: uuid.UUID, view: AttemptView) -> None:

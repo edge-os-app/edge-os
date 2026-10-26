@@ -10,7 +10,12 @@ const mocks = vi.hoisted(() => ({
   samples: [{ scenario_id: "hunch", label: "Rough hunch", text: "SAMPLE TEXT", input_class: "LOOSE_INTUITION", requested_job: "CREATE_STRATEGY", restrictions: ["no leverage"], declared_market: null }],
 }));
 vi.mock("../lib/api", () => ({
-  ApiError: class extends Error { status = 503; detail = "A required service is unavailable. Retry later."; },
+  ApiError: class extends Error {
+    status: number; code: string; detail: string;
+    constructor(status = 503, code = "error", detail = "A required service is unavailable. Retry later.") {
+      super(detail); this.status = status; this.code = code; this.detail = detail;
+    }
+  },
   api: {
     interpreter: (...args: unknown[]) => mocks.interpreter(...args),
     list: (...args: unknown[]) => mocks.list(...args),
@@ -175,5 +180,18 @@ describe("preparation copy follows the configured interpreter", () => {
     expect(note()).not.toMatch(/\bfree\b/i);
     expect(note()).not.toMatch(/may incur a model cost/i);
     expect(note()).not.toMatch(/fixture/i);
+  });
+});
+
+
+describe("the unavailable interpreter state", () => {
+  it("shows the explicit detail and no fixture label when the live route is unavailable", async () => {
+    const { ApiError } = await import("../lib/api");
+    mocks.interpreter.mockRejectedValue(new ApiError(503, "interpreter_unavailable",
+      "The live interpretation service is unavailable. The saved request is unchanged."));
+    render(<ResearchHome userId="user-1" {...props} />);
+    expect(await screen.findByText("The live interpretation service is unavailable. The saved request is unchanged."))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/fixture/i)).toBeNull();
   });
 });

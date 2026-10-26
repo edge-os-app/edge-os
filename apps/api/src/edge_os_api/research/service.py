@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 import datetime as dt
 import uuid
-from typing import Any
+from typing import Any, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -21,7 +21,7 @@ from edge_os_api.strategies import compiler as strategy_compiler
 from edge_os_api.core.authentication import Principal
 from edge_os_api.core.errors import AppError, finding, invalid, not_found, service_unavailable
 from edge_os_api.research.fixture_interpreter import FixtureInterpreter, find_scenario, open_questions
-from edge_os_api.records.models import IdempotencyRecord, Record, StrategyRevision
+from edge_os_api.records.models import IdempotencyRecord, InterpretationAttempt, Record, StrategyRevision
 from edge_os_api.research.outcome_router import Routed, route
 
 INTERPRETER = FixtureInterpreter()
@@ -325,6 +325,22 @@ def load_bundle(session: Session, principal: Principal, intake_id: uuid.UUID, he
             "reply": attempts["reply"] if attempts else None,
         },
     }
+
+
+def has_attempts(session: Session, principal: Principal, intake_id: uuid.UUID) -> bool:
+    """True when the host Hermes interpreter wrote at least one attempt for this request."""
+    return session.execute(select(InterpretationAttempt.attempt_id).where(
+        InterpretationAttempt.owner_id == principal.user_id,
+        InterpretationAttempt.intake_record_id == intake_id).limit(1)).first() is not None
+
+
+def has_attempts_for(session: Session, principal: Principal, intake_ids: Sequence[uuid.UUID]) -> bool:
+    """True when any listed request has a host Hermes attempt."""
+    if not intake_ids:
+        return False
+    return session.execute(select(InterpretationAttempt.attempt_id).where(
+        InterpretationAttempt.owner_id == principal.user_id,
+        InterpretationAttempt.intake_record_id.in_(list(intake_ids))).limit(1)).first() is not None
 
 
 def list_requests(session: Session, principal: Principal, limit: int = 50) -> tuple[list[dict[str, Any]], bool]:

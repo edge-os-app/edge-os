@@ -1,8 +1,9 @@
 [Unit]
-Description=Edge OS Hermes relay application (host-side, loopback only)
+Description=Edge OS Hermes relay application (host-side; bind from EDGE_OS_APP_BIND_HOST)
 Documentation=file:/opt/edge-os/deploy/coolify/RUNBOOK.md
 Requires=edge-os-socket-proxy.service
-After=edge-os-socket-proxy.service
+After=edge-os-socket-proxy.service docker.service
+Wants=docker.service
 # Fail closed until an approved ACTUAL relay operation exists and the controller wrote its handoff line.
 ConditionPathExists=/etc/edge-os/hermes-app.enabled
 
@@ -13,6 +14,7 @@ Group=edge-os-relay-share
 SupplementaryGroups=edge-os-research
 WorkingDirectory=/opt/edge-os
 EnvironmentFile=/etc/edge-os/hermes-app.env
+Environment=EDGE_OS_APP_BIND_HOST=127.0.0.1
 Environment=DOCKER_HOST=unix:///run/edge-os/research/docker.sock
 Environment=DOCKER_CONFIG=/var/lib/edge-os/research/docker-config
 Environment=PYTHONDONTWRITEBYTECODE=1

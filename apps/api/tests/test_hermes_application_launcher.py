@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from edge_os_api.core.hermes_public_route import PublicRouteGuard
 from edge_os_api.research import hermes_relay_composition as composition
 from edge_os_api.research.hermes_relay_composition import bind_release
 from edge_os_api.research.interpretation_workflow import LABEL, LOCAL_FAKE_CONFIG, HermesResearch
@@ -138,7 +139,8 @@ def test_an_opened_application_is_served_on_loopback_with_its_exact_runner_and_c
                                              "run_id": "launch-unit"})
     assert serving["factory"] == (unreachable, {"hermes_runner": opened.runner, "hermes_config": opened.config})
     app, options, closed_while_serving = serving["run"]
-    assert app is serving["app"] and options == {"host": "127.0.0.1", "port": 8765, "log_level": "warning"}
+    assert isinstance(app, PublicRouteGuard) and app.app is serving["app"]
+    assert options == {"host": "127.0.0.1", "port": 8765, "log_level": "warning"}
     assert closed_while_serving == 0 and opened.closed == 1
     assert '"serving": "SYNTHETIC-launch-1"' in capsys.readouterr().out
 
@@ -192,3 +194,22 @@ def test_a_live_release_label_names_the_configured_release_and_claims_no_call(ap
     for named in ("SYNTHETIC-app-1", "synthetic-provider", "synthetic-model/1", "USD 0.30"):
         assert named in label["notice"]
     assert "does not show that a model call completed" in label["notice"] and "No real model" not in label["notice"]
+
+
+# --- the host bind address (HERMES-ROUTE-L4) --------------------------------------------------------------------
+
+
+def test_a_private_ipv4_bind_address_is_accepted(serving, monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("EDGE_OS_APP_BIND_HOST", "10.0.1.1")
+    assert serving["module"].main(argv(tmp_path)) == 0
+    _, options, _ = serving["run"]
+    assert options["host"] == "10.0.1.1"
+
+
+@pytest.mark.parametrize("value", ["0.0.0.0", "::1", "fd1a:b4ba:f96b::1", "10.0.1", "example", "8.8.8.8",
+                                   "169.254.1.1", "10.0.1.1:8011"])
+def test_an_invalid_bind_address_is_refused_before_settings(launcher, monkeypatch, tmp_path: Path, value: str) -> None:
+    monkeypatch.setenv("EDGE_OS_APP_BIND_HOST", value)
+    monkeypatch.setattr(launcher, "load_settings", lambda: pytest.fail("settings were read"))
+    assert launcher.main(argv(tmp_path)) == 2
+    assert list(tmp_path.iterdir()) == []

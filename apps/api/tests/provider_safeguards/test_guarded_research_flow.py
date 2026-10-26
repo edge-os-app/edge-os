@@ -11,6 +11,7 @@ import json
 import socket
 import sys
 import threading
+import uuid
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -164,14 +165,17 @@ def test_an_exhausted_cap_saves_a_refused_attempt_and_the_boundary_is_never_call
     delegate = CaseRunner(turn_result(case("concrete-thesis")["provider"]))
     client = make_guarded(delegate, tight)
 
-    create(client, owner_a, "concrete-thesis")
+    created = create(client, owner_a, "concrete-thesis")
 
+    assert created.status_code == 201, created.text
+    assert created.json()["outcomes"][-1]["record"]["content"]["findings"][0]["code"] == "budget_exhausted"
     assert delegate.turns == [] and tight.committed_usd() == 0
     [(status, count, error, _)] = settlement_rows(client)[-1:]
     assert (status, count, error) == ("PROVIDER_FAILED", 0, "SpendCapReached")
 
 
-def test_simultaneous_requests_start_only_as_many_boundary_calls_as_the_cap_allows(make_guarded, owner_a, spend) -> None:
+def test_simultaneous_requests_start_only_as_many_boundary_calls_as_the_cap_allows(
+        make_guarded, owner_a, owner_b, signer, spend) -> None:
     release, entered, lock = threading.Event(), [], threading.Lock()
 
     class Holding:
@@ -184,13 +188,16 @@ def test_simultaneous_requests_start_only_as_many_boundary_calls_as_the_cap_allo
     client = make_guarded(Holding(), scope_for=lambda turn: turn.attempt_id)
     since = database_now(client)
     results: list[int] = []
+    owners = [owner_a, owner_b]
+    owners.extend({"Authorization": f"Bearer {signer.token(f'did:privy:test-owner-{index}-{uuid.uuid4().hex[:8]}')}"}
+                  for index in range(4))
 
-    def go() -> None:
-        outcome = client.post("/v1/research/requests", json=intake_body("concrete-thesis"), headers=owner_a)
+    def go(headers: dict[str, str]) -> None:
+        outcome = client.post("/v1/research/requests", json=intake_body("concrete-thesis"), headers=headers)
         with lock:
             results.append(outcome.status_code)
 
-    threads = [threading.Thread(target=go) for _ in range(6)]
+    threads = [threading.Thread(target=go, args=(headers,)) for headers in owners]
     for thread in threads:
         thread.start()
     for _ in range(300):
@@ -204,8 +211,23 @@ def test_simultaneous_requests_start_only_as_many_boundary_calls_as_the_cap_allo
 
     assert len(entered) == 2
     assert spend.committed_usd() == Decimal("0.0074285") * 2
-    refused = [r for r in settlement_rows(client, since) if r[2] == "SpendCapReached"]
-    assert len(refused) == 4 and all(r[1] == 0 for r in refused)
+    assert sorted(results) == [201, 201, 429, 429, 429, 429]
+    assert [r for r in settlement_rows(client, since) if r[2] == "SpendCapReached"] == []
+
+
+def test_spend_already_recorded_counts_toward_the_cap(make_guarded, owner_a, tmp_path: Path) -> None:
+    tight = SpendLedger(tmp_path / "recorded.sqlite", cap_usd=Decimal("0.050"), price=PRICE)
+    delegate = CaseRunner(turn_result(case("concrete-thesis")["provider"]),
+                          turn_result(case("concrete-thesis")["provider"]))
+    client = make_guarded(delegate, tight)
+
+    first = create(client, owner_a, "concrete-thesis")
+    second = create(client, owner_a, "concrete-thesis")
+
+    assert first.status_code == 201 and second.status_code == 201, second.text
+    assert len(delegate.turns) == 1
+    assert tight.committed_usd() == Decimal("0.0074285")
+    assert second.json()["outcomes"][-1]["record"]["content"]["findings"][0]["code"] == "budget_exhausted"
 
 
 def test_a_failure_message_with_a_credential_in_it_reaches_no_saved_record_response_or_log(

@@ -37,6 +37,9 @@ x-api-environment: &api-environment
   EDGE_OS_CORS_ALLOWED_ORIGINS: ${EDGE_OS_CORS_ALLOWED_ORIGINS:?set EDGE_OS_CORS_ALLOWED_ORIGINS}
   EDGE_OS_BUILD_SHA: ${EDGE_OS_BUILD_SHA:?set EDGE_OS_BUILD_SHA to the deployed source commit}
   EDGE_OS_INTERPRETER: fixture
+  # The six public Hermes paths are forwarded to the host application. An empty value keeps the API
+  # starting and makes those six paths return 503 interpreter_unavailable in production.
+  EDGE_OS_HERMES_APP_URL: ${EDGE_OS_HERMES_APP_URL:-}
   EDGE_OS_WALLET_PROVIDER: unavailable
   EDGE_OS_EXECUTION_MODE: unavailable
   EDGE_OS_RESEARCH_HISTORY_MODE: unavailable

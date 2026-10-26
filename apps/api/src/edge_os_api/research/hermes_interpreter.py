@@ -22,6 +22,7 @@ from .interpretation_attempts import (
     AlreadySettled, AttemptIdentity, AttemptInFlight, AttemptLedger, AttemptSettlement, AttemptView, ExecutionGuard,
     LateResult, RetryTargetInvalid, RevisionMoved, Usage,
 )
+from .turn_limits import TurnLimitReached, TurnLimits
 from .interpretation_response import (
     ADOPT_QUESTION_ID, APPLICATION_OWNED_FIELDS, ClarificationAnswer, OfferedQuestion, ParsedInterpretation, Rejection,
     parse_follow_up_response, parse_interpretation_response, unstorable,
@@ -185,6 +186,10 @@ UNAVAILABLE_DETAIL = {
     "attempt_not_recorded": "The attempt could not be recorded, so no model call was made.",
     "result_not_recorded": "The result could not be recorded, so it was not used.",
     "result_arrived_late": "The result arrived after the attempt was closed. It is kept for review and was not used.",
+    "turn_in_flight": "An earlier interpretation turn for this account is still running. Wait for it to finish.",
+    "turn_capacity_full": "The demo interpretation service is busy. Try again shortly.",
+    "turn_limit_reached": "This account reached the interpretation limit for the last hour. Try again later.",
+    "budget_exhausted": "The model budget for this demo is used. The request is saved. No model call was made.",
 }
 STATUS_BY_RUNNER_STATUS = {"RETURNED": "COMPLETED", "TRUNCATED": "TRUNCATED", "PROVIDER_FAILED": "PROVIDER_FAILED",
                            "TIMED_OUT": "TIMED_OUT"}
@@ -295,7 +300,7 @@ def _task_json(task: Mapping[str, Any]) -> str:
 class HermesInterpreter:
     def __init__(self, config: HermesInterpreterConfig, runner: HermesTurnRunner, ledger: AttemptLedger,
                  monotonic: Callable[[], float], guard: ExecutionGuard | None = None,
-                 publication: PublicationCheck | None = None) -> None:
+                 publication: PublicationCheck | None = None, limits: TurnLimits | None = None) -> None:
         if config.runtime_label not in RUNTIME_LABELS:
             raise ValueError(f"unknown runtime label {config.runtime_label!r}")
         if config.runtime_label == "LIVE" and (config.live_release is None or config.live_release.model != config.model):
@@ -303,6 +308,7 @@ class HermesInterpreter:
         self._config, self._runner, self._ledger, self._monotonic = config, runner, ledger, monotonic
         self._guard = guard
         self._publication = publication
+        self._limits = limits
 
     def interpret(self, owner_id: str, intake_record_id: str, intake: Mapping[str, Any],
                   retry_of: str | None = None) -> InterpretResult:
@@ -384,7 +390,13 @@ class HermesInterpreter:
                      retry_of: str | None,
                      parse: Callable[[str], ParsedInterpretation | Rejection]) -> InterpretResult:
         try:
-            start = self._ledger.begin(owner_id, intake_record_id, identity, retry_of, attempt_id=attempt_id)
+            if self._limits is None:
+                start = self._ledger.begin(owner_id, intake_record_id, identity, retry_of, attempt_id=attempt_id)
+            else:
+                with self._limits.admission(owner_id, intake_record_id):
+                    start = self._ledger.begin(owner_id, intake_record_id, identity, retry_of, attempt_id=attempt_id)
+        except TurnLimitReached as refused:
+            return Unavailable(None, refused.reason, refused.detail)
         except AttemptInFlight:
             return Unavailable(None, "attempt_in_flight", UNAVAILABLE_DETAIL["attempt_in_flight"])
         except RetryTargetInvalid:
@@ -461,6 +473,8 @@ class HermesInterpreter:
             return Interpreted(attempt_id, outcome)
         if isinstance(outcome, Rejection):
             return OutputRejected(attempt_id, outcome)
+        if status == "PROVIDER_FAILED" and error_class == "SpendCapReached":
+            return Unavailable(attempt_id, "budget_exhausted", UNAVAILABLE_DETAIL["budget_exhausted"])
         reason = UNAVAILABLE_BY_STATUS[status]
         return Unavailable(attempt_id, reason, UNAVAILABLE_DETAIL[reason])
 

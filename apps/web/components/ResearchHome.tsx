@@ -55,6 +55,7 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
   const [fixtureNotice, setFixtureNotice] = useState("");
   const [runtimeKind, setRuntimeKind] = useState<string | null>(null);
   const [samplesError, setSamplesError] = useState(false);
+  const [interpreterUnavailable, setInterpreterUnavailable] = useState("");
   type FormState = { text: string; kind: InputClass; restrictions: string[]; useMarket: boolean };
   const [undoExample, setUndoExample] = useState<FormState | null>(null);
   const [lastExample, setLastExample] = useState<FormState | null>(null); // what the last example filled in
@@ -66,7 +67,6 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
   const [submitError, setSubmitError] = useState(""); // a failed request, shown beside the button
   const submitMessage = useRef<HTMLParagraphElement>(null);
   const job = KINDS.find((k) => k.id === kind)!.job;
-  const fixtureKind = runtimeKind ?? "FIXTURE";
 
   // Focus returns to the control that opened the request. The saved list loads after mount, so wait for it,
   // and never take focus from a field the person has already moved to.
@@ -115,8 +115,12 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
 
   useEffect(() => {
     let cancelled = false;
-    api.interpreter().then((r) => { if (!cancelled) { setSamples(r.samples); setFixtureNotice(r.interpreter.notice); setRuntimeKind(r.interpreter.kind); } })
-      .catch(() => { if (!cancelled) setSamplesError(true); });
+    api.interpreter().then((r) => { if (!cancelled) { setSamples(r.samples); setFixtureNotice(r.interpreter.notice); setRuntimeKind(r.interpreter.kind); setInterpreterUnavailable(""); } })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setSamplesError(true);
+        if (e instanceof ApiError && [0, 502, 503, 504].includes(e.status)) setInterpreterUnavailable(e.detail);
+      });
     void loadList(true);
     return () => { cancelled = true; };
   }, [loadList]);
@@ -206,7 +210,7 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
         {job === "INVESTIGATE_EFFECT" ? (
           <label className="choice">
             <input type="checkbox" checked={useMarket} onChange={(e) => setUseMarket(e.target.checked)} />
-            <span>Use the synthetic fixture market. <span className="muted">{fixtureKind === "FIXTURE" ? "Leave this off and we will ask which market." : "Leave this off and the application suggests the synthetic fixture market for you to adopt."}</span></span>
+            <span>{runtimeKind === null ? "Use the synthetic market." : "Use the synthetic fixture market."} <span className="muted">{runtimeKind === null || runtimeKind === "FIXTURE" ? "Leave this off and we will ask which market." : "Leave this off and the application suggests the synthetic fixture market for you to adopt."}</span></span>
           </label>
         ) : null}
 
@@ -240,8 +244,12 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
         </fieldset>
 
         <div className="stack" style={{ gap: 8 }}>
-          <p className="muted" id={`${formId}-examples`}>{fixtureKind === "FIXTURE" ? "Fixture examples." : "Examples."} {fixtureNotice || "The fixture interpreter answers only these."} Picking one fills the form; you can edit it.</p>
-          {samplesError ? <p role="status" className="muted">The examples could not be loaded. You can still write your own request.</p> : null}
+          {interpreterUnavailable ? (
+            <p role="status" className="status err">{interpreterUnavailable}</p>
+          ) : (
+            <p className="muted" id={`${formId}-examples`}>{runtimeKind === "FIXTURE" ? "Fixture examples." : "Examples."} {fixtureNotice || (runtimeKind === "FIXTURE" ? "The fixture interpreter answers only these." : "")} Picking one fills the form; you can edit it.</p>
+          )}
+          {samplesError && !interpreterUnavailable ? <p role="status" className="muted">The examples could not be loaded. You can still write your own request.</p> : null}
           {undoExample ? <button type="button" className="btn btn-secondary" onClick={restoreTyped}>Restore what I typed{editedSinceExample ? " (replaces your edits)" : ""}</button> : null}
           {samples.map((s) => (
             <button key={s.scenario_id} type="button" className="example" aria-describedby={`${formId}-examples`} onClick={() => fill(s)}>

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Callable, TypeVar
 
@@ -30,8 +31,12 @@ from edge_os_api.research.interpretation_workflow import LOCAL_FAKE_CONFIG, Herm
 from edge_os_api.replay import saved_runs as spot_replay_api
 from edge_os_api.core.authentication import Principal, Verifier, require_principal
 from edge_os_api.core.database import current_revision, make_engine, make_session_factory, require_head, script_head
-from edge_os_api.core.errors import AppError, finding, install_handlers, invalid, not_found, service_unavailable
+from edge_os_api.core.errors import (
+    AppError, finding, install_handlers, interpreter_unavailable, invalid, not_found, service_unavailable,
+)
 from edge_os_api.core.hosted_deployment import HostedDeploymentRefused, check_hosted_deployment
+from edge_os_api.core.hermes_proxy import HermesProxyMiddleware, public_forward_enabled
+from edge_os_api.core.limits import MAX_BODY_BYTES
 from edge_os_api.research.fixture_interpreter import samples
 from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, HistoryInvestigationBody, InvestigationBody, InvestigationJobBody, MarketAdoptionBody, NansenReportBody, PublicationBody, RetryBody, SpotReplayBody
 from edge_os_api.core.settings import ConfigError, Settings, load_settings
@@ -49,7 +54,6 @@ from edge_os_api.revocation import routes as removal_routes
 from edge_os_api.stops import routes as stop_routes
 
 log = logging.getLogger("edge_os")
-MAX_BODY_BYTES = 256 * 1024
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
@@ -105,6 +109,19 @@ def parse_body(model: type[ModelT], data: Any) -> ModelT:
         findings = [finding(item["type"], "/" + "/".join(str(p) for p in item["loc"]), item["msg"])
                     for item in error.errors()][:20]
         raise AppError(422, "VALIDATION", "INVALID_INPUT", "validation_error", findings) from None
+
+
+def enforce_write_limit(request: Request, principal: Principal, settings: Settings,
+                        session_factory: Callable[[], Session]) -> None:
+    """Count every authenticated write in the owner's shared PostgreSQL window; reads are not limited."""
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return
+    with session_factory() as session:
+        try:
+            rate_limit.count_write(session, principal.user_id, settings.write_rate_per_minute)
+        except SQLAlchemyError:
+            session.rollback()
+            raise service_unavailable("SAFE_SAME_KEY") from None
 
 
 def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner | None = None,
@@ -198,6 +215,10 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     # authored fixtures in local/test configuration, fail-closed unavailable ports in production.
     app.state.financial = build_financial_services(session_factory, settings, role="api")
     install_handlers(app)
+    if public_forward_enabled(settings):
+        app.add_middleware(HermesProxyMiddleware, settings=settings,
+                           write_limit=lambda request, principal: enforce_write_limit(
+                               request, principal, settings, session_factory))
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["GET", "POST"],
                        allow_headers=["Authorization", "Content-Type"], allow_credentials=False)
 
@@ -237,15 +258,7 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
         return JSONResponse(ready)
 
     def limit_writes(request: Request, principal: Principal = Depends(require_principal)) -> None:
-        """Count every authenticated write in the owner's shared PostgreSQL window; reads are not limited."""
-        if request.method in {"GET", "HEAD", "OPTIONS"}:
-            return
-        with session_factory() as session:
-            try:
-                rate_limit.count_write(session, principal.user_id, settings.write_rate_per_minute)
-            except SQLAlchemyError:
-                session.rollback()
-                raise service_unavailable("SAFE_SAME_KEY") from None
+        enforce_write_limit(request, principal, settings, session_factory)
 
     private = APIRouter(prefix="/v1", dependencies=[Depends(require_principal), Depends(limit_writes)])
 
@@ -299,6 +312,11 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
                       session: Session = Depends(get_session)) -> dict[str, Any]:
         list_saved = hermes.list_requests if hermes else service.list_requests
         requests, has_more = run(session, lambda: list_saved(session, principal))
+        if hermes is None and requests:
+            ids = [uuid.UUID(row["intake_record_id"]) for row in requests]
+            if run(session, lambda: service.has_attempts_for(session, principal, ids)):
+                raise interpreter_unavailable("The saved list includes a request read by the live Hermes interpreter. "
+                                              "Use the live interpretation service.")
         return {"requests": requests, "has_more": has_more}
 
     @private.get("/research/requests/{intake_id}")
@@ -307,6 +325,9 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
         parsed = service.parse_uuid(intake_id)
         if parsed is None:
             raise not_found()
+        if hermes is None and run(session, lambda: service.has_attempts(session, principal, parsed)):
+            raise interpreter_unavailable("This request is read by the live Hermes interpreter. "
+                                          "Use the live interpretation service.")
         return run(session, lambda: service.load_bundle(session, principal, parsed, hermes))
 
     @private.get("/research/requests/{intake_id}/investigation-proposal")
@@ -473,6 +494,11 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     def answer(intake_id: str, data: Any = Depends(read_json), principal: Principal = Depends(require_principal),
                session: Session = Depends(get_session)) -> JSONResponse:
         body = parse_body(ClarificationBody, data).model_dump()
+        parsed = service.parse_uuid(intake_id)
+        if hermes is None and parsed is not None and run(
+                session, lambda: service.has_attempts(session, principal, parsed)):
+            raise interpreter_unavailable("This request is read by the live Hermes interpreter. "
+                                          "Use the live interpretation service.")
         if hermes is not None:
             status, bundle = run(session, lambda: hermes.answer_question(session, principal, intake_id, body))
             return JSONResponse(bundle, status_code=status)

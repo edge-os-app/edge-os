@@ -9,6 +9,7 @@ import re
 import socket
 import subprocess
 from typing import Literal
+from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
@@ -24,6 +25,8 @@ TEST_APP_ID = "edge-os-test-app"
 # either host can reach Coolify's database instead of ours, so production refuses both; compose.coolify.yml gives ours
 # the unique alias `edge-os-postgres`.
 COOLIFY_RESERVED_DATABASE_HOSTS = frozenset({"postgres", "coolify-db"})
+HERMES_APP_NETWORKS = (ipaddress.IPv4Network("10.0.0.0/8"), ipaddress.IPv4Network("172.16.0.0/12"),
+                       ipaddress.IPv4Network("192.168.0.0/16"))
 FORBIDDEN_ENV_NAMES = ("EDGE_OS_PRIVY_APP_SECRET", "EDGE_OS_AUTH_DISABLED", "EDGE_OS_DEV_AUTH_BYPASS")
 
 
@@ -78,6 +81,9 @@ class Settings(BaseSettings):
     # `fixture` answers scripted requests only. `hermes_local` runs the pinned Hermes against a local fake provider and
     # needs a runner handed to the application factory. No setting reaches a real provider (decision D7).
     interpreter: Literal["fixture", "hermes_local"] = "fixture"
+    # The Coolify API forwards the six public Hermes paths to this host application. It must be an http URL
+    # naming an IPv4 loopback or RFC 1918 literal and an explicit port. The host application never sets it.
+    hermes_app_url: str | None = None
     # `fixture` uses the authored local wallet-creation fixture. `privy_server` binds the builder's
     # already-created Privy server wallet through the separate lookup process; it is local-only.
     # Production refuses both and uses the fail-closed `unavailable` provider.
@@ -152,6 +158,13 @@ class Settings(BaseSettings):
             raise ValueError("must load as an EC P-256 public key") from error
         return value
 
+    @field_validator("hermes_app_url")
+    @classmethod
+    def _hermes_app_url(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        return _parse_hermes_app_url(value.strip())
+
     @field_validator("database_url")
     @classmethod
     def _db(cls, value: str) -> str:
@@ -216,6 +229,12 @@ class Settings(BaseSettings):
                 problems.append("database_url: production refuses host or hostaddr query parameters")
             if self.fixture_effects_path is not None:
                 problems.append("fixture_effects_path: fixture effects are refused in production")
+        if self.interpreter == "hermes_local" and self.hermes_app_url is not None:
+            problems.append("hermes_app_url: a Hermes host application cannot forward to another host application")
+        if self.env == "production" and self.hermes_app_url is not None:
+            address = ipaddress.IPv4Address(urlsplit(self.hermes_app_url).hostname or "")
+            if address.is_loopback:
+                problems.append("hermes_app_url: production needs the private host address, not loopback")
         if self.env == "production" and self.interpreter != "fixture" and deployment is None:
             problems.append("interpreter: only the fixture interpreter is available in production without an "
                             "approved hosted deployment")
@@ -262,6 +281,31 @@ class Settings(BaseSettings):
                                   timeout=5, check=True).stdout.strip() or "unknown"
         except Exception:  # noqa: BLE001
             return "unknown"
+
+
+def _parse_hermes_app_url(value: str) -> str:
+    """A bounded upstream address: http, an IPv4 loopback or RFC 1918 literal, and an explicit port."""
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        raise ValueError("must be a valid URL") from None
+    if parts.scheme != "http":
+        raise ValueError("must use http")
+    if parts.path or parts.query or parts.fragment or parts.username is not None or parts.password is not None:
+        raise ValueError("must not hold a path, query, fragment or user information")
+    try:
+        address = ipaddress.IPv4Address(parts.hostname or "")
+    except ValueError:
+        raise ValueError("must name an IPv4 literal") from None
+    if not (address.is_loopback or any(address in network for network in HERMES_APP_NETWORKS)):
+        raise ValueError("must name a loopback or RFC 1918 address")
+    try:
+        port = parts.port
+    except ValueError:
+        raise ValueError("must hold a valid port") from None
+    if port is None or not 1 <= port <= 65_535:
+        raise ValueError("must hold a port from 1 to 65535")
+    return f"http://{address.compressed}:{port}"
 
 
 def _controlled_execution_refusal(deployment: HostedDeployment | None) -> str | None:
