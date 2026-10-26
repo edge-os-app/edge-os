@@ -496,7 +496,7 @@ def test_the_cited_call_order_lines_hold() -> None:
     assert "self.binding.admit(" in ports[729] and "PrivySignerClient(" in ports[733]
     release = (REPO / "apps/api/src/edge_os_api/execution/operating_release.py").read_text(
         encoding="utf-8").splitlines()
-    assert release[298].strip().startswith("check_release(self.release,")
+    assert release[303].strip().startswith("check_release(self.release,")
     service = (REPO / "apps/api/src/edge_os_api/execution/service.py").read_text(encoding="utf-8").splitlines()
     assert "self._revalidate(" in service[441] and "def _begin_submission(" in service[414]
     assert "def _revalidate(" in service[625]

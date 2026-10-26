@@ -235,11 +235,11 @@ APP_EXPIRY_CHECKS: tuple[Mapping[str, Any], ...] = (
                "apps/api/tests/test_original_transaction_journey.py::"
                "test_an_authority_change_during_a_stage_save_allows_no_next_effect"
                "[SIGN_REQUESTED-expiry-expected0]")},
-    {"path": "apps/api/src/edge_os_api/execution/operating_release.py", "line": 223,
+    {"path": "apps/api/src/edge_os_api/execution/operating_release.py", "line": 228,
      "refusal": "EXECUTION_RELEASE_EXPIRED",
      "where": "check_release: now >= valid_until or now >= transaction.request_expires_at refuses the release; "
               "the worker's signer factory admits the release (core/provider_ports.py:730, which reaches "
-              "check_release at operating_release.py:299) before it builds the Privy client at line 734. The test "
+              "check_release at operating_release.py:304) before it builds the Privy client at line 734. The test "
               "shows the request_expires_at refusal only, not valid_until or that call order",
      "tests": ("apps/api/tests/execution/test_operating_release.py::"
                "test_signer_request_expiry_is_enforced_before_release_expiry",)},
