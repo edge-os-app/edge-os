@@ -599,7 +599,10 @@ class _Privy:
                 and type(capture["byte_count"]) is int and capture["byte_count"] > 0
                 and type(capture["raw_body_sha256"]) is str and _HEX64.fullmatch(capture["raw_body_sha256"]) is not None
                 and capture["error_code"] is None and capture["error_type"] is None
-                and (_epoch_ms(capture["captured_at"]) or 0) > int(CONTROL_PROOF_EXPIRED_HEADER))
+                and type(capture["content_type_sha256"]) is str
+                and _HEX64.fullmatch(capture["content_type_sha256"]) is not None
+                and (_epoch_ms(capture["captured_at"]) or 0) > int(CONTROL_PROOF_EXPIRED_HEADER)
+                and (_epoch_ms(record["completed_at"]) or 0) >= _epoch_ms(capture["captured_at"]))
 
     def refused_unreadably(self) -> dict[str, Any]:
         """The expiry row was refused twice with the same unreadable 401, after the positive control signed.
@@ -916,8 +919,9 @@ def merge_expiry_rerun(records: dict[str, Any], captures: dict[str, str], privy_
         raise ProofRefused("RERUN_STORE_INVALID")
     for sid in expiry:
         capture_path = privy_root / f"{sid}.capture.json"
-        if (not capture_path.exists() or captures.get(sid) != records[sid].get("capture_record_sha256")
-                or json.loads(capture_path.read_text(encoding="utf-8")).get("status") != 401):
+        capture = json.loads(capture_path.read_text(encoding="utf-8")) if capture_path.exists() else None
+        if (not isinstance(capture, dict) or captures.get(sid) != records[sid].get("capture_record_sha256")
+                or capture.get("status") != 401):
             raise ProofRefused("RERUN_EARLIER_ATTEMPT_INVALID")
     earlier = {sid: records[sid] for sid in expiry}
     records.update(rerun_records)

@@ -231,6 +231,16 @@ CHANGES = {
     "rerun_not_after_earlier": _capture_change("rerun", captured_at="2026-10-23T08:00:00.123456+00:00"),
     "captured_at_unreadable": _capture_change("rerun", captured_at="yesterday"),
     "captured_at_not_utc": _capture_change("rerun", captured_at="2026-10-26T09:30:00+01:00"),
+    "content_type_hash_null": lambda state: [capture.update(content_type_sha256=None)
+                                             for capture in state["expiry_captures"].values()],
+    "content_type_hash_not_hex": lambda state: [capture.update(content_type_sha256="hello")
+                                                for capture in state["expiry_captures"].values()],
+    "rerun_completed_unreadable": lambda state: state["records"][EXPIRY].update(completed_at="yesterday"),
+    "earlier_completed_not_text": lambda state: state["earlier"][EXPIRY].update(completed_at={"secret": "x"}),
+    "rerun_completed_before_capture": lambda state: state["records"][EXPIRY].update(
+        completed_at="2020-01-01T00:00:00Z"),
+    "earlier_completed_before_capture": lambda state: state["earlier"][EXPIRY].update(
+        completed_at="2026-10-23T08:00:00.100000+00:00"),
     # The records are not the expected unrecognized attempts.
     "rerun_matched": lambda state: state["records"][EXPIRY].update(matches_expectation=True),
     "rerun_outcome_breach": lambda state: state["records"][EXPIRY].update(outcome="BREACH"),
@@ -434,3 +444,14 @@ def test_the_proof_artifact_copies_the_checks_unchanged() -> None:
     checks = _build(_recorded())["decision_required"]["expiry_freshness"]["artifact"]["findings"]["app_expiry_checks"]
     assert checks == [{**check, "tests": list(check["tests"])} for check in copy.deepcopy(
         list(control_proofs.APP_EXPIRY_CHECKS))]
+
+
+@pytest.mark.parametrize("content", ["[401]", "401", "null"])
+def test_an_earlier_capture_that_is_not_an_object_is_refused(tmp_path: Path, privy, content: str) -> None:  # noqa: ANN001
+    root = _stores(tmp_path, _unreadable_401(), _unreadable_401())
+    (root / f"{EXPIRY}.capture.json").write_text(content, encoding="utf-8")
+    records, captures = control_proofs.load_privy_store(root)
+    records[EXPIRY]["capture_record_sha256"] = captures[EXPIRY]  # the record cites the file, so only its shape refuses
+    with pytest.raises(control_proofs.ProofRefused) as refused:
+        control_proofs.merge_expiry_rerun(records, captures, root)
+    assert refused.value.code == "RERUN_EARLIER_ATTEMPT_INVALID"

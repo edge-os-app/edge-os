@@ -139,10 +139,10 @@ Privy run. Privy signed nothing but the revoke-to-zero positive control.
   1. Both expiry attempts, the 2026-10-23 one and its one re-run, are outcome records with exactly the runner's
      error-reply keys, so neither holds `signed_bytes_sha256` or `signed_field_reasons`. Each is
      `UNKNOWN` / `UNRECOGNIZED_REPLY`, not matched, and bound to the sealed packet, policy id, policy hash, reply
-     profile and request hash.
+     profile and request hash. Its `completed_at` is a UTC time at or after its capture's `captured_at`.
   2. Each capture has exactly the runner's capture keys, hashes to its record's `capture_record_sha256`, and
      shows integer status 401, `application/json`, valid metadata, null `error_code` and `error_type`, a time
-     after the request's frozen expiry, and a positive byte count. The two captures have the same
+     after the request's frozen expiry, a positive byte count and a hex content-type hash. The two captures have the same
      `raw_body_sha256`, byte count and content-type hash, and the re-run was captured after the earlier
      attempt. The re-run capture file hashes to the re-run record, as for every other row.
   3. The positive control is valid as before (`ALLOW` / `SIGNED_FIELDS_MATCH`, signed hash, capture hash). The
