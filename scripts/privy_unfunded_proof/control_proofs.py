@@ -156,7 +156,7 @@ _EXPIRY_UNREADABLE_CLAIMS: tuple[str, ...] = (
     "earlier run and in its one re-run, with the same body (findings.provider_reply.raw_body_sha256). A 401 is an "
     "error reply: the runner never reads a signature from it, and neither outcome record holds a signed hash.",
     "In the same packet, under the same policy id and policy hash, the positive control was signed "
-    "(ALLOW / SIGNED_FIELDS_MATCH), and both expiry records cite it.",
+    "(ALLOW / SIGNED_FIELDS_MATCH), and the re-run record cites it by hash; the earlier record does not cite it.",
     "The expired request is the frozen release swap body with one frozen header, privy-request-expiry, set in "
     "the past; a fresh request is the same body with the packet's future expiry (findings.request_difference).",
     "The app refuses an expired request itself before any signing call (findings.app_expiry_checks).",
@@ -225,7 +225,8 @@ APP_EXPIRY_CHECKS: tuple[Mapping[str, Any], ...] = (
               "signer.rpc at line 513; no test isolates this return",
      "tests": ()},
     {"path": "apps/api/src/edge_os_api/execution/original_transaction.py", "line": 755, "refusal": "MANDATE_EXPIRED",
-     "where": "_recheck: now >= mandate_expires_at, at the same point before signer.rpc",
+     "where": "_recheck: now >= mandate_expires_at; the unit test reaches it through the recheck after the quote "
+              "(line 648), the journey test through the one at line 504 before signer.rpc",
      "tests": ("apps/api/tests/execution/test_saved_attempt_signing.py::"
                "test_mandate_expiry_during_quote_preserves_exact_refusal",
                "apps/api/tests/test_original_transaction_journey.py::"
