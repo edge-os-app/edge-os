@@ -257,3 +257,23 @@ def test_only_the_fixture_api_forwards() -> None:
     assert public_forward_enabled(settings("fixture", "test", None)) is False
     assert public_forward_enabled(settings("hermes_local", "production", None)) is False
     assert public_forward_enabled(settings("hermes_local", "test", None)) is False
+
+
+def test_production_without_an_upstream_refuses_the_six_without_writing(settings, migrated, owner_a) -> None:
+    from sqlalchemy import text
+
+    production = settings.model_copy(update={"env": "production", "hermes_app_url": None})
+    with TestClient(create_app(production)) as client:
+        owner = client.get("/v1/me", headers=owner_a).json()["user_id"]
+        with client.app.state.engine.connect() as connection:
+            before = connection.execute(text("select count(*) from records where record_type = 'IntakeRequest' "
+                                             "and owner_id = :o"), {"o": owner}).scalar_one()
+        get_response = client.get("/v1/interpreter", headers=owner_a)
+        post_response = client.post("/v1/research/requests", headers=owner_a, json={})
+        with client.app.state.engine.connect() as connection:
+            after = connection.execute(text("select count(*) from records where record_type = 'IntakeRequest' "
+                                            "and owner_id = :o"), {"o": owner}).scalar_one()
+    for response in (get_response, post_response):
+        assert response.status_code == 503
+        assert response.json()["code"] == "interpreter_unavailable"
+    assert after == before
