@@ -292,11 +292,15 @@ What `apply` installs:
   generic `priority` field only orders network attachment and does **not** select the default route on the tested
   engine. Before a deploy, render `compose.deployed.yml` with the host's `docker compose config`: a rejected
   `gw_priority` stops the deploy. After the deploy, `docker inspect` must show `GwPriority=1000` on `egress` and
-  `hostdb` (checks below). Because `apply` runs before Docker, only `refresh` inspects containers: it finds
-  `execution-worker` and `postgres` by the `com.docker.compose.project` and `com.docker.compose.service` labels,
-  reads the address each holds on every network it does not declare, and installs the `EDGE_OS_BYPASS` rules.
-  A missing container, an unreachable daemon or an IPv6 address on the extra network fails `refresh`; it never passes
-  silently. Idle no-op: before the first deploy the project has no containers, so `refresh` installs empty chains.
+  `hostdb` (checks below). Because `apply` runs before Docker, only `refresh` inspects containers. It derives the
+  Compose project from the `edgeos-hostdb` bridge label, exactly as §1a does: Coolify starts a Service with
+  `--project-name <service uuid>`, so the Compose file name is not the project name. It then finds `execution-worker`
+  and `postgres` by that project and their `com.docker.compose.service` labels, reads the address each holds on every
+  network it does not declare, and installs the `EDGE_OS_BYPASS` rules. The idle no-op happens only when no fixed
+  bridges exist (before the first deploy). A fixed bridge without a project label, a missing or duplicate
+  container, a container not on its declared networks, an optional `EDGE_OS_COMPOSE_PROJECT` that differs from the
+  bridge label, an unreachable daemon or an IPv6 address on the extra network fails `refresh`; it never passes
+  silently or reports success with empty rules.
 - A residual window remains after a fresh deploy: the address rules exist once the next `refresh` runs (the timer
   runs every five minutes, or `systemctl start edge-os-egress-refresh` runs it now). No reliable host-side event
   hook exists without a Docker event watcher, so none is added. Until the rules exist the worker's `egress` default
@@ -313,9 +317,9 @@ cat > /etc/edge-os/egress.env <<'ENV'
 EDGE_OS_EGRESS_HOSTS="api.privy.io"
 EDGE_OS_EGRESS_RELAY_HOSTS="rpc-a.edgeos.fun rpc-b.edgeos.fun"
 EDGE_OS_EGRESS_PORTS="443"
-# The com.docker.compose.project label from §1a. The Compose file name is `edge-os`; change this if the deploy uses
-# another project name, or refresh finds no containers and the §4.1 chain evidence stays empty (fail closed).
-EDGE_OS_COMPOSE_PROJECT="edge-os"
+# Optional cross-check. Leave it unset: refresh derives the project from the edgeos-hostdb bridge label (§1a).
+# If set, it must equal that label, or refresh fails. Do not set the Compose file name `edge-os` as a guess.
+# EDGE_OS_COMPOSE_PROJECT="<the com.docker.compose.project label from §1a>"
 ENV
 # Root-owned copy: the unit never runs a script from the git checkout, which other steps switch between commits.
 install -m 0755 -o root -g root /opt/edge-os/deploy/host/edge-os-egress-firewall.sh /usr/local/sbin/edge-os-egress-firewall
@@ -360,6 +364,8 @@ ip link show edgeos-egress && ip link show edgeos-hostdb && ip link show edgeos-
 iptables -S DOCKER-USER | head -3; iptables -S INPUT | head -3; ipset list edgeos-egress-allow | head
 # Coolify may also attach its resource network. Prove that it carries no route instead of removing it.
 systemctl start edge-os-egress-refresh   # the timer does this every 5 minutes; run it now after a deploy
+systemctl is-active --quiet edge-os-egress-refresh || { echo "refresh failed: read its journal"; exit 1; }
+# `refresh` must exit 0 only after it found the stack by the edgeos-hostdb label and installed the address rules.
 docker inspect "$W" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'   # <PROJECT>_private <PROJECT>_egress, plus the resource network when attached
 docker inspect "$PG" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'  # <PROJECT>_private <PROJECT>_hostdb, plus the resource network when attached
 iptables -S EDGE_OS_BYPASS; iptables -S EDGE_OS_BYPASS_IN   # one DROP pair and one INPUT pair per injected address

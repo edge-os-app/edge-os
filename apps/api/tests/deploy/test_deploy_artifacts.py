@@ -151,7 +151,9 @@ def test_the_egress_firewall_is_fail_closed_and_starts_before_docker():
     for rule in ("EDGE_OS_COMPOSE_PROJECT", "com.docker.compose.service", "EDGE_OS_BYPASS",
                  "EDGE_OS_BYPASS_IN", "GlobalIPv6Address", 'hook DOCKER-USER EDGE_OS_BYPASS',
                  'hook INPUT EDGE_OS_BYPASS_IN', "refresh_allowlist", "enforce_injected_addresses",
-                 "cannot inspect"):
+                 "cannot inspect", "docker network ls --quiet --filter driver=bridge",
+                 "does not match the fixed bridge project", "no fixed bridges",
+                 "expected one running", "no compose project label"):
         assert rule in text, rule
     apply_body = text.split("apply() {", 1)[1].split("\n}", 1)[0]
     assert "docker " not in apply_body
@@ -174,6 +176,7 @@ def test_the_egress_firewall_is_fail_closed_and_starts_before_docker():
 def test_the_runbook_documents_the_coolify_network_control_without_a_manual_disconnect():
     text = HOSTED_RECORD_V2.read_text(encoding="utf-8")
     for topic in ("Coolify resource network", "EDGE_OS_COMPOSE_PROJECT", "/proc/net/route",
-                  "EXECUTION_BOOTSTRAP_ROUTE_UNEXPECTED", "residual window", "gw_priority", "GwPriority"):
+                  "EXECUTION_BOOTSTRAP_ROUTE_UNEXPECTED", "residual window", "gw_priority", "GwPriority",
+                  "edgeos-hostdb", "idle no-op"):
         assert topic in text, topic
     assert "docker network disconnect" not in text

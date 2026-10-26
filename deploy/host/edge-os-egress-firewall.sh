@@ -13,10 +13,13 @@
 # Every rule matches the bridge name or its fixed subnet, so a bridge renamed by a later edit is still filtered.
 #
 # Coolify also attaches its own resource network (named the resource UUID) to every container. `apply` runs before
-# Docker, so only `refresh` can inspect the two containers. `refresh` finds execution-worker and postgres by their
-# Compose project and service labels and reads the addresses they hold on any network they do not declare. It drops
-# forwarding to and from exactly those addresses and keeps host-bound traffic replies-only. A missing container, an
-# unreachable daemon or an IPv6 address on the extra network fails the refresh; it never passes silently.
+# Docker, so only `refresh` can inspect the two containers. `refresh` derives the Compose project from the fixed
+# `edgeos-hostdb` bridge label (Coolify starts a Service with `--project-name <service uuid>`, so the file name is not
+# the project name), finds execution-worker and postgres by that project and their service labels, and reads the
+# addresses they hold on any network they do not declare. It drops forwarding to and from exactly those addresses and
+# keeps host-bound traffic replies-only. The idle no-op happens only when none of the fixed bridges exists. A fixed
+# bridge without a project label, a missing or duplicate container, a missing declared network, an unreachable daemon
+# or an IPv6 address on the extra network fails the refresh; it never passes silently.
 #
 # Docker cannot restrict by host name; this script resolves the names on the host into an ipset. `apply` builds the
 # rules in the idle one of two chains and switches the jump to it, so a re-run never leaves an empty chain hooked.
@@ -52,7 +55,7 @@ TTL=900
 EGRESS_SUBNET=10.203.0.0/28
 HOSTDB_SUBNET=10.203.0.16/28
 PRIVATE_SUBNET=10.203.0.64/26
-PROJECT=${EDGE_OS_COMPOSE_PROJECT:-edge-os}
+PROJECT=
 LOCK=${EDGE_OS_EGRESS_LOCK:-/run/edge-os-egress-firewall.lock}
 
 resolvers() {
@@ -81,11 +84,30 @@ refresh_allowlist() {
   fill "$RELAY_SET" "$EDGE_OS_EGRESS_RELAY_HOSTS"
 }
 
+stack_project() {
+  # Print "<project> <bridge-present>" from the fixed bridge labels. The bridge label is authoritative; the optional
+  # EDGE_OS_COMPOSE_PROJECT is only a cross-check. Coolify starts a Service with `--project-name <service uuid>`, so
+  # the Compose file's top-level name is not the project name.
+  ids=$(docker network ls --quiet --filter driver=bridge) || return 1
+  if [ -z "$ids" ]; then printf 'none 0\n'; return 0; fi
+  lines=$(printf '%s\n' "$ids" | xargs docker network inspect \
+    --format '{{index .Options "com.docker.network.bridge.name"}} {{index .Labels "com.docker.compose.project"}}') \
+    || return 1
+  present=$(printf '%s\n' "$lines" | awk '$1 == "edgeos-hostdb" || $1 == "edgeos-egress" || $1 == "edgeos-private" {found = 1} END {print found + 0}')
+  project=$(printf '%s\n' "$lines" | awk '$1 == "edgeos-hostdb" {print $2; exit}')
+  printf '%s %s\n' "${project:-none}" "$present"
+}
+
 container_id() {
-  # container_id <compose service>: the running container id, or empty.
-  docker ps --quiet --no-trunc \
+  # container_id <compose service>: the single running container id, or a loud failure.
+  ids=$(docker ps --quiet --no-trunc \
     --filter "label=com.docker.compose.project=$PROJECT" \
-    --filter "label=com.docker.compose.service=$1" | head -n 1
+    --filter "label=com.docker.compose.service=$1") \
+    || { echo "cannot list the $1 containers in compose project $PROJECT" >&2; return 1; }
+  count=$(printf '%s\n' "$ids" | awk 'NF {found++} END {print found + 0}')
+  [ "$count" -eq 1 ] \
+    || { echo "expected one running $1 container in compose project $PROJECT, found $count" >&2; return 1; }
+  printf '%s\n' "$ids"
 }
 
 declared_networks() {
@@ -106,14 +128,17 @@ container_networks() {
 service_addresses() {
   # The IPv4 addresses one protected service holds on networks it does not declare. Fails closed.
   service=$1
-  id=$(container_id "$service")
-  [ -n "$id" ] || { echo "cannot find a running $service container in compose project $PROJECT" >&2; return 1; }
+  id=$(container_id "$service") || return 1
   networks=$(container_networks "$id") || { echo "cannot inspect the $service container $id" >&2; return 1; }
   if printf '%s\n' "$networks" | awk 'NF >= 3 && $3 != "" {found = 1} END {exit !found}'; then
     echo "$service has an IPv6 address on an extra network; refusing to leave it unfiltered" >&2
     return 1
   fi
   declared=$(declared_networks "$service") || return 1
+  for required in $declared; do
+    printf '%s\n' "$networks" | awk -v want="$required" '$1 == want {found = 1} END {exit !found}' \
+      || { echo "$service is not on its declared network $required" >&2; return 1; }
+  done
   printf '%s\n' "$networks" | while read -r name ip _; do
     [ -n "$name" ] || continue
     case " $declared " in *" $name "*) continue ;; esac
@@ -126,10 +151,27 @@ injected_addresses() {
   # Every address the worker and PostgreSQL hold outside their declared networks. Fails loudly on any gap.
   docker info >/dev/null 2>&1 \
     || { echo "docker daemon is unreachable; cannot enforce the Coolify resource network" >&2; return 1; }
-  if [ -z "$(docker ps --all --quiet --filter "label=com.docker.compose.project=$PROJECT")" ]; then
-    echo "no containers in compose project $PROJECT; nothing to enforce" >&2
+  derived=$(stack_project) || { echo "cannot inspect the fixed bridge labels" >&2; return 1; }
+  set -- $derived
+  project=$1
+  present=$2
+  if [ "$present" = 0 ]; then
+    for service in execution-worker postgres; do
+      if [ -n "$(docker ps --all --quiet --filter "label=com.docker.compose.service=$service")" ]; then
+        echo "fixed bridges are absent but a $service container exists; refusing to guess the stack" >&2
+        return 1
+      fi
+    done
+    echo "no fixed bridges; nothing to enforce" >&2
     return 0
   fi
+  [ "$project" != none ] \
+    || { echo "a fixed bridge exists but has no compose project label" >&2; return 1; }
+  if [ -n "${EDGE_OS_COMPOSE_PROJECT:-}" ] && [ "$EDGE_OS_COMPOSE_PROJECT" != "$project" ]; then
+    echo "EDGE_OS_COMPOSE_PROJECT=$EDGE_OS_COMPOSE_PROJECT does not match the fixed bridge project $project" >&2
+    return 1
+  fi
+  PROJECT=$project
   service_addresses execution-worker || return 1
   service_addresses postgres || return 1
 }
