@@ -159,12 +159,29 @@ def test_t4_source_has_no_override_or_bypass():
         assert not any(isinstance(n, ast.Attribute) and n.attr == "dependency_overrides" for n in ast.walk(tree))
 
 
-def test_the_api_process_never_loads_the_worker_secret_module():
-    """The API starts without the worker-only bootstrap; a subprocess hides any import another test made."""
-    code = ("import sys\nimport edge_os_api.main\n"
-            "assert 'edge_os_api.execution.released_execution_bootstrap' not in sys.modules\n")
-    env = {**harness.base_env(), "PYTHONPATH": str(SRC.parent)}
-    run = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+def test_the_api_process_never_loads_the_worker_secret_module(env, migrated):
+    """The API process builds the app and enters startup without the worker-only bootstrap.
+
+    A subprocess hides any import another test made. It also calls create_app and enters the ASGI lifespan, so a
+    lazy import added to the factory or to startup is caught, not only one reached by importing main. The migrated
+    fixture puts the schema at head, as create_app requires.
+    """
+    module = "edge_os_api.execution.released_execution_bootstrap"
+    code = (
+        "import asyncio, sys\n"
+        "from edge_os_api.core.settings import load_settings\n"
+        "from edge_os_api.main import create_app\n"
+        f"assert {module!r} not in sys.modules\n"
+        "app = create_app(load_settings())\n"
+        f"assert {module!r} not in sys.modules, 'create_app loaded the worker-only bootstrap'\n"
+        "async def startup():\n"
+        "    async with app.router.lifespan_context(app):\n"
+        "        pass\n"
+        "asyncio.run(startup())\n"
+        f"assert {module!r} not in sys.modules, 'startup loaded the worker-only bootstrap'\n"
+    )
+    child = {**env, "PYTHONPATH": str(SRC.parent)}
+    run = subprocess.run([sys.executable, "-c", code], env=child, capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
 
 
