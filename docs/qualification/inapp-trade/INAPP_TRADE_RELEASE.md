@@ -11,7 +11,7 @@ local app, later on the public site.
 | --- | --- |
 | [`release.authored.json`](release.authored.json) | The one release (`actual-inapp-wmon-moe-20261022/1`), its authoring facts and `{"$fill": name}` markers for values that need a recorded read or a later lane. |
 | `control-proofs/` | The committed raw stores and proof artifacts: `proofs-4` (seven controls), `proofs-5` (control 12) and `stores/` (the Privy and chain records). |
-| `v3-live-result/` | The recorded v3 live result: 19 row files and `summary.json` (controls 1-3 and 9). |
+| `v3-live-result/` | The recorded v3 live result: 19 rows (57 record files) and `summary.json` (controls 1-3 and 9). |
 | `apps/api/src/edge_os_api/execution/inapp_trade_release.py` | A pure completion step. It checks the fill, the gas rule and the USD ceiling, computes the minimum output, builds the `OperatingRelease` and the `BoundRelease`, and prints the exact registry lines. |
 | `apps/api/tests/execution/test_inapp_trade_release.py` | Tests for the authored file, the completion step and the committed evidence. |
 
