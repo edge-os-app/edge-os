@@ -123,7 +123,7 @@ RELEASE_DEFINITIONS: tuple[RelayApplicationDefinition, ...] = (RelayApplicationD
                     b'"provider":"openai"}'),
     response_format=interpretation_response_format(),
     images=(("linux/arm64", "sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0"),
-            ("linux/amd64", "sha256:224ede5ab50f69f4a73bcce46a054140b20e2337ead5684147df062879b2f0e1")),
+            ("linux/amd64", "sha256:42541c05f27ee56bfe02ce9d7223728c0432a040abef6515fff67a7f992f9aff")),
     channel_root="edge-os-research",
     global_cap_usd=Decimal("2.00"),  # the one shared USD 2.00 model and data ceiling, not a Hermes allocation
     owner_cap_usd=Decimal("2.00"),
