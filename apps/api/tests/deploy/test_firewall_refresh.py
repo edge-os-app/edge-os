@@ -26,7 +26,8 @@ def stub(folder: Path, name: str, body: str) -> None:
 
 
 def docker_stub(*, worker: list[tuple[str, ...]], postgres: list[tuple[str, ...]],
-                missing: tuple[str, ...] = (), no_containers: bool = False) -> str:
+                missing: tuple[str, ...] = (), no_containers: bool = False,
+                docker_down: bool = False) -> str:
     def rows(pairs: list[tuple[str, ...]]) -> str:
         return " ".join("'" + " ".join(pair) + " '" for pair in pairs)
 
@@ -35,7 +36,7 @@ def docker_stub(*, worker: list[tuple[str, ...]], postgres: list[tuple[str, ...]
     all_ps = "" if no_containers else "echo workerid; echo postgresid"
     return f"""echo "docker $*" >> "$STUB_LOG"
 case "$1" in
-  info) exit 0 ;;
+  info) {("exit 1" if docker_down else "exit 0")} ;;
   ps)
     case "$*" in
       *"com.docker.compose.service=execution-worker"*) {worker_ps} ;;
@@ -55,14 +56,16 @@ exit 0
 """
 
 
-def run_refresh(tmp_path: Path, *, worker_extra=(), postgres_extra=(), missing=(), no_containers=False):
+def run_refresh(tmp_path: Path, *, worker_extra=(), postgres_extra=(), missing=(), no_containers=False,
+                docker_down=False):
     binaries = tmp_path / "bin"
     binaries.mkdir(exist_ok=True)
     log = tmp_path / "commands.log"
     log.write_text("", encoding="utf-8")
     stub(binaries, "docker", docker_stub(
         worker=[*DECLARED["execution-worker"], *worker_extra],
-        postgres=[*DECLARED["postgres"], *postgres_extra], missing=missing, no_containers=no_containers))
+        postgres=[*DECLARED["postgres"], *postgres_extra], missing=missing, no_containers=no_containers,
+        docker_down=docker_down))
     stub(binaries, "iptables", 'echo "iptables $*" >> "$STUB_LOG"\n'
                                'case " $* " in *" -D "*) exit 1 ;; esac\nexit 0\n')
     stub(binaries, "ipset", 'echo "ipset $*" >> "$STUB_LOG"\nexit 0\n')
@@ -117,3 +120,9 @@ def test_refresh_fails_loudly_on_an_ipv6_address_on_the_extra_network(tmp_path):
         tmp_path, worker_extra=[(INJECTED_NETWORK, "10.0.2.5", "fd00::5")])
     assert completed.returncode != 0
     assert "IPv6" in completed.stderr
+
+
+def test_refresh_fails_loudly_when_the_daemon_is_unreachable(tmp_path):
+    completed, _ = run_refresh(tmp_path, docker_down=True)
+    assert completed.returncode != 0
+    assert "docker daemon is unreachable" in completed.stderr

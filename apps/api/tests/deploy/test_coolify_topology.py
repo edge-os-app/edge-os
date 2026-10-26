@@ -114,20 +114,20 @@ def test_only_the_execution_worker_joins_the_egress_network(compose):
 
 
 def test_the_worker_default_route_stays_on_the_declared_egress_network(compose):
-    """Coolify appends its own resource network; only a higher gateway priority keeps it off the default route."""
+    """Coolify appends its own resource network. `gw_priority` sets the engine GwPriority that selects the default."""
     networks = compose["services"]["execution-worker"]["networks"]
     assert set(networks) == {"private", "egress"}
-    assert networks["egress"]["priority"] > max(
-        (attachment or {}).get("priority", 0) for name, attachment in networks.items() if name != "egress")
-    assert (networks["private"] or {}).get("priority", 0) < networks["egress"]["priority"]
+    assert networks["egress"]["gw_priority"] > max(
+        (attachment or {}).get("gw_priority", 0) for name, attachment in networks.items() if name != "egress")
+    assert (networks["private"] or {}).get("gw_priority", 0) < networks["egress"]["gw_priority"]
 
 
 def test_postgres_default_route_stays_on_the_loopback_network(compose):
     networks = compose["services"]["postgres"]["networks"]
     assert set(networks) == {"private", "hostdb"}
-    assert networks["hostdb"]["priority"] > max(
-        (attachment or {}).get("priority", 0) for name, attachment in networks.items() if name != "hostdb")
-    assert (networks["private"] or {}).get("priority", 0) < networks["hostdb"]["priority"]
+    assert networks["hostdb"]["gw_priority"] > max(
+        (attachment or {}).get("gw_priority", 0) for name, attachment in networks.items() if name != "hostdb")
+    assert (networks["private"] or {}).get("gw_priority", 0) < networks["hostdb"]["gw_priority"]
 
 
 def test_the_worker_and_postgres_healthchecks_assert_their_declared_default_route(compose):

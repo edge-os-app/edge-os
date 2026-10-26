@@ -287,16 +287,21 @@ What `apply` installs:
 - The upstream resolvers follow Docker's rule: `/run/systemd/resolve/resolv.conf` only when `/etc/resolv.conf` names
   loopback stubs only; otherwise `/etc/resolv.conf`.
 - Coolify also attaches its own resource network (named the resource UUID, 10.0.x.0/24, NAT) to every container.
-  The Compose file gives the worker's `egress` and PostgreSQL's `hostdb` the highest `priority`, so that network is
-  never their default route. Because `apply` runs before Docker, only `refresh` inspects containers: it finds
+  The Compose file sets `gw_priority: 1000` on the worker's `egress` and PostgreSQL's `hostdb`. Docker Compose maps
+  `gw_priority` to the engine's `GwPriority`; the engine selects the default gateway from the highest value. The
+  generic `priority` field only orders network attachment and does **not** select the default route on the tested
+  engine. Before a deploy, render `compose.deployed.yml` with the host's `docker compose config`: a rejected
+  `gw_priority` stops the deploy. After the deploy, `docker inspect` must show `GwPriority=1000` on `egress` and
+  `hostdb` (checks below). Because `apply` runs before Docker, only `refresh` inspects containers: it finds
   `execution-worker` and `postgres` by the `com.docker.compose.project` and `com.docker.compose.service` labels,
   reads the address each holds on every network it does not declare, and installs the `EDGE_OS_BYPASS` rules.
   A missing container, an unreachable daemon or an IPv6 address on the extra network fails `refresh`; it never passes
   silently. Idle no-op: before the first deploy the project has no containers, so `refresh` installs empty chains.
 - A residual window remains after a fresh deploy: the address rules exist once the next `refresh` runs (the timer
-  runs every five minutes, or `systemctl start edge-os-egress-refresh` runs it now). Until then the worker's
-  `egress` default route and the route guard below keep the internet off the extra network; the §4.1 checks are the
-  gate before controlled execution is enabled.
+  runs every five minutes, or `systemctl start edge-os-egress-refresh` runs it now). No reliable host-side event
+  hook exists without a Docker event watcher, so none is added. Until the rules exist the worker's `egress` default
+  route and the route guard below keep the internet off the extra network; the §4.1 checks are the gate before
+  controlled execution is enabled.
 
 Install (before the first deploy that puts the worker on `egress`):
 
@@ -308,6 +313,8 @@ cat > /etc/edge-os/egress.env <<'ENV'
 EDGE_OS_EGRESS_HOSTS="api.privy.io"
 EDGE_OS_EGRESS_RELAY_HOSTS="rpc-a.edgeos.fun rpc-b.edgeos.fun"
 EDGE_OS_EGRESS_PORTS="443"
+# The com.docker.compose.project label from §1a. The Compose file name is `edge-os`; change this if the deploy uses
+# another project name, or refresh finds no containers and the §4.1 chain evidence stays empty (fail closed).
 EDGE_OS_COMPOSE_PROJECT="edge-os"
 ENV
 # Root-owned copy: the unit never runs a script from the git checkout, which other steps switch between commits.
@@ -356,12 +363,14 @@ systemctl start edge-os-egress-refresh   # the timer does this every 5 minutes; 
 docker inspect "$W" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'   # <PROJECT>_private <PROJECT>_egress, plus the resource network when attached
 docker inspect "$PG" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{end}}'  # <PROJECT>_private <PROJECT>_hostdb, plus the resource network when attached
 iptables -S EDGE_OS_BYPASS; iptables -S EDGE_OS_BYPASS_IN   # one DROP pair and one INPUT pair per injected address
+docker inspect "$W" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} GwPriority={{$e.GwPriority}}{{"\n"}}{{end}}'   # egress 1000
+docker inspect "$PG" --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} GwPriority={{$e.GwPriority}}{{"\n"}}{{end}}'  # hostdb 1000
 docker exec "$W" cat /proc/net/route    # one default route: gateway 0100CB0A (10.203.0.1)
 docker exec "$PG" cat /proc/net/route   # one default route: gateway 1100CB0A (10.203.0.17)
 INJECTED=$(docker inspect "$W" --format '{{range $n, $_ := .NetworkSettings.Networks}}{{$n}}{{"\n"}}{{end}}' \
   | grep -v -x -e "${PROJECT}_private" -e "${PROJECT}_egress")
-[ -z "$INJECTED" ] || must_fail "$W" python -c "$PY_PROBE" \
-  "$(docker network inspect "$INJECTED" --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}')" 22
+for net in $INJECTED; do must_fail "$W" python -c "$PY_PROBE" \
+  "$(docker network inspect "$net" --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}')" 22; done
 running "$W" && docker exec "$W" python -c "
 import urllib.error as e, urllib.request as u
 try: print(u.urlopen('https://api.privy.io', timeout=5).status)
@@ -385,10 +394,13 @@ as blocked. A refused connection (`FAIL: not proven blocked (1)`) means the pack
 The route tables are the proof for the Coolify resource network: no default route may name anything except `0100CB0A`
 in the worker and `1100CB0A` in PostgreSQL. The worker refuses `EDGE_OS_EXECUTION_MODE=controlled` with
 `EXECUTION_BOOTSTRAP_ROUTE_UNEXPECTED` (or `EXECUTION_BOOTSTRAP_ROUTE_UNREADABLE`) otherwise, before it reads a key.
-Both healthchecks fail the same way on an extra default route. This depends on Coolify 4.4.7 preserving the Compose
-`priority`; if a deploy shows an extra default route, do not enable controlled execution and report it before a
-repair. The extra network is never removed by hand: a redeploy re-attaches it, and these checks must pass with no
-manual detach step.
+Both healthchecks fail the same way on an extra default route. This depends on the host's Compose accepting
+`gw_priority` and mapping it to the engine's `GwPriority`, and on Coolify 4.4.7 preserving it. The `GwPriority=1000`
+lines above are the direct evidence; if a deploy shows `GwPriority=0`, an extra default route or a rejected key, do
+not enable controlled execution and report it before a repair. The route guard and these checks read the IPv4
+`/proc/net/route`; the declared networks set `enable_ipv6: false`, and `refresh` fails loudly on an IPv6 address on
+an extra network. If Docker's IPv6 is enabled, add the `ip6tables` rules named at the top of §4.1. The extra network
+is never removed by hand: a redeploy re-attaches it, and these checks must pass with no manual detach step.
 
 ### 4.2 Turning on controlled execution
 

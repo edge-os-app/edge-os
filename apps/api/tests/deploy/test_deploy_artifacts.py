@@ -174,6 +174,6 @@ def test_the_egress_firewall_is_fail_closed_and_starts_before_docker():
 def test_the_runbook_documents_the_coolify_network_control_without_a_manual_disconnect():
     text = HOSTED_RECORD_V2.read_text(encoding="utf-8")
     for topic in ("Coolify resource network", "EDGE_OS_COMPOSE_PROJECT", "/proc/net/route",
-                  "EXECUTION_BOOTSTRAP_ROUTE_UNEXPECTED", "residual window", "priority"):
+                  "EXECUTION_BOOTSTRAP_ROUTE_UNEXPECTED", "residual window", "gw_priority", "GwPriority"):
         assert topic in text, topic
     assert "docker network disconnect" not in text

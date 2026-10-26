@@ -132,9 +132,9 @@ services:
         # The unique alias. Never `postgres`: on the `coolify` network that name is Coolify's own database.
         aliases: [edge-os-postgres]
       hostdb:
-        # Coolify attaches its own resource network to every container. The highest gateway priority keeps that
-        # extra network off PostgreSQL's default route; the healthcheck asserts the no-NAT hostdb gateway.
-        priority: 1000
+        # Coolify attaches its own resource network to every container. `gw_priority` sets the engine's GwPriority,
+        # which selects the default gateway; the healthcheck asserts the no-NAT hostdb gateway (10.203.0.17).
+        gw_priority: 1000
     restart: unless-stopped
     healthcheck:
       test:
@@ -265,12 +265,12 @@ services:
     mem_reservation: 128m
     pids_limit: 256
     # `private` for PostgreSQL; `egress` for api.privy.io and the Monad RPC only, enforced on the host (see below).
-    # Coolify also attaches its own resource network. The highest gateway priority keeps that network off the
-    # default route; the startup guard and healthcheck refuse when the running route table does not agree.
+    # Coolify also attaches its own resource network. `gw_priority` sets the engine's GwPriority, which selects the
+    # default gateway; the startup guard and healthcheck refuse when the running route table does not agree.
     networks:
       private: {}
       egress:
-        priority: 1000
+        gw_priority: 1000
     restart: unless-stopped
     depends_on:
       postgres: {condition: service_healthy}
@@ -333,6 +333,7 @@ networks:
   # provider egress. Only the execution worker has a route out (`egress`); PostgreSQL's `hostdb` has no NAT.
   private:
     internal: true
+    enable_ipv6: false
     # A fixed bridge name and subnet so the host firewall keeps its gateway from reaching host services.
     driver_opts:
       com.docker.network.bridge.name: edgeos-private
