@@ -133,15 +133,25 @@ def test_the_runbook_creates_the_group_folders_and_start_order() -> None:
         "chown root:edge-os-relay-share /etc/edge-os/relay/provider-ca.pem",
         "hermes-app.env",
         "8011",
-        "sudo -u edge-os-research test -r /etc/edge-os/relay/provider-key",
+        "sudo -g edge-os-relay-share -u edge-os-research test -r /etc/edge-os/relay/provider-key",
+        "sudo -g edge-os-relay-share -u edge-os-research test -r "
+        "/var/lib/edge-os/relay/run-1/relay/relay-config.json",
+        "sudo -g edge-os-relay-share -u edge-os-research test -r "
+        "/var/lib/edge-os/relay/run-1/relay/provider-config.json",
+        "sudo -g edge-os-relay-share -u edge-os-research test -w /var/lib/edge-os/relay/run-1/relay/state",
         "sudo -g edge-os-relay-share -u edge-os-research test -r "
         "/var/lib/edge-os/relay/run-1/relay/secrets/admission-key",
         "sudo -g edge-os-relay-share -u edge-os-research test -w /var/lib/edge-os/relay/run-1/relay/grants",
+        "runuser -g edge-os-relay-share -u edge-os-research",
+        "/var/lib/edge-os/relay/run-1/relay/relay-config.json "
+        "/var/lib/edge-os/relay/run-1/relay/provider-config.json",
         "`channel.path` must name a new child folder under it",
         "`RestrictSUIDSGID=yes`, which denies a `chmod`/`mkdir` mode argument with S_ISGID",
         "`ReadWritePaths=/var/lib/edge-os/relay` is a stable",
     ):
         assert expected in text, expected
+    assert "a denial from it is the stronger proof" not in text
+    assert "The plain user holds neither" not in text
     copy = text.index("printed handoff line")
     app = text.index("start edge-os-hermes-app.service")
     assert copy < app

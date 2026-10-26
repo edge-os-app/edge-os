@@ -405,22 +405,24 @@ These read-only commands record H2 item 6 (the research side cannot read the pro
 them as the operator and record the output:
 
 ```sh
-# The plain user holds neither the relay group nor the shared group: a denial from it is the stronger proof.
-sudo -u edge-os-research test -r /etc/edge-os/relay/provider-key; echo "key_read=$?"      # must print key_read=1
-sudo -u edge-os-research test -r /var/lib/edge-os/relay/run-1/relay/relay-config.json; echo "config_read=$?"
-sudo -u edge-os-research test -r /var/lib/edge-os/relay/run-1/relay/provider-config.json; echo "provider_read=$?"
+# Run every check as the deployed identity: the unit's primary group `edge-os-relay-share`. The plain user is denied
+# at the 0750 relay root, so it cannot detect a config that became group-readable or a state folder that became
+# group-writable.
+sudo -g edge-os-relay-share -u edge-os-research test -r /etc/edge-os/relay/provider-key; echo "key_read=$?"      # must print key_read=1
+sudo -g edge-os-relay-share -u edge-os-research test -r /var/lib/edge-os/relay/run-1/relay/relay-config.json; echo "config_read=$?"
+sudo -g edge-os-relay-share -u edge-os-research test -r /var/lib/edge-os/relay/run-1/relay/provider-config.json; echo "provider_read=$?"
+sudo -g edge-os-relay-share -u edge-os-research test -w /var/lib/edge-os/relay/run-1/relay/state; echo "state_write=$?"          # must be 1
 sudo -g edge-os-relay-share -u edge-os-research test -r /var/lib/edge-os/relay/run-1/relay/secrets/admission-key; echo "admission_read=$?"
 sudo -g edge-os-relay-share -u edge-os-research test -w /var/lib/edge-os/relay/run-1/relay/grants; echo "grants_write=$?"
-# The two positive checks use the deployed identity (the unit primary group); `sudo -u` alone would be a false denial.
-sudo -u edge-os-research test -w /var/lib/edge-os/relay/run-1/relay/state; echo "state_write=$?"          # must be 1
-stat -c '%U:%G %a %n' /var/lib/edge-os/relay /var/lib/edge-os/relay/run-1/relay /var/lib/edge-os/relay/run-1/relay/grants   /var/lib/edge-os/relay/run-1/relay/state /var/lib/edge-os/relay/run-1/relay/secrets/admission-key /var/lib/edge-os/channel
+stat -c '%U:%G %a %n' /var/lib/edge-os/relay /var/lib/edge-os/relay/run-1/relay /var/lib/edge-os/relay/run-1/relay/grants /var/lib/edge-os/relay/run-1/relay/state /var/lib/edge-os/relay/run-1/relay/relay-config.json /var/lib/edge-os/relay/run-1/relay/provider-config.json /var/lib/edge-os/relay/run-1/relay/secrets/admission-key /var/lib/edge-os/channel
 ```
 
-Expected: `key_read=1`, `config_read=1`, `provider_read=1`, `state_write=1` (plain user) and `admission_read=0`,
-`grants_write=0` (deployed identity); the shared paths show the owners, groups and modes in §6.1. The Hermes job container mounts only its
-own turn folder (under the channel) and the read-only job code; it never mounts the admission key, `grants/`,
-`revocations/`, `state/` or the provider key, and the research proxy's bind prefixes exclude
-`/var/lib/edge-os/relay`.
+Expected: `key_read=1`, `config_read=1`, `provider_read=1`, `state_write=1`, `admission_read=0`, `grants_write=0`;
+the shared paths show the owners, groups and modes in §6.1. If the host's sudoers `Runas_Spec` does not allow an
+arbitrary runas group, use `sudo -u root runuser -g edge-os-relay-share -u edge-os-research ...`; the expected values
+do not change. The Hermes job container mounts only its own turn folder (under the channel) and the read-only job
+code; it never mounts the admission key, `grants/`, `revocations/`, `state/` or the provider key, and the research
+proxy's bind prefixes exclude `/var/lib/edge-os/relay`.
 
 After a host reboot, the relay containers are stopped. Run the operator `stop` then `start` (or `restart` for a
 complete, unchanged operation) before expecting relay health; a blind `start` refuses an existing run root by design.

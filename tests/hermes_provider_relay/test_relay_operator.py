@@ -362,15 +362,41 @@ def test_the_run_root_and_shared_folders_have_the_reviewed_group_and_modes(tmp_p
 
 def test_a_start_succeeds_under_the_unit_setgid_filter(tmp_path: Path, key: Path, fake: FakeDocker,
                                                        monkeypatch: pytest.MonkeyPatch) -> None:
-    """`RestrictSUIDSGID=yes` denies any mode argument with S_ISGID (and S_ISUID). The operator must not request one."""
-    real = os.chmod
+    """`RestrictSUIDSGID=yes` denies a mode argument with S_ISGID (or S_ISUID) on every mode-taking call."""
+    real_chmod, real_mkdir, real_open, real_fchmod = os.chmod, os.mkdir, os.open, os.fchmod
 
-    def filtered(path: Any, mode: int, *args: Any, **kwargs: Any) -> None:
+    def refuse(mode: int, path: Any) -> None:
         if mode & 0o6000:
             raise PermissionError(1, "Operation not permitted", str(path))
-        real(path, mode, *args, **kwargs)
 
-    monkeypatch.setattr(os, "chmod", filtered)
+    def filtered_chmod(path: Any, mode: int, *args: Any, **kwargs: Any) -> None:
+        refuse(mode, path)
+        real_chmod(path, mode, *args, **kwargs)
+
+    def filtered_mkdir(path: Any, mode: int = 0o777, *args: Any, **kwargs: Any) -> None:
+        refuse(mode, path)
+        real_mkdir(path, mode, *args, **kwargs)
+
+    def filtered_open(path: Any, flags: int, mode: int = 0o777, *args: Any, **kwargs: Any) -> int:
+        if flags & os.O_CREAT:
+            refuse(mode, path)
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    def filtered_fchmod(fd: int, mode: int) -> None:
+        refuse(mode, f"fd {fd}")
+        real_fchmod(fd, mode)
+
+    monkeypatch.setattr(os, "chmod", filtered_chmod)
+    monkeypatch.setattr(os, "mkdir", filtered_mkdir)
+    monkeypatch.setattr(os, "open", filtered_open)
+    monkeypatch.setattr(os, "fchmod", filtered_fchmod)
+
+    # Positive control: each wrapper refuses a special bit before it reaches the real call.
+    for call in (lambda: os.chmod(tmp_path, 0o2770), lambda: os.mkdir(tmp_path / "x", 0o2770),
+                 lambda: os.open(tmp_path / "y", os.O_CREAT, 0o2770), lambda: os.fchmod(1, 0o2770)):
+        with pytest.raises(PermissionError):
+            call()
+
     loaded, _, _ = started(tmp_path, key)
     assert owned_state(fake, loaded)["container"]
     for path in (tmp_path / "run", tmp_path / "jobs", tmp_path / "run" / "relay" / "grants",
