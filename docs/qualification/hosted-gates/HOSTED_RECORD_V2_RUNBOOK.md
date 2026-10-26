@@ -284,6 +284,12 @@ What `apply` installs:
 - Both networks set `enable_ipv6: false`, so the IPv4 rules cover them.
 - Docker Engine 29 prints an unset endpoint address as the text `invalid IP`; `refresh` reads that text and an empty
   field as no address, and refuses any IPv4 field that is not a dotted quad.
+- `apply` and `refresh` load `br_netfilter` and set `net.bridge.bridge-nf-call-iptables=1` and
+  `net.bridge.bridge-nf-call-ip6tables=1` before the address rules, then read both values back. A missing module or
+  a value other than `1` fails the unit (so Docker does not start) or the refresh, with a named message. Docker's
+  per-bridge `DOCKER-FORWARD` acceptance keeps ordinary same-bridge traffic on the API/web and Coolify bridges
+  working; the `EDGE_OS_BYPASS` rules above then also drop worker and PostgreSQL frames switched inside the injected
+  bridge. `apply` runs before Docker at every boot and `refresh` re-asserts the setting every five minutes.
 - The `INPUT` chains keep all three bridges (`edgeos-egress`, `edgeos-hostdb`, `edgeos-private`) off host services
   (SSH, Coolify, the loopback database). Replies to the loopback publish still arrive (`ESTABLISHED`).
 - The upstream resolvers follow Docker's rule: `/run/systemd/resolve/resolv.conf` only when `/etc/resolv.conf` names
@@ -384,6 +390,12 @@ INJECTED=$(docker inspect "$W" --format '{{range $n, $_ := .NetworkSettings.Netw
   | grep -v -x -e "${PROJECT}_private" -e "${PROJECT}_egress")
 for net in $INJECTED; do must_fail "$W" python -c "$PY_PROBE" \
   "$(docker network inspect "$net" --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}')" 22; done
+# Same-bridge: with br_netfilter (§4.1) the worker must not reach Coolify's proxy on the injected network.
+STACK_NET=$(printf '%s\n' $INJECTED | awk 'NR == 1')
+PROXY_IP=$(docker inspect coolify-proxy --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}} {{$e.IPAddress}}{{"\n"}}{{end}}' \
+  | awk -v n="$STACK_NET" '$1 == n {print $2}')
+if [ -n "$PROXY_IP" ]; then must_fail "$W" python -c "$PY_PROBE" "$PROXY_IP" 80
+else echo "FAIL: coolify-proxy has no address on $STACK_NET"; fi
 running "$W" && docker exec "$W" python -c "
 import urllib.error as e, urllib.request as u
 try: print(u.urlopen('https://api.privy.io', timeout=5).status)

@@ -17,9 +17,11 @@
 # `edgeos-hostdb` bridge label (Coolify starts a Service with `--project-name <service uuid>`, so the file name is not
 # the project name), finds execution-worker and postgres by that project and their service labels, and reads the
 # addresses they hold on any network they do not declare. It drops forwarding to and from exactly those addresses and
-# keeps host-bound traffic replies-only. The idle no-op happens only when none of the fixed bridges exists. A fixed
-# bridge without a project label, a missing or duplicate container, a missing declared network, an unreachable daemon
-# or an IPv6 address fails the refresh; it never passes silently.
+# keeps host-bound traffic replies-only. `apply` and `refresh` first load br_netfilter and enable ip(6)tables on
+# bridged frames, so a same-bridge frame inside Coolify's injected network also meets those drops; a host without the
+# module fails the run instead of leaving that lateral path open. The idle no-op happens only when none of the fixed
+# bridges exists. A fixed bridge without a project label, a missing or duplicate container, a missing declared
+# network, an unreachable daemon or an IPv6 address fails the refresh; it never passes silently.
 #
 # Docker cannot restrict by host name; this script resolves the names on the host into an ipset. `apply` builds the
 # rules in the idle one of two chains and switches the jump to it, so a re-run never leaves an empty chain hooked.
@@ -82,6 +84,26 @@ fill() {
 refresh_allowlist() {
   fill "$SET" "$EDGE_OS_EGRESS_HOSTS"
   fill "$RELAY_SET" "$EDGE_OS_EGRESS_RELAY_HOSTS"
+}
+
+enable_bridge_filtering() {
+  # Docker accepts ordinary same-bridge traffic in DOCKER-FORWARD, so iptables never sees a frame switched inside
+  # one Linux bridge. br_netfilter makes the per-address DROP rules see those frames too. A missing module or a
+  # failed sysctl is fatal: the unit runs before docker.service, so Docker does not start without this control.
+  # Docker's per-bridge FORWARD acceptance keeps API/web and the Coolify proxy on their own bridges working;
+  # `refresh` re-asserts the setting every five minutes.
+  command -v modprobe >/dev/null 2>&1 \
+    || { echo "modprobe is required to load br_netfilter; same-bridge traffic would bypass iptables" >&2; return 1; }
+  command -v sysctl >/dev/null 2>&1 \
+    || { echo "sysctl is required to enable bridge filtering; same-bridge traffic would bypass iptables" >&2; return 1; }
+  modprobe br_netfilter \
+    || { echo "cannot load br_netfilter; same-bridge traffic would bypass iptables" >&2; return 1; }
+  for key in net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables; do
+    sysctl -w "$key=1" >/dev/null \
+      || { echo "cannot set $key; same-bridge traffic would bypass iptables" >&2; return 1; }
+    [ "$(sysctl -n "$key")" = 1 ] \
+      || { echo "$key is not 1; same-bridge traffic would bypass iptables" >&2; return 1; }
+  done
 }
 
 stack_project() {
@@ -322,8 +344,8 @@ exec 9>"$LOCK"
 flock 9
 
 case "${1:-}" in
-  apply) apply ;;
+  apply) enable_bridge_filtering; apply ;;
   # `refresh` runs after Docker exists, so only it inspects containers. It never runs before Docker.
-  refresh) refresh_allowlist; enforce_injected_addresses ;;
+  refresh) enable_bridge_filtering; refresh_allowlist; enforce_injected_addresses ;;
   *) echo "usage: $0 apply|refresh" >&2; exit 2 ;;
 esac
