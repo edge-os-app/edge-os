@@ -112,9 +112,11 @@ def test_the_research_proxy_denies_every_extra_call(proxy, method, path):
     assert not _allowed(_rules(proxy, RESEARCH), method, path)
 
 
-def test_the_research_proxy_limits_bind_mounts_to_its_two_roots(proxy):
+def test_the_research_proxy_limits_bind_mounts_to_its_reviewed_roots(proxy):
     value = support.command_option(proxy["services"][RESEARCH], "allowbindmountfrom")
-    assert value == "/opt/edge-os,/var/lib/edge-os/research"
+    # The third root is the shared relay channel: the job's only relay-adjacent bind source. The relay run root is not
+    # under any of them, so a job cannot bind the relay's config, key, grants or state.
+    assert value == "/opt/edge-os,/var/lib/edge-os/research,/var/lib/edge-os/channel"
 
 
 def test_the_relay_runner_uses_only_the_reviewed_verbs():

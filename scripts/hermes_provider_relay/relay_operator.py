@@ -87,6 +87,12 @@ SHA256 = re.compile(r"[0-9a-f]{64}")
 MAX_FILE_BYTES = 1024 * 1024
 VOLUME_CLAIM_LABEL = "edge-os.relay-operator.claim"  # a fresh random value per start, on the egress volume only
 CONFIG_FILES = {"relay": "relay-config.json", "gateway": "gateway-config.json", "provider": "provider-config.json"}
+# The application user joins the relay's shared group. The run root stays readable and traversable for it, and the
+# channel is group-writable for the job runner, the job and the relay. Both are re-chmodded after `mkdir` because the
+# units set `UMask=0077`. The relay unit keeps `RestrictSUIDSGID=yes`, which denies a mode argument with S_ISGID:
+# every writer already has primary gid `edge-os-relay-share`, so no mode here requests the setgid bit.
+RUN_ROOT_MODE = 0o750
+CHANNEL_MODE = 0o770
 
 
 class OperatorRefused(ValueError):
@@ -535,6 +541,11 @@ def start(config: OperatorConfig) -> tuple[Path, str]:
         config.run_root.mkdir(mode=0o700)  # the exclusive claim: a competing start of this configuration fails here
     except FileExistsError as error:
         raise OperatorRefused("another start claimed this run root first") from error
+    try:
+        os.chmod(config.run_root, RUN_ROOT_MODE)  # the application user traverses it to read the handoff
+    except BaseException:
+        config.run_root.rmdir()  # still empty and created by this call
+        raise
     claim = secrets.token_hex(16)
     try:
         _write_once(config.run_root / "owner.json", {"operation_id": target.operation_id, "run_id": target.run_id,
@@ -545,6 +556,7 @@ def start(config: OperatorConfig) -> tuple[Path, str]:
         raise
     try:
         config.channel_path.mkdir(mode=0o700)
+        os.chmod(config.channel_path, CHANNEL_MODE)  # the job runner, the job and the relay share one group
         _claim_volume(target, claim)
         supervisor.start()
         network = _inspect("network", target.names()["egress"])

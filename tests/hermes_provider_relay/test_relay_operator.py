@@ -338,7 +338,70 @@ def test_the_channel_folder_must_be_new_and_task_owned(tmp_path: Path, key: Path
 def test_a_channel_folder_inside_the_run_root_is_created_by_the_operator(tmp_path: Path, key: Path,
                                                                           fake: FakeDocker) -> None:
     loaded, _, _ = started(tmp_path, key, channel={"name": "jobs", "path": str(tmp_path / "run" / "jobs")})
-    assert stat.S_IMODE((tmp_path / "run" / "jobs").stat().st_mode) == 0o700 and owned_state(fake, loaded)["container"]
+    assert stat.S_IMODE((tmp_path / "run" / "jobs").stat().st_mode) == 0o770 and owned_state(fake, loaded)["container"]
+
+
+def test_the_run_root_and_shared_folders_have_the_reviewed_group_and_modes(tmp_path: Path, key: Path,
+                                                                           fake: FakeDocker) -> None:
+    started(tmp_path, key)
+    relay = tmp_path / "run" / "relay"
+    expected = {
+        tmp_path / "run": 0o750,
+        tmp_path / "jobs": 0o770,
+        relay: 0o750,
+        relay / "grants": 0o770,
+        relay / "revocations": 0o770,
+        relay / "state": 0o750,
+        relay / "secrets": 0o750,
+        relay / "tls": 0o700,
+        relay / "secrets" / "admission-key": 0o440,
+    }
+    for path, mode in expected.items():
+        assert stat.S_IMODE(path.stat().st_mode) == mode, (path, oct(stat.S_IMODE(path.stat().st_mode)))
+
+
+def test_a_start_succeeds_under_the_unit_setgid_filter(tmp_path: Path, key: Path, fake: FakeDocker,
+                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    """`RestrictSUIDSGID=yes` denies a mode argument with S_ISGID (or S_ISUID) on every mode-taking call."""
+    real_chmod, real_mkdir, real_open, real_fchmod = os.chmod, os.mkdir, os.open, os.fchmod
+
+    def refuse(mode: int, path: Any) -> None:
+        if mode & 0o6000:
+            raise PermissionError(1, "Operation not permitted", str(path))
+
+    def filtered_chmod(path: Any, mode: int, *args: Any, **kwargs: Any) -> None:
+        refuse(mode, path)
+        real_chmod(path, mode, *args, **kwargs)
+
+    def filtered_mkdir(path: Any, mode: int = 0o777, *args: Any, **kwargs: Any) -> None:
+        refuse(mode, path)
+        real_mkdir(path, mode, *args, **kwargs)
+
+    def filtered_open(path: Any, flags: int, mode: int = 0o777, *args: Any, **kwargs: Any) -> int:
+        if flags & os.O_CREAT:
+            refuse(mode, path)
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    def filtered_fchmod(fd: int, mode: int) -> None:
+        refuse(mode, f"fd {fd}")
+        real_fchmod(fd, mode)
+
+    monkeypatch.setattr(os, "chmod", filtered_chmod)
+    monkeypatch.setattr(os, "mkdir", filtered_mkdir)
+    monkeypatch.setattr(os, "open", filtered_open)
+    monkeypatch.setattr(os, "fchmod", filtered_fchmod)
+
+    # Positive control: each wrapper refuses a special bit before it reaches the real call.
+    for call in (lambda: os.chmod(tmp_path, 0o2770), lambda: os.mkdir(tmp_path / "x", 0o2770),
+                 lambda: os.open(tmp_path / "y", os.O_CREAT, 0o2770), lambda: os.fchmod(1, 0o2770)):
+        with pytest.raises(PermissionError):
+            call()
+
+    loaded, _, _ = started(tmp_path, key)
+    assert owned_state(fake, loaded)["container"]
+    for path in (tmp_path / "run", tmp_path / "jobs", tmp_path / "run" / "relay" / "grants",
+                 tmp_path / "run" / "relay" / "state"):
+        assert stat.S_IMODE(path.stat().st_mode) & 0o6000 == 0
 
 
 # --- ACTUAL: only the default registry, the record and its CA bundle ----------------------------------------------------

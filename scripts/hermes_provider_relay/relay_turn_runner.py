@@ -50,6 +50,9 @@ MAX_RECORD_BYTES = 64 * 1024
 MAX_KEY_BYTES = 1024
 CLOSE_POLL_SECONDS = 0.02
 COUNTED = ("RETURNED", "TRUNCATED")
+# The relay reads this grant and revocation as the same group, so the file must not stay owner-only. The unit's
+# `UMask=0077` hides the group bit, so it is set again on the open descriptor.
+GRANT_FILE_MODE = 0o640
 
 
 def relay_job_entry(route: TransportRoute, release: RelayRelease) -> JobEntry:
@@ -165,8 +168,14 @@ class RelayTurnRunner:
     def _write_once(path: Path, value: dict[str, Any]) -> bool:
         temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         try:
-            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, GRANT_FILE_MODE)
         except OSError:
+            return False
+        try:
+            os.fchmod(fd, GRANT_FILE_MODE)  # the unit's UMask would drop the group bit
+        except OSError:
+            os.close(fd)
+            temporary.unlink(missing_ok=True)
             return False
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as stream:

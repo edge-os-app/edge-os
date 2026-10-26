@@ -59,6 +59,17 @@ KERNEL_VIEW = (  # run inside a container by `docker exec`: its own namespace, i
     "'ipv6_routes_not_loopback': [l.split()[-1] for l in r('/proc/net/ipv6_route') if l.split()[-1] != 'lo']}))")
 HARDENING = ("--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--memory=256m",
              "--memory-swap=256m", "--cpus=1", "--pids-limit=64", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m")
+# The relay process and the application process share one group (the units set it as `Group=`). The relay's own folders
+# stay owner-only; the three the application shares are group-readable, and grants/revocations are group-writable for
+# the application. `state` stays read-only for the application because the relay is its only writer. All modes are
+# explicit: the units set `UMask=0077`, so `mkdir(mode=...)` alone would drop the group bits. The unit keeps
+# `RestrictSUIDSGID=yes`, which denies S_ISGID in a mode argument; the shared primary gid makes the setgid bit
+# unnecessary, so no mode here requests it.
+RELAY_ROOT_MODE = 0o750
+CHANNEL_ROOT_MODE = 0o770
+SHARED_FOLDER_MODES = {"grants": 0o770, "revocations": 0o770, "state": 0o750, "secrets": 0o750}
+PRIVATE_FOLDER_MODE = 0o700
+ADMISSION_KEY_MODE = 0o440
 
 
 def docker(*args: str, timeout: float = DOCKER_SECONDS, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -128,17 +139,22 @@ class RelaySupervisor:
                              self.path("secrets", "admission-key"), channel_root)
 
     def _prepare(self) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.root, RELAY_ROOT_MODE)  # the application traverses it; its own files below stay owner-only
         for folder in ("grants", "revocations", "state", "secrets", "tls", "provider/scripts", "provider/receipts",
                        "gateway/receipts"):
-            self.path(*folder.split("/")).mkdir(parents=True, exist_ok=True, mode=0o700)
+            path = self.path(*folder.split("/"))
+            path.mkdir(parents=True, exist_ok=True, mode=PRIVATE_FOLDER_MODE)
+            os.chmod(path, SHARED_FOLDER_MODES.get(folder, PRIVATE_FOLDER_MODE))
         key = self.path("secrets", "admission-key")
         if not key.exists():
             key.write_bytes(secrets.token_bytes(32))
-            key.chmod(0o400)
+            key.chmod(ADMISSION_KEY_MODE)  # the application reads it; the relay reads it as its owner
         if self.actual is None and not self.path("tls", "server.pem").exists():  # a throwaway test CA, never ACTUAL
             make_provider_tls(self.path("tls"), (ONLINE_HOST if self.online else PROVIDER_HOST,))
         for root in self.channel_roots.values():
             root.mkdir(parents=True, exist_ok=True)
+            os.chmod(root, CHANNEL_ROOT_MODE)  # the job runner, the job and the relay share one group
         if self.online:
             destination = ProviderDestination(ONLINE_HOST, ONLINE_PORT, ONLINE_PATH)
             target = {"gateway_socket": f"/relay/egress/{GATEWAY_SOCKET}", "egress_probes": []}  # it has no network
