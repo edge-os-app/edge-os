@@ -274,6 +274,19 @@ CHANGES = {
     "byte_count_true": lambda state: [capture.update(byte_count=True)
                                       for capture in state["expiry_captures"].values()],
     "status_true": lambda state: [capture.update(status=True) for capture in state["expiry_captures"].values()],
+    # Out of order within one millisecond: the clock writes microseconds.
+    "rerun_completed_before_capture_same_ms": lambda state: (
+        state["expiry_captures"]["rerun"].update(captured_at="2026-10-26T09:30:00.000900+00:00"),
+        state["records"][EXPIRY].update(completed_at="2026-10-26T09:30:00.000100+00:00")),
+    "earlier_completed_before_capture_same_ms": lambda state: state["earlier"][EXPIRY].update(
+        completed_at="2026-10-23T08:00:00.123000+00:00"),
+    "earlier_completed_after_rerun_capture_same_ms": lambda state: state["earlier"][EXPIRY].update(
+        completed_at="2026-10-26T09:30:00.654900+00:00"),
+    "rerun_captured_before_earlier_same_ms": lambda state: (
+        state["expiry_captures"]["earlier"].update(captured_at="2026-10-23T08:00:00.123900+00:00"),
+        state["expiry_captures"]["rerun"].update(captured_at="2026-10-23T08:00:00.123100+00:00"),
+        state["records"][EXPIRY].update(completed_at="2026-10-23T08:00:00.124000+00:00"),
+        state["earlier"][EXPIRY].update(completed_at="2026-10-23T08:00:00.123900+00:00")),
     # The two attempts are not strictly ordered, though each is consistent on its own.
     "rerun_captured_at_the_earlier_moment": lambda state: (
         state["expiry_captures"]["earlier"].update(captured_at="2026-10-26T09:30:00.654321+00:00"),
@@ -330,6 +343,14 @@ def test_evidence_that_does_not_cite_itself_or_its_positive_control_stays_unprov
 def test_a_packet_whose_expiry_row_has_another_header_stays_unproven(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(control_proofs, "CONTROL_PROOF_EXPIRED_HEADER", "1792000000001")
     assert _build(_recorded())["unproven"]["expiry_freshness"] == {"reason": "EXPIRY_REQUEST_NOT_ISOLATED"}
+
+
+def test_times_one_microsecond_apart_in_order_keep_the_decision() -> None:
+    state = _recorded()
+    state["expiry_captures"]["rerun"].update(captured_at="2026-10-26T09:30:00.000100+00:00")
+    state["records"][EXPIRY].update(completed_at="2026-10-26T09:30:00.000101+00:00")
+    state["earlier"][EXPIRY].update(completed_at="2026-10-26T09:30:00.000100+00:00")
+    assert "expiry_freshness" in _build(_recite(state))["decision_required"]
 
 
 def test_the_recite_helper_alone_keeps_the_decision() -> None:

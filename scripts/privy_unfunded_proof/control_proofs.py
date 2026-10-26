@@ -507,8 +507,11 @@ _CAPTURE_KEYS = frozenset({"specimen_id", "profile", "packet_id", "policy_id", "
                            "error_type", "metadata_valid", "captured_at", "evidence_class"})
 
 
-def _epoch_ms(value: Any) -> int | None:
-    """A UTC time as the runner's clock writes it (``isoformat()``, or with ``Z``), in Unix milliseconds."""
+def _epoch_us(value: Any) -> int | None:
+    """A UTC time as the runner's clock writes it (``isoformat()``, or with ``Z``), in Unix microseconds.
+
+    Microseconds, the clock's own precision, so two times within one millisecond still compare in order.
+    """
     if (type(value) is not str
             or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)", value) is None):
         return None
@@ -516,7 +519,7 @@ def _epoch_ms(value: Any) -> int | None:
         moment = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
-    return (moment - dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)) // dt.timedelta(milliseconds=1)
+    return (moment - dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)) // dt.timedelta(microseconds=1)
 
 
 class _Privy:
@@ -608,8 +611,8 @@ class _Privy:
                 and capture["error_code"] is None and capture["error_type"] is None
                 and type(capture["content_type_sha256"]) is str
                 and _HEX64.fullmatch(capture["content_type_sha256"]) is not None
-                and (_epoch_ms(capture["captured_at"]) or 0) > int(CONTROL_PROOF_EXPIRED_HEADER)
-                and (_epoch_ms(record["completed_at"]) or 0) >= _epoch_ms(capture["captured_at"]))
+                and (_epoch_us(capture["captured_at"]) or 0) > int(CONTROL_PROOF_EXPIRED_HEADER) * 1000
+                and (_epoch_us(record["completed_at"]) or 0) >= _epoch_us(capture["captured_at"]))
 
     def refused_unreadably(self) -> dict[str, Any]:
         """The expiry row was refused twice with the same unreadable 401, after the positive control signed.
@@ -628,8 +631,8 @@ class _Privy:
                 and self.captures.get(specimen_id) == record["capture_record_sha256"]
                 and self._rerun_valid(specimen_id, record)
                 and all(first[key] == again[key] for key in ("raw_body_sha256", "byte_count", "content_type_sha256"))
-                and _epoch_ms(first["captured_at"]) < _epoch_ms(again["captured_at"])
-                and _epoch_ms(earlier["completed_at"]) <= _epoch_ms(again["captured_at"])):
+                and _epoch_us(first["captured_at"]) < _epoch_us(again["captured_at"])
+                and _epoch_us(earlier["completed_at"]) <= _epoch_us(again["captured_at"])):
             raise _Unproven("PRIVY_RECORD_INVALID")
         self.used.update({positive, specimen_id})
         return {
