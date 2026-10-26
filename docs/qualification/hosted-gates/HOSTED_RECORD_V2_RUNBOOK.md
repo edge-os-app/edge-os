@@ -282,6 +282,8 @@ What `apply` installs:
   survive on the `ESTABLISHED` allowance. `conntrack` is required; a failed flush fails `apply`.
 - `apply` holds a lock (`flock`), so two runs never build the same idle chain at once.
 - Both networks set `enable_ipv6: false`, so the IPv4 rules cover them.
+- Docker Engine 29 prints an unset endpoint address as the text `invalid IP`; `refresh` reads that text and an empty
+  field as no address, and refuses any IPv4 field that is not a dotted quad.
 - The `INPUT` chains keep all three bridges (`edgeos-egress`, `edgeos-hostdb`, `edgeos-private`) off host services
   (SSH, Coolify, the loopback database). Replies to the loopback publish still arrive (`ESTABLISHED`).
 - The upstream resolvers follow Docker's rule: `/run/systemd/resolve/resolv.conf` only when `/etc/resolv.conf` names

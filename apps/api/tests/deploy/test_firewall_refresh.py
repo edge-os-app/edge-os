@@ -13,7 +13,7 @@ import deploy_support as support
 
 SCRIPT = support.REPO / "deploy" / "host" / "edge-os-egress-firewall.sh"
 PROJECT = "w2d8bizjdeweqxxoaqcjobqo"
-def declared(project: str) -> dict[str, list[tuple[str, str]]]:
+def declared(project: str) -> dict[str, list[tuple[str, ...]]]:
     return {
         "execution-worker": [(f"{project}_private", "10.203.0.100"), (f"{project}_egress", "10.203.0.2")],
         "postgres": [(f"{project}_private", "10.203.0.101"), (f"{project}_hostdb", "10.203.0.18")],
@@ -28,10 +28,13 @@ def stub(folder: Path, name: str, body: str) -> None:
 
 def docker_stub(*, project: str, bridge_project: str | None, worker: list[tuple[str, ...]],
                 postgres: list[tuple[str, ...]], missing: tuple[str, ...] = (),
-                no_containers: bool = False, docker_down: bool = False) -> str:
+                no_containers: bool = False, docker_down: bool = False,
+                worker_lines: str | None = None, postgres_lines: str | None = None) -> str:
     def rows(pairs: list[tuple[str, ...]]) -> str:
-        return " ".join("'" + " ".join(pair) + " '" for pair in pairs)
+        return " ".join("'" + "|".join((pair + ("", ""))[:3]) + "'" for pair in pairs)
 
+    worker_out = f"printf '%s\\n' {worker_lines or rows(worker)}"
+    postgres_out = f"printf '%s\\n' {postgres_lines or rows(postgres)}"
     worker_ps = "" if no_containers or "execution-worker" in missing else "echo workerid"
     postgres_ps = "" if no_containers or "postgres" in missing else "echo postgresid"
     networks = "" if bridge_project is None else (
@@ -53,8 +56,8 @@ case "$1" in
   inspect)
     for a do last=$a; done
     case "$last" in
-      workerid) printf '%s\\n' {rows(worker)} ;;
-      postgresid) printf '%s\\n' {rows(postgres)} ;;
+      workerid) {worker_out} ;;
+      postgresid) {postgres_out} ;;
       *) exit 1 ;;
     esac ;;
 esac
@@ -64,7 +67,8 @@ exit 0
 
 def run_refresh(tmp_path: Path, *, project: str = PROJECT, bridge_project: str | None = PROJECT,
                 env_project: str | None = None, worker_extra=(), postgres_extra=(),
-                missing=(), no_containers=False, docker_down=False):
+                missing=(), no_containers=False, docker_down=False,
+                worker_lines: str | None = None, postgres_lines: str | None = None):
     binaries = tmp_path / "bin"
     binaries.mkdir(exist_ok=True)
     log = tmp_path / "commands.log"
@@ -73,7 +77,8 @@ def run_refresh(tmp_path: Path, *, project: str = PROJECT, bridge_project: str |
         project=project, bridge_project=bridge_project,
         worker=[*declared(project)["execution-worker"], *worker_extra],
         postgres=[*declared(project)["postgres"], *postgres_extra], missing=missing,
-        no_containers=no_containers, docker_down=docker_down))
+        no_containers=no_containers, docker_down=docker_down,
+        worker_lines=worker_lines, postgres_lines=postgres_lines))
     stub(binaries, "iptables", 'echo "iptables $*" >> "$STUB_LOG"\n'
                                'case " $* " in *" -D "*) exit 1 ;; esac\nexit 0\n')
     stub(binaries, "ipset", 'echo "ipset $*" >> "$STUB_LOG"\nexit 0\n')
@@ -184,3 +189,90 @@ def test_refresh_fails_loudly_on_an_ipv6_address_on_the_extra_network(tmp_path):
         tmp_path, worker_extra=[(PROJECT, "10.0.2.5", "fd00::5")])
     assert completed.returncode != 0
     assert "IPv6" in completed.stderr
+
+
+def test_refresh_accepts_the_docker29_worker_sample(tmp_path):
+    completed, commands = run_refresh(
+        tmp_path,
+        worker_lines=(f"'{PROJECT}_egress|10.203.0.2|invalid IP' "
+                      f"'{PROJECT}_private|10.203.0.69|invalid IP'"))
+    assert completed.returncode == 0, completed.stderr
+    assert "IPv6" not in completed.stderr
+    assert "-j DROP" not in commands
+
+
+def test_refresh_accepts_the_docker29_postgres_sample(tmp_path):
+    completed, commands = run_refresh(
+        tmp_path,
+        postgres_lines=(f"'{PROJECT}_private|10.203.0.66|invalid IP' "
+                        f"'{PROJECT}_hostdb|10.203.0.18|invalid IP' "
+                        f"'{PROJECT}|10.0.2.7|invalid IP'"))
+    assert completed.returncode == 0, completed.stderr
+    assert "IPv6" not in completed.stderr
+    assert "-s 10.0.2.7 -j DROP" in commands
+    assert "-d 10.0.2.7 -j DROP" in commands
+    assert "invalid" not in commands
+
+
+def test_refresh_treats_invalid_ip_as_no_address_in_both_fields(tmp_path):
+    completed, commands = run_refresh(
+        tmp_path,
+        worker_lines=(f"'{PROJECT}_egress|invalid IP|invalid IP' "
+                      f"'{PROJECT}_private|10.203.0.100|invalid IP' "
+                      f"'{PROJECT}|invalid IP|invalid IP'"))
+    assert completed.returncode == 0, completed.stderr
+    assert "-j DROP" not in commands
+
+
+def test_refresh_accepts_a_two_field_empty_address_line(tmp_path):
+    completed, commands = run_refresh(
+        tmp_path,
+        worker_lines=(f"'{PROJECT}_egress|10.203.0.2' "
+                      f"'{PROJECT}_private|10.203.0.100'"))
+    assert completed.returncode == 0, completed.stderr
+    assert "-j DROP" not in commands
+
+
+def test_refresh_drops_an_extra_ipv4_with_a_spaced_network_name(tmp_path):
+    completed, commands = run_refresh(
+        tmp_path,
+        worker_lines=(f"'{PROJECT}_egress|10.203.0.2|invalid IP' "
+                      f"'{PROJECT}_private|10.203.0.100|invalid IP' "
+                      f"'odd name|10.0.2.9|invalid IP'"))
+    assert completed.returncode == 0, completed.stderr
+    assert "-s 10.0.2.9 -j DROP" in commands
+    assert "-d 10.0.2.9 -j DROP" in commands
+
+
+def test_refresh_refuses_a_real_ipv6_on_a_declared_network(tmp_path):
+    completed, _ = run_refresh(
+        tmp_path,
+        worker_lines=(f"'{PROJECT}_egress|10.203.0.2|invalid IP' "
+                      f"'{PROJECT}_private|10.203.0.100|fd00::7'"))
+    assert completed.returncode != 0
+    assert "IPv6" in completed.stderr
+    assert "declared network" in completed.stderr
+
+
+def test_refresh_refuses_an_ipv4_field_that_is_not_a_dotted_quad(tmp_path):
+    completed, commands = run_refresh(tmp_path, worker_extra=[(PROJECT, "10.0.2")])
+    assert completed.returncode != 0
+    assert "not a dotted quad" in completed.stderr
+    assert "-s 10.0.2 -j DROP" not in commands
+
+
+def test_refresh_refuses_a_malformed_endpoint_line(tmp_path):
+    completed, _ = run_refresh(
+        tmp_path,
+        worker_lines=(f"'{PROJECT}_egress|10.203.0.2|invalid IP' "
+                      f"'{PROJECT}_private|10.203.0.100|invalid IP' "
+                      f"'{PROJECT}'"))
+    assert completed.returncode != 0
+    assert "malformed network endpoint line" in completed.stderr
+
+
+def test_refresh_refuses_a_leading_zero_octet(tmp_path):
+    completed, commands = run_refresh(tmp_path, worker_extra=[(PROJECT, "010.0.2.5")])
+    assert completed.returncode != 0
+    assert "not a dotted quad" in completed.stderr
+    assert "-s 010.0.2.5" not in commands
