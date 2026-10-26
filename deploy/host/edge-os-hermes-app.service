@@ -1,5 +1,5 @@
 [Unit]
-Description=Edge OS Hermes relay application (host-side, loopback only)
+Description=Edge OS Hermes relay application (host-side; bind from EDGE_OS_APP_BIND_HOST)
 Documentation=file:/opt/edge-os/deploy/coolify/RUNBOOK.md
 Requires=edge-os-socket-proxy.service
 After=edge-os-socket-proxy.service docker.service
