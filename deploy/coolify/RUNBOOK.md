@@ -223,12 +223,14 @@ install -d -m 0750 -o edge-os-proxy-relay -g edge-os-relay /run/edge-os/relay
 install -d -m 0750 -o edge-os-relay -g edge-os-relay-share /var/lib/edge-os/relay
 install -d -m 0700 -o edge-os-relay -g edge-os-relay /var/lib/edge-os/relay/docker-config
 install -d -m 0750 -o edge-os-relay -g edge-os-relay /etc/edge-os/relay
-install -d -m 2770 -o edge-os-relay -g edge-os-relay-share /var/lib/edge-os/channel
+install -d -m 2770 -o root -g edge-os-relay-share /var/lib/edge-os/channel
 ```
 
 The research root and its `tmp` keep the setgid bit (`2750`), so files the application writes there stay in the
 `edge-os-research` group and the relay cannot read research evidence. The shared channel root (`/var/lib/edge-os/channel`,
-`2770`) is the only place the job, the application and the relay all write. The relay run root is `0750` with group
+`2770`) is the only place the job, the application and the relay all write. The operator configuration's
+`channel.path` must name a new child folder under it, for example `/var/lib/edge-os/channel/hermes-channel-1`; the
+operator refuses a channel folder that already exists, and the root itself is never a channel path. The relay run root is `0750` with group
 `edge-os-relay-share`, so the application can traverse it to read `handoff.json`; the relay's configs, `tls/`, `provider/`,
 `gateway/` and `secrets/` stay owner-only. `grants/` and `revocations/` are `2770`, `state/` is `2750` (the relay is its
 only writer). The socket proxies' docker-config folders stay `0700` for their own user.
@@ -286,7 +288,7 @@ Every host unit sets `DOCKER_CONFIG` in its own unit file, because `ProtectHome=
 worker and the application. Without it the Docker CLI prints a permission warning and the operator reads every
 answer as `unknown`.
 
-`/etc/edge-os/hermes-app.env` (mode `0600`, owner `root:edge-os-research`) holds the application's names:
+`/etc/edge-os/hermes-app.env` (mode `0640`, owner `root:edge-os-research`) holds the application's names:
 
 ```text
 EDGE_OS_HANDOFF_PATH=/var/lib/edge-os/relay/run-1/handoff.json
@@ -305,7 +307,9 @@ container runs with the shared group:
 ```sh
 chown root:edge-os-relay-share /etc/edge-os/relay/provider-ca.pem
 chmod 0640 /etc/edge-os/relay/provider-ca.pem
-``` The release record under `/opt/edge-os` is a tracked file with git mode `0644`,
+```
+
+The release record under `/opt/edge-os` is a tracked file with git mode `0644`,
 so the relay container reads it unchanged. `/etc/edge-os/relay/relay.json` and `provider-key` stay `edge-os-relay` only.
 
 ### 6.4 Docker API calls and the derived allow-list
@@ -396,17 +400,19 @@ These read-only commands record H2 item 6 (the research side cannot read the pro
 them as the operator and record the output:
 
 ```sh
+# The plain user holds neither the relay group nor the shared group: a denial from it is the stronger proof.
 sudo -u edge-os-research test -r /etc/edge-os/relay/provider-key; echo "key_read=$?"      # must print key_read=1
 sudo -u edge-os-research test -r /var/lib/edge-os/relay/run-1/relay/relay-config.json; echo "config_read=$?"
 sudo -u edge-os-research test -r /var/lib/edge-os/relay/run-1/relay/provider-config.json; echo "provider_read=$?"
-sudo -u edge-os-research test -r /var/lib/edge-os/relay/run-1/relay/secrets/admission-key; echo "admission_read=$?"
-sudo -u edge-os-research test -w /var/lib/edge-os/relay/run-1/relay/grants; echo "grants_write=$?"
+sudo -g edge-os-relay-share -u edge-os-research test -r /var/lib/edge-os/relay/run-1/relay/secrets/admission-key; echo "admission_read=$?"
+sudo -g edge-os-relay-share -u edge-os-research test -w /var/lib/edge-os/relay/run-1/relay/grants; echo "grants_write=$?"
+# The two positive checks use the deployed identity (the unit primary group); `sudo -u` alone would be a false denial.
 sudo -u edge-os-research test -w /var/lib/edge-os/relay/run-1/relay/state; echo "state_write=$?"          # must be 1
 stat -c '%U:%G %a %n' /var/lib/edge-os/relay /var/lib/edge-os/relay/run-1/relay /var/lib/edge-os/relay/run-1/relay/grants   /var/lib/edge-os/relay/run-1/relay/state /var/lib/edge-os/relay/run-1/relay/secrets/admission-key /var/lib/edge-os/channel
 ```
 
-Expected: `key_read=1`, `config_read=1`, `provider_read=1`, `admission_read=0`, `grants_write=0`,
-`state_write=1`; the shared paths show the owners, groups and modes in §6.1. The Hermes job container mounts only its
+Expected: `key_read=1`, `config_read=1`, `provider_read=1`, `state_write=1` (plain user) and `admission_read=0`,
+`grants_write=0` (deployed identity); the shared paths show the owners, groups and modes in §6.1. The Hermes job container mounts only its
 own turn folder (under the channel) and the read-only job code; it never mounts the admission key, `grants/`,
 `revocations/`, `state/` or the provider key, and the research proxy's bind prefixes exclude
 `/var/lib/edge-os/relay`.

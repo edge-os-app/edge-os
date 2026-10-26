@@ -125,7 +125,7 @@ def test_the_runbook_creates_the_group_folders_and_start_order() -> None:
     for expected in (
         "groupadd --system edge-os-relay-share",
         "install -d -m 0750 -o edge-os-relay -g edge-os-relay-share /var/lib/edge-os/relay",
-        "install -d -m 2770 -o edge-os-relay -g edge-os-relay-share /var/lib/edge-os/channel",
+        "install -d -m 2770 -o root -g edge-os-relay-share /var/lib/edge-os/channel",
         "install -d -m 2750 -o edge-os-research -g edge-os-research /var/lib/edge-os/research",
         "install -d -m 0700 -o edge-os-relay -g edge-os-relay /var/lib/edge-os/relay/docker-config",
         "install -d -m 0700 -o edge-os-research -g edge-os-research /var/lib/edge-os/research/docker-config",
@@ -133,6 +133,10 @@ def test_the_runbook_creates_the_group_folders_and_start_order() -> None:
         "hermes-app.env",
         "8011",
         "sudo -u edge-os-research test -r /etc/edge-os/relay/provider-key",
+        "sudo -g edge-os-relay-share -u edge-os-research test -r "
+        "/var/lib/edge-os/relay/run-1/relay/secrets/admission-key",
+        "sudo -g edge-os-relay-share -u edge-os-research test -w /var/lib/edge-os/relay/run-1/relay/grants",
+        "`channel.path` must name a new child folder under it",
     ):
         assert expected in text, expected
     copy = text.index("printed handoff line")

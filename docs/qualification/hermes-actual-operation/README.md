@@ -85,13 +85,13 @@ In the hosted layout the application runs as `edge-os-research` and the relay as
 | operator configuration file | root:edge-os-relay | 0640 | root | operator |
 | `<run root>/owner.json`, `resources.json`, `start-failed.json`, `stopped.json`, `stop-incomplete-<ns>.json` | edge-os-relay:edge-os-relay-share | 0600 / 0400 | operator, each once | operator |
 | `<run root>/handoff.json` | edge-os-relay:edge-os-relay-share | 0444 | operator, once | operator; application |
-| `<run root>/relay/relay-config.json`, `provider-config.json`, `gateway-config.json` | edge-os-relay:edge-os-relay | 0600 | `RelaySupervisor` (operator process) | relay, stand-in, gateway (read-only mount) |
-| `<run root>/relay/tls/`, `provider/`, `gateway/` | edge-os-relay:edge-os-relay | 0700 | `RelaySupervisor` | relay, gateway (read-only mounts); not the application |
+| `<run root>/relay/relay-config.json`, `provider-config.json`, `gateway-config.json` | edge-os-relay:edge-os-relay-share | 0600 | `RelaySupervisor` (operator process) | relay, stand-in, gateway (read-only mount) |
+| `<run root>/relay/tls/`, `provider/`, `gateway/` | edge-os-relay:edge-os-relay-share | 0700 | `RelaySupervisor` | relay, gateway (read-only mounts); not the application |
 | `<run root>/relay/secrets/` | edge-os-relay:edge-os-relay-share | 0750 | `RelaySupervisor` | relay and application traverse |
 | `<run root>/relay/secrets/admission-key` | edge-os-relay:edge-os-relay-share | 0440 | `RelaySupervisor._prepare` | relay (owner); application (group) |
 | `<run root>/relay/grants/<attempt>.json` | edge-os-research:edge-os-relay-share | 2770 dir, 0640 file | application `RelayTurnRunner.run_turn`, once per attempt | relay (read-only mount) |
 | `<run root>/relay/revocations/<attempt>.json` | edge-os-research:edge-os-relay-share | 2770 dir, 0640 file | application `RelayTurnRunner._close`, once per attempt | relay |
-| `<run root>/relay/state/` (`heartbeat.json`, `events.jsonl`, `<attempt>/started.json`, `finished.json`, `closed.json`) | edge-os-relay:edge-os-relay-share | 2750 dir, 0640 files | relay | application `RelayTurnRunner` (heartbeat and records); the application cannot write it |
+| `<run root>/relay/state/` (`heartbeat.json`, `<attempt>/started.json`, `finished.json`, `closed.json`; `events.jsonl` stays `0600` and is relay-only) | edge-os-relay:edge-os-relay-share | 2750 dir, 0640 files | relay | application `RelayTurnRunner` (heartbeat and records); the application cannot write it |
 | `<run root>/relay/gateway/receipts/`, `provider/receipts/` | edge-os-relay:edge-os-relay | 0700 | gateway, AUTHORED stand-in | evidence |
 | `<run root>/relay/provider/scripts/<attempt>.json` | edge-os-relay:edge-os-relay | 0700 | AUTHORED test scaffolding only (the test's script owner, e.g. `relay_harness.Rig.script_for`); not in the handoff | AUTHORED stand-in; no ACTUAL equivalent |
 | `<channel path>/` (the job evidence folder and channel files) | edge-os-relay:edge-os-relay-share | 2770 root; 0770 turn, `output/` and `output/relay-channel/` folders | application job runner (`GuardedDockerTurnRunner`) and the job; relay writes channel replies | application, job, relay |
