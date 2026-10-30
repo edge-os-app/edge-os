@@ -17,7 +17,8 @@ socket. The socket lives in a labelled tmpfs Docker volume (mode 0700, owned by 
 run as) mounted into the relay and the gateway only, never on the host file system. For an AUTHORED release a TLS
 stand-in for `openrouter.ai` (test CA) runs on that bridge and the gateway uses the test resolution to its address. An
 ACTUAL release needs its approved record (`relay_admission.load_actual_release`), the record's CA bundle and a key file
-readable by its owner only; it runs no stand-in and no test resolution. None is approved in this candidate.
+readable by its owner only; it runs no stand-in and no test resolution. The gateway admits only the destination host
+and port of the release in force: the approved record's own for ACTUAL, the stand-in's for AUTHORED.
 
 It never reads a real credential in this candidate: the caller passes a synthetic key file.
 """
@@ -36,7 +37,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from relay_admission import ActualRelease, ProviderDestination, RelayRelease
+from egress_gateway import AllowedTarget
+from relay_admission import ActualRelease, ProviderDestination, RelayRelease, load_actual_release
 from relay_turn_runner import RelayEndpoint
 
 __all__ = ["RelaySupervisor", "make_provider_tls"]
@@ -46,7 +48,8 @@ SUPPORT = (HERE.parent / "hermes_job_support", HERE.parent / "hermes_interpretat
 LABEL = "edge-os.hermes-relay"
 PYTHON = "/usr/local/bin/python"
 PROVIDER_HOST, PROVIDER_PORT, PROVIDER_PATH = "localhost", 8443, "/v1/chat/completions"
-ONLINE_HOST, ONLINE_PORT, ONLINE_PATH = "openrouter.ai", 443, "/api/v1/chat/completions"
+# AUTHORED online only: the destination the TLS stand-in plays. ACTUAL uses its approved record's destination.
+STAND_IN = ProviderDestination("openrouter.ai", 443, "/api/v1/chat/completions")
 GATEWAY_SOCKET = "gateway.sock"
 DOCKER_SECONDS = 60
 START_SECONDS = 30.0
@@ -117,8 +120,11 @@ class RelaySupervisor:
         if self.actual is not None:
             if self.actual.release != self.release or self.release_record is None or self.ca_bundle_file is None:
                 raise ValueError("an ACTUAL supervisor needs its approved record, the record file and its CA bundle")
-            if hashlib.sha256(self.release_record.read_bytes()).hexdigest() != self.actual.record_sha256:
+            record = self.release_record.read_bytes()
+            if hashlib.sha256(record).hexdigest() != self.actual.record_sha256:
                 raise ValueError("the release record file is not the approved record")
+            if load_actual_release(record, self.actual.record_sha256) != self.actual:  # the gateway's target is its own
+                raise ValueError("the ACTUAL release is not the one its approved record file gives")
             if hashlib.sha256(self.ca_bundle_file.read_bytes()).hexdigest() != self.actual.ca_bundle_sha256:
                 raise ValueError("the CA bundle file does not have the record's hash")
             if stat.S_IMODE(self.provider_key_file.stat().st_mode) & 0o077:
@@ -126,6 +132,7 @@ class RelaySupervisor:
             self.online = True
         elif self.release.kind != "AUTHORED":
             raise ValueError("an ACTUAL release is supervised only with its approved release record")
+        AllowedTarget(self.destination().host, self.destination().port)  # refused here, before any Docker resource
         self.names = {"relay": f"relay-{self.run_id}", "provider": f"relay-provider-{self.run_id}",
                       "gateway": f"relay-gateway-{self.run_id}", "egress": f"relay-egress-{self.run_id}"}
 
@@ -133,6 +140,12 @@ class RelaySupervisor:
 
     def path(self, *parts: str) -> Path:
         return self.root.joinpath(*parts)
+
+    def destination(self) -> ProviderDestination:
+        """Where the relay sends: the approved record's destination (ACTUAL), the stand-in or the loopback provider."""
+        if self.actual is not None:
+            return self.actual.destination
+        return STAND_IN if self.online else ProviderDestination(PROVIDER_HOST, PROVIDER_PORT, PROVIDER_PATH)
 
     def endpoint(self, channel_root: str) -> RelayEndpoint:
         return RelayEndpoint(self.path("grants"), self.path("revocations"), self.path("state"),
@@ -151,16 +164,15 @@ class RelaySupervisor:
             key.write_bytes(secrets.token_bytes(32))
             key.chmod(ADMISSION_KEY_MODE)  # the application reads it; the relay reads it as its owner
         if self.actual is None and not self.path("tls", "server.pem").exists():  # a throwaway test CA, never ACTUAL
-            make_provider_tls(self.path("tls"), (ONLINE_HOST if self.online else PROVIDER_HOST,))
+            make_provider_tls(self.path("tls"), (self.destination().host,))
         for root in self.channel_roots.values():
             root.mkdir(parents=True, exist_ok=True)
             os.chmod(root, CHANNEL_ROOT_MODE)  # the job runner, the job and the relay share one group
+        destination = self.destination()
         if self.online:
-            destination = ProviderDestination(ONLINE_HOST, ONLINE_PORT, ONLINE_PATH)
             target = {"gateway_socket": f"/relay/egress/{GATEWAY_SOCKET}", "egress_probes": []}  # it has no network
-            provider = {"bind": "0.0.0.0", "port": ONLINE_PORT, "path": ONLINE_PATH}
+            provider = {"bind": "0.0.0.0", "port": destination.port, "path": destination.path}
         else:
-            destination = ProviderDestination(PROVIDER_HOST, PROVIDER_PORT, PROVIDER_PATH)
             target = {"egress_probes": [{"host": PROVIDER_HOST, "port": PROVIDER_PORT}]}  # the positive control
             provider = {"bind": "127.0.0.1", "port": PROVIDER_PORT, "path": PROVIDER_PATH}
         release = ({"release_record": {"path": "/relay/release/record.json", "sha256": self.actual.record_sha256}}
@@ -206,7 +218,9 @@ class RelaySupervisor:
         return ["--mount", f"type=volume,src={self.names['egress']},dst={target}"]
 
     def _start_gateway(self, test_resolution: str | None) -> None:
+        allowed = AllowedTarget(self.destination().host, self.destination().port)  # the gateway's only target
         config = {"socket": f"/egress/{GATEWAY_SOCKET}", "receipts": "/gateway/receipts",
+                  "destination": {"host": allowed.host, "port": allowed.port},
                   **({"test_resolution": test_resolution} if test_resolution is not None else {})}
         self.path("gateway-config.json").write_text(json.dumps(config, indent=1), encoding="utf-8")
         docker(*self._common(self.names["gateway"], self.names["egress"]), *self._egress_volume("/egress"),

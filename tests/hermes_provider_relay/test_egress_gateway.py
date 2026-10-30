@@ -14,10 +14,12 @@ import pytest
 
 import egress_gateway
 from egress_gateway import (
-    ESTABLISHED, ConnectRequest, Gateway, Receipts, _early_bytes, address_refusal, choose_address, parse_connect,
+    ESTABLISHED, AllowedTarget, ConnectRequest, Gateway, Receipts, _early_bytes, address_refusal, choose_address,
+    parse_connect,
 )
 
 NOW = 1_000_000.0
+OPENROUTER = AllowedTarget("openrouter.ai", 443)  # the adopted release's destination: what the supervisor configures
 
 
 def head(target: str = "openrouter.ai:443", *, method: str = "CONNECT", version: str = "HTTP/1.1",
@@ -27,7 +29,7 @@ def head(target: str = "openrouter.ai:443", *, method: str = "CONNECT", version:
 
 
 def test_the_one_admitted_connect() -> None:
-    assert parse_connect(head(), now=NOW) == ConnectRequest("att-1", NOW + 60)
+    assert parse_connect(head(), now=NOW, allowed=OPENROUTER) == ConnectRequest("att-1", NOW + 60)
 
 
 @pytest.mark.parametrize("raw, reason", [
@@ -57,7 +59,7 @@ def test_the_one_admitted_connect() -> None:
     ("CONNECT openrouter.ai:443 HTTP/1.1\r\nHost: é\r\n\r\n".encode(), "head_not_ascii"),
 ])
 def test_every_other_request_is_refused(raw: bytes, reason: str) -> None:
-    assert parse_connect(raw, now=NOW) == reason
+    assert parse_connect(raw, now=NOW, allowed=OPENROUTER) == reason
 
 
 @pytest.mark.parametrize("address", ["104.18.2.115", "8.8.8.8", "2606:4700::6812:272"])
@@ -151,7 +153,7 @@ class Network:
 
 
 def gateway(tmp_path: Path, network: Network, **kwargs: Any) -> Gateway:
-    return Gateway(Receipts(tmp_path), resolve=network.resolve, connect=network.connect, **kwargs)
+    return Gateway(Receipts(tmp_path), resolve=network.resolve, connect=network.connect, **{"allowed": OPENROUTER, **kwargs})
 
 
 def live_head(attempt: str = "att-1", seconds: float = 30) -> bytes:
