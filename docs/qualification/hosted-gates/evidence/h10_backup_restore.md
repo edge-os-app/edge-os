@@ -1,9 +1,8 @@
 # H10 backup and restore drill (HOSTED_RECORD_V2_RUNBOOK §5.2, §5.3)
 
-Status: **PASS** for the logical dump and the on-VPS restore drill. The Contabo snapshot is **NOT DONE**.
+Status: **PASS** for the logical dump and the on-VPS restore drill. The Contabo snapshot is **DONE**.
 
-Operator: controller over SSH. Builder advance approval 2026-10-23 (`.scratch/BUILDER_STANDING_APPROVALS_20261022.md`,
-section 2026-10-23). Host: VPS `vmi3674409`.
+Operator: controller over SSH. Builder advance approval 2026-10-23. Host: VPS `vmi3674409`.
 
 ## Logical dump (§5.2)
 
@@ -31,8 +30,19 @@ section 2026-10-23). Host: VPS `vmi3674409`.
 
 ## Snapshot (§5.1)
 
-Contabo snapshot: **NOT DONE**. It needs the builder in the Contabo panel. The snapshot name, time and the plan's
-snapshot limit are not recorded yet.
+Contabo snapshot: **DONE** by the builder in the Contabo panel (builder screenshot, 2026-10-30).
+
+| Item | Recorded value |
+|---|---|
+| Name | `Edgeos-pre-hermes-20261030` |
+| Description | Before Hermes app start and hosted record |
+| Created | Oct 30, 2026 8:55 AM (panel display; time zone not shown) |
+| Auto-deletion | Nov 29, 2026 9:55 AM (panel display) |
+| State captured | VPS after the `275b399` apply, app unit installed but disabled, UFW 8011 rule; before the hosted record registration and the Hermes app start |
+| Result | DONE |
+
+The hosted record `valid_until` must not be later than the snapshot auto-deletion, or a new snapshot is needed first.
+The record uses `2026-11-27T00:00:00Z`, before `2026-11-29`.
 
 ## Sanitization
 

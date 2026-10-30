@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -32,6 +33,10 @@ RESEARCH_SHA = "45c8cfbf5d61eb519ee3140e02e50b2b7091669dc28cbef224bdc6a0e77ca877
 IMAGE = "sha256:" + "1" * 64
 GATE_SHA = "2" * 64
 DEPLOYMENT = "hosted-demo-1"
+REGISTERED_ID = "edgeos-fun-vps1"
+REGISTERED_SHA = "e7a483e5b0d9a213c4bd4a6cd8447d6bfb66cf3c23f87126b4fd68e0ceaa39d7"
+RECORD_PATH = (Path(__file__).resolve().parents[3]
+               / "docs/qualification/hosted-gates/records/edgeos-fun-vps1.json")
 
 
 def canonical(value: Any) -> bytes:
@@ -103,8 +108,27 @@ def production_env(**changes: str) -> dict[str, str]:
 # --- The registry and the record file --------------------------------------------------------------------------------
 
 
-def test_the_code_owned_registry_is_empty_in_this_candidate() -> None:
-    assert hosted_deployment.APPROVED_HOSTED_DEPLOYMENTS == {}
+def test_the_code_owned_registry_pins_the_approved_record() -> None:
+    assert dict(hosted_deployment.APPROVED_HOSTED_DEPLOYMENTS) == {REGISTERED_ID: REGISTERED_SHA}
+
+
+def test_the_committed_record_is_canonical_and_matches_the_pin() -> None:
+    raw = RECORD_PATH.read_bytes()
+    value = json.loads(raw)
+    assert raw == hosted_deployment.canonical(value)
+    assert value["deployment_id"] == REGISTERED_ID
+    assert hashlib.sha256(hosted_deployment.canonical(value)).hexdigest() == REGISTERED_SHA
+
+
+def test_the_committed_record_is_admitted_with_the_running_origin_and_tls() -> None:
+    value = json.loads(RECORD_PATH.read_bytes())
+    digest = hashlib.sha256(hosted_deployment.canonical(value)).hexdigest()
+    settings = running(deployment_id=REGISTERED_ID, record_path=RECORD_PATH,
+                       cors=("https://app.edgeos.fun",), sslmode="require")
+    loaded = hosted_deployment.check_hosted_deployment(
+        settings, approvals={REGISTERED_ID: digest}, now=datetime(2026, 10, 30, 12, tzinfo=UTC))
+    assert loaded is not None and loaded.record_sha256 == digest
+    assert loaded.admits_execution_release("anything/1", "0" * 64) is False
 
 
 def test_no_named_record_returns_none_and_reads_nothing(tmp_path: Path) -> None:

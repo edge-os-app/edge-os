@@ -56,7 +56,7 @@ MAX_PATH = 400
 
 # Approved hosted deployment id -> the canonical SHA-256 of its record. Empty in this candidate. Adding, changing or
 # removing an entry is a reviewed code change that cites the builder's recorded approval of that exact record.
-APPROVED_HOSTED_DEPLOYMENTS: Mapping[str, str] = {}
+APPROVED_HOSTED_DEPLOYMENTS: Mapping[str, str] = {"edgeos-fun-vps1": "e7a483e5b0d9a213c4bd4a6cd8447d6bfb66cf3c23f87126b4fd68e0ceaa39d7"}
 
 
 class HostedDeploymentRefused(RuntimeError):
