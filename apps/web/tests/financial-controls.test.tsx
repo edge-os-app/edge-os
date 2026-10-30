@@ -182,6 +182,22 @@ describe("agent actions", () => {
     expect(mocks.schedule).not.toHaveBeenCalled();
   });
 
+  it("shows the owner-triggered basis and never claims a market rule decided the action", async () => {
+    mocks.actions.mockResolvedValue(actions({ provider_mode: "controlled",
+      jobs: [{ job_id: "j", agent_id: "agent-a", request_key: "k", decision_slot: "2026-10-12T01:05:00Z",
+        state: "SUBMITTED", publication_revision_id: "r", execution_revision_id: "s:abc", consent_adoption_id: "m-1",
+        decision_id: "d", action_id: "p23:d:ENTRY", outcome: "SUBMITTED_UNKNOWN", reason: "SUBMISSION_UNKNOWN", runs: 1,
+        created_at: "t", updated_at: "t" }] }));
+    mocks.action.mockResolvedValue(detail({ decision: { ...detail().decision, basis: "OWNER_TRIGGER" } }));
+    render(<AgentActions agentId="agent-a" />);
+    expect(await screen.findByTestId("actions-mode")).toHaveTextContent("needs no market observation");
+    await userEvent.click(screen.getByRole("button", { name: /Open action/ }));
+    const lineage = await screen.findByTestId("action-lineage");
+    expect(lineage).toHaveTextContent("You started this one action");
+    expect(lineage).toHaveTextContent("No market rule chose it");
+    expect(lineage).not.toHaveTextContent("A market rule decided");
+  });
+
   it("offers stop and removal without liquidation or withdrawal and keeps the position visible", async () => {
     mocks.actions.mockResolvedValue(actions({ positions: [{ position_id: "agent-a:s:abc", asset_id: BASE.asset_id, decimals: 18,
       inventory_raw: "50000000000000000000", quote_asset_id: QUOTE.asset_id }] }));

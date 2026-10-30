@@ -94,7 +94,7 @@ export interface EvaluationJob {
     delivery_profile_sha256?: string; warmup_buckets?: number; forward_observation?: { event?: string; observed_at?: string } } };
 }
 
-export interface Decision { decision_id: string; decision_at: string; status: string; operation: string | null; reasons: string[] }
+export interface Decision { decision_id: string; decision_at: string; status: string; operation: string | null; basis?: string; reasons: string[] }
 export interface QueueEntry { queue_id: string; action_id: string; operation: string; position_id: string; state: string; blocking_reason: string | null }
 export interface Position { position_id: string; asset_id: string; decimals: number; inventory_raw: string; quote_asset_id: string }
 

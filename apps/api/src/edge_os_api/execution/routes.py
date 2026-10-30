@@ -78,7 +78,8 @@ def _iso(value: Any) -> str | None:
 
 def decision_view(row: DecisionRow) -> dict[str, Any]:
     return {"decision_id": str(row.decision_id), "decision_at": _iso(row.decision_at), "status": row.status,
-            "operation": row.operation, "reasons": row.reasons, "rule_results": row.rule_results,
+            "operation": row.operation, "basis": row.decision_basis, "reasons": row.reasons,
+            "rule_results": row.rule_results,
             "revision_id": row.revision_id, "content_hash": row.content_hash,
             "market_binding_id": row.market_binding_id, "inputs_hash": row.inputs_hash}
 
