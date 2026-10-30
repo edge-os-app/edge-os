@@ -15,7 +15,6 @@ import base64
 import binascii
 import hashlib
 import hmac
-import ipaddress
 import json
 import math
 import re
@@ -24,7 +23,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from egress_gateway import HOST, MAX_TUNNEL_SECONDS
+from egress_gateway import MAX_TUNNEL_SECONDS, host_name_refusal
 
 __all__ = ["APPROVED_ACTUAL_RELEASES", "CHANNEL_FIELDS", "ActualRelease", "ActualReleaseUnapproved", "ProviderDestination",
            "RelayRelease", "RelaySubject", "channel_refusal", "grant_refusal", "issue_grant", "load_actual_release",
@@ -112,18 +111,16 @@ class ProviderDestination:
     path: str
 
     def __post_init__(self) -> None:
-        if not isinstance(self.host, str) or len(self.host) > 253 or not HOST.fullmatch(self.host):
-            raise ValueError("host must be a lower-case DNS name")
-        try:
-            ipaddress.ip_address(self.host)
-        except ValueError:
-            pass
-        else:
-            raise ValueError("host must be a name, not an address")  # the gateway admits names only
+        refusal = host_name_refusal(self.host)  # the gateway's own rule: it admits names only
+        if refusal is not None:
+            raise ValueError(f"host {refusal}")
         _bounded(self.port, "port", 1, 65_535)
         if (not isinstance(self.path, str) or not self.path.startswith("/") or len(self.path) > 200
                 or any(c in self.path for c in "?#% \t\r\n")):
             raise ValueError("path must be an absolute path with no query, fragment or escape")
+        if any(segment in ("", ".", "..") for segment in self.path[1:].split("/")[:-1]) or (
+                self.path.rsplit("/", 1)[-1] in (".", "..")):
+            raise ValueError("path must have no empty, '.' or '..' segment")
 
 
 @dataclass(frozen=True)

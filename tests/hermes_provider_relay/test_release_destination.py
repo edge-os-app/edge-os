@@ -275,6 +275,31 @@ def test_a_record_naming_an_address_is_refused_at_load_not_at_gateway_start(host
         load_actual_release(raw, sha, approved=frozenset({sha}))
 
 
+@pytest.mark.parametrize("host", ["16843009", "1.1", "0x7f.1", "127.1", "0x7f000001", "1.2.3.4.5"])
+def test_a_record_naming_a_numeric_address_form_is_refused_as_an_address(host: str) -> None:
+    # `getaddrinfo` reads these short forms as addresses (16843009 is 1.1.1.1, 0x7f.1 is 127.0.0.1): the final label of
+    # a name must hold a letter. Refused at load and by the gateway's own target check.
+    raw, sha = raw_of(record(destination={**OTHER, "host": host}))
+    with pytest.raises(ValueError, match="not an address"):
+        load_actual_release(raw, sha, approved=frozenset({sha}))
+    with pytest.raises(ValueError, match="not an address"):
+        AllowedTarget(host, 443)
+
+
+@pytest.mark.parametrize("path", ["//evil.example/x", "/api//v1", "/api/../../v2", "/api/./v1", "/..", "/api/v1/."])
+def test_a_record_naming_an_empty_or_dot_path_segment_is_refused(path: str) -> None:
+    raw, sha = raw_of(record(destination={**OTHER, "path": path}))
+    with pytest.raises(ValueError, match="path"):
+        load_actual_release(raw, sha, approved=frozenset({sha}))
+
+
+def test_a_gateway_config_with_an_unknown_key_admits_nothing() -> None:
+    with pytest.raises(ValueError, match="unknown gateway config key"):
+        allowed_target({"socket": "/egress/gateway.sock", "receipts": "/gateway/receipts",
+                        "destination": {"host": "openrouter.ai", "port": 443},
+                        "destinations": [{"host": "evil.example", "port": 443}]})
+
+
 def test_the_dns_mode_docker_gateway_config_names_the_one_target() -> None:
     """The config `test_relay_through_egress_gateway.py` writes for its DNS-mode gateway, checked without Docker."""
     source = (Path(__file__).parent / "test_relay_through_egress_gateway.py").read_text()

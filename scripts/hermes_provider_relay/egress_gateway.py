@@ -40,9 +40,10 @@ from time import monotonic
 from typing import Any
 
 __all__ = ["AllowedTarget", "ConnectRequest", "Gateway", "Receipts", "address_refusal", "allowed_target",
-           "choose_address", "parse_connect", "serve"]
+           "choose_address", "host_name_refusal", "parse_connect", "serve"]
 
 HOST = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*")  # lower-case DNS name
+CONFIG_FIELDS = frozenset({"socket", "receipts", "destination", "test_resolution"})
 MAX_HEAD = 1024
 HEAD_SECONDS = 5.0
 CONNECT_SECONDS = 10.0
@@ -62,6 +63,23 @@ DOCKER_RANGES = tuple(ipaddress.ip_network(net) for net in (  # also refused by 
 ESTABLISHED = b"HTTP/1.1 200 Connection Established\r\n\r\n"
 
 
+def host_name_refusal(host: Any) -> str | None:
+    """Why `host` is not a lower-case DNS name, or None. A name's final label holds a letter: `getaddrinfo` reads short
+    numeric forms such as `16843009`, `1.1` or `0x7f.1` as addresses, which `ipaddress` alone does not catch."""
+    if not isinstance(host, str) or len(host) > 253 or not HOST.fullmatch(host):
+        return "must be a lower-case DNS name"
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return "must be a name, not an address"
+    last = host.rsplit(".", 1)[-1]
+    if not re.search(r"[a-z]", last) or re.fullmatch(r"0x[0-9a-f]*", last):
+        return "must be a name, not an address"
+    return None
+
+
 @dataclass(frozen=True)
 class AllowedTarget:
     """The one host and port this gateway admits: the approved release's destination. Never an address."""
@@ -70,14 +88,9 @@ class AllowedTarget:
     port: int
 
     def __post_init__(self) -> None:
-        if not isinstance(self.host, str) or len(self.host) > 253 or not HOST.fullmatch(self.host):
-            raise ValueError("the allowed host must be a lower-case DNS name")
-        try:
-            ipaddress.ip_address(self.host)
-        except ValueError:
-            pass
-        else:
-            raise ValueError("the allowed host must be a name, not an address")
+        refusal = host_name_refusal(self.host)
+        if refusal is not None:
+            raise ValueError(f"the allowed host {refusal}")
         if isinstance(self.port, bool) or not isinstance(self.port, int) or not 1 <= self.port <= 65_535:
             raise ValueError("the allowed port must be a whole number from 1 to 65535")
 
@@ -418,7 +431,10 @@ def serve(socket_path: Path, gateway: Gateway) -> None:  # pragma: no cover - ex
 
 
 def allowed_target(config: dict[str, Any]) -> AllowedTarget:
-    """The config's one allowed destination: exactly {host, port}. A config without it admits nothing."""
+    """The config's one allowed destination: exactly {host, port}. A config without it, or with any key this gateway
+    does not read, admits nothing."""
+    if set(config) - CONFIG_FIELDS:
+        raise ValueError(f"unknown gateway config key refused: {sorted(set(config) - CONFIG_FIELDS)}")
     destination = config.get("destination")
     if not isinstance(destination, dict) or set(destination) != {"host", "port"}:
         raise ValueError("the gateway config must name its one destination as {host, port}")
