@@ -38,7 +38,9 @@ APPROVAL_SHA256 = "0bcc0c485021cea626b05ddf3c3fad7ad7b372afad158e4e25c02fb09df3e
 PRICES_SHA256 = "e53259b2605d7a54c7597e04b75dc5b57e8b6ff7484c90be6a788b3388d54fe9"
 FORMAT_SHA256 = "cdffe6fd07f14b796cae3f97268148f6ad8893100b8080e1bc652c7d3e9cbc60"
 CA_SHA256 = "7cef540c6af3bf0a3c7d0070bd3fd7aae34f8aa805b408d1c27a01c8aeb305df"
-IMAGE = "sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0"
+IMAGE = "sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0"  # built on the arm64 Mac
+AMD64_IMAGE = "sha256:42541c05f27ee56bfe02ce9d7223728c0432a040abef6515fff67a7f992f9aff"  # rebuilt on the amd64 VPS
+LOST_AMD64_IMAGE = "sha256:224ede5ab50f69f4a73bcce46a054140b20e2337ead5684147df062879b2f0e1"  # 2026-10-23; lost to image cleanup
 MODEL = "openai/gpt-6.1-sol"
 ROUTING = {"only": ["openai"], "allow_fallbacks": False, "require_parameters": True, "data_collection": "deny",
            "max_price": {"prompt": 2, "completion": 10}}
@@ -100,6 +102,7 @@ def test_the_approval_names_every_record_value_and_no_record_hash() -> None:
                                                          if key != "approval"}
     assert approval["application_definition_values"] == {"image": IMAGE, "channel_root": "edge-os-research",
                                                          "global_cap_usd": "2.00", "owner_cap_usd": "2.00"}
+    assert adopted().images == (("linux/arm64", IMAGE), ("linux/amd64", AMD64_IMAGE))  # the approval keeps the arm64 run
     assert RECORD_SHA256 not in json.dumps(approval)  # the record names the approval, never the reverse
 
 
@@ -112,7 +115,9 @@ def test_the_definition_names_the_accepted_output_format_by_its_exact_bytes() ->
 # --- the adopted release binds with exactly the adopted values -------------------------------------------------------
 
 
-def test_the_adopted_release_binds_its_exact_request_shape_price_caps_and_image_without_any_effect(no_effects) -> None:
+def test_the_adopted_release_binds_its_exact_request_shape_price_caps_and_image_without_any_effect(
+        no_effects, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(composition, "_host_platform", lambda: "linux/arm64")  # the build host this approval names
     release = bind_release(adopted())
 
     actual = release.actual
@@ -136,6 +141,15 @@ def test_the_adopted_release_binds_its_exact_request_shape_price_caps_and_image_
     assert release.config.live_release is not None and release.config.live_release.recorded_in == APPROVAL_PATH
 
 
+def test_the_vps_platform_binds_the_new_amd64_id_and_the_mac_keeps_the_arm64_id(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(composition, "_host_platform", lambda: "linux/amd64")
+    image = bind_release(adopted()).image
+    assert image == AMD64_IMAGE and image != LOST_AMD64_IMAGE
+    monkeypatch.setattr(composition, "_host_platform", lambda: "linux/arm64")
+    assert bind_release(adopted()).image == IMAGE  # the arm64 id and its approval entry stay unchanged
+
+
 def test_one_request_reserves_at_most_the_adopted_worst_case_of_usd_0_17216() -> None:
     release = bind_release(adopted())
     worst = release.price.nano_usd(release.policy.max_request_bytes + INPUT_TOKEN_MARGIN,
@@ -143,7 +157,8 @@ def test_one_request_reserves_at_most_the_adopted_worst_case_of_usd_0_17216() ->
     assert worst == 172_160_000  # nano-USD: an accounting reservation inside the shared USD 2.00, not an allocation
 
 
-def test_composing_the_adopted_release_opens_nothing(tmp_path: Path) -> None:
+def test_composing_the_adopted_release_opens_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(composition, "_host_platform", lambda: "linux/arm64")
     app = compose_application(bind_release(adopted()), lazy_engine(), endpoint=endpoint(tmp_path / "relay",
                                                                                          "edge-os-research"),
                               run_id="rc-binding", evidence_dir=tmp_path / "jobs")
@@ -198,8 +213,8 @@ def test_record_bytes_one_byte_away_from_the_approved_hash_are_refused(no_effect
                        b'"provider":"openai"}'},
     {"response_format": {"type": "json_object"}},
     {"response_format": None},
-    {"image": "edge-os-p05-hermes:latest"},
-    {"image": "edge-os/pinned-hermes@" + IMAGE},
+    {"images": (("linux/arm64", "edge-os-p05-hermes:latest"), ("linux/amd64", AMD64_IMAGE))},
+    {"images": (("linux/arm64", "edge-os/pinned-hermes@" + IMAGE), ("linux/amd64", AMD64_IMAGE))},
 ])
 def test_an_approved_record_with_other_price_schema_or_image_bytes_is_refused(no_effects,
                                                                               changes: dict[str, Any]) -> None:

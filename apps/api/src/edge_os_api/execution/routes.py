@@ -89,6 +89,19 @@ def queue_view(row: QueueRow) -> dict[str, Any]:
             "enqueued_at": _iso(row.enqueued_at), "updated_at": _iso(row.updated_at)}
 
 
+REFUSAL_MESSAGES = {"WALLET_POLICY_REFUSED": "Refused by the wallet policy."}
+
+
+def refusal_view(attempts: list[SubmissionAttemptRow]) -> dict[str, str] | None:
+    """The newest attempt's definite refusal, with the owner-facing text the web can show."""
+    content = attempts[-1].content if attempts else None
+    original = content.get("original_transaction") if isinstance(content, dict) else None
+    reason = original.get("reason") if isinstance(original, dict) else None
+    if reason in REFUSAL_MESSAGES:
+        return {"reason": reason, "message": REFUSAL_MESSAGES[reason]}
+    return None
+
+
 @router.post("/agents/{agent_id}/actions")
 def schedule(agent_id: str, data: ScheduleBody, request: Request,
              principal: Principal = Depends(require_principal)) -> JSONResponse:
@@ -243,4 +256,5 @@ def read_action(action_id: str, request: Request, principal: Principal = Depends
                                           "original_transaction"))},
                           "started_at": _iso(row.started_at), "completed_at": _iso(row.completed_at)}
                          for row in attempts],
+            "refusal": refusal_view(attempts),
             "recovery": recovery}

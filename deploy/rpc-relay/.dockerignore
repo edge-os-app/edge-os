@@ -1,0 +1,4 @@
+# Build context allow-list for deploy/rpc-relay/Dockerfile: only the relay itself enters the image build.
+*
+!Dockerfile
+!rpc_relay.py

@@ -32,7 +32,7 @@ export async function shot(page, project, name) {
 
 export async function open(page, token) {
   await injectAuth(page, token);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByTestId("fixture-banner")).toContainText("TEST AUTH FIXTURE");
 }
 

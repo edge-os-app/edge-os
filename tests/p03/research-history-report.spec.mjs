@@ -49,7 +49,7 @@ test("reports, stopped jobs, retry, market adoption, publication and labelled re
   await noSeriousAxe(page);
 
   // A strategy request: save the fixture-market revision, then adopt the recorded market as a NEW draft.
-  await page.goto("/");
+  await page.goto("/app");
   await sample(page, "Specific thesis").click();
   await page.getByRole("button", { name: "Prepare request" }).click();
   await page.getByRole("button", { name: "Adopt these settings" }).first().click();

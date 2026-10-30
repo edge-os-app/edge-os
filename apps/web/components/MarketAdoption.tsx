@@ -33,6 +33,20 @@ function failure(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.detail : fallback;
 }
 
+const KNOWN_SYNTHETIC_EVIDENCE = new Set([
+  "SYNTHETIC_FIXTURE", "RECORDED_RESPONSE", "RECORDED_NATIVE_RESPONSE",
+  "AUTHORED_HTTP_RESPONSE", "RELEASE_STAND_IN_RESPONSE",
+]);
+
+// Only PROVIDER_ACTUAL is observed provider history; known recorded/authored classes stay synthetic; anything else
+// is shown literally and claimed as neither.
+function provenance(item: DatasetSummary): string {
+  if (item.evidence_class === "PROVIDER_ACTUAL") return "Saved provider history. This is observed provider data.";
+  return KNOWN_SYNTHETIC_EVIDENCE.has(item.evidence_class)
+    ? "Synthetic recorded responses, not observed market history."
+    : `${item.evidence_class} is an unrecognized evidence class; this view claims neither observed history nor synthetic prices.`;
+}
+
 /** Adopt one saved QUALIFIED recorded-history market for a NEW draft. Nothing earlier is changed or published. */
 export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevisionId, currentQuoteUnit, reload }: Props) {
   const [datasets, setDatasets] = useState<DatasetSummary[] | null>(null);
@@ -104,7 +118,7 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
     <section className="panel stack" aria-labelledby="market-adoption-title" data-testid="market-adoption"
       style={{ overflowWrap: "anywhere" }}>
       <h2 id="market-adoption-title">Use a recorded market (optional)</h2>
-      <p className="muted">This makes a NEW draft on a saved, qualified recorded-history market. Earlier drafts and saved revisions stay unchanged. Recorded responses are synthetic, not observed market history. The execution route stays unqualified and no trading permission is granted.</p>
+      <p className="muted">This makes a NEW draft on a saved, qualified history market. Earlier drafts and saved revisions stay unchanged. The selected dataset&rsquo;s own saved evidence class decides its provenance label below. The execution route stays unqualified and no trading permission is granted.</p>
       {loadError ? <div className="status err" role="alert"><p>{loadError}</p>
         <button className="btn btn-secondary" type="button" onClick={() => void load()}>Retry loading datasets</button></div> : null}
       {datasets === null && !loadError ? <p role="status" aria-busy="true" className="muted">Loading your saved datasets.</p> : null}
@@ -141,6 +155,7 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
             <dt>Payload binding</dt><dd data-testid="market-adoption-binding">{payloadBindingText(chosen.payload_binding)}</dd>
             <dt>Quote unit</dt><dd className="mono">{chosen.quote_unit}</dd>
           </dl>
+          <p className="muted" data-testid="market-adoption-provenance">{provenance(chosen)}</p>
           <div className="field">
             <label htmlFor="market-rule">Entry rule (one you declared for this dataset)</label>
             <select id="market-rule" className="input" value={ruleId} onChange={(event) => { setRuleId(event.target.value); setConfirmed(false); }}>

@@ -102,13 +102,23 @@ def denial_reasons(
         elif intent.operation in ACQUISITIONS:
             reasons.append("STOPPED_NEW_ENTRIES")
 
-    # Required controls fail closed when not qualified for the adopted model.
-    if intent.operation in ACQUISITIONS and not approval.exit_capacity_qualified:
+    # A controlled release carries exact proof identities. It grants no recurring or exit submission.
+    controlled = approval.controlled
+    if controlled is not None:
+        if controlled.evidence_class == "PROVIDER_ACTUAL":
+            from edge_os_api.execution.operating_release import APPROVED_ACTUAL_BINDINGS
+
+            if APPROVED_ACTUAL_BINDINGS.get(controlled.binding_sha256) != controlled.release_sha256:
+                reasons.append("CONTROLLED_RELEASE_UNAPPROVED")
+        if intent.operation != "ENTRY" or approval.actions != ["ENTRY"]:
+            reasons.append("CONTROLLED_ACTION_UNSUPPORTED")
+    # The autonomous qualification flags retain their original fixture meaning.
+    if controlled is None and intent.operation in ACQUISITIONS and not approval.exit_capacity_qualified:
         reasons.append("EXIT_CAPACITY_UNQUALIFIED")
-    if not approval.cost_model_qualified:
+    if controlled is None and not approval.cost_model_qualified:
         reasons.append("COST_MODEL_UNQUALIFIED")
     if intent.operation == "EXIT":
-        if not approval.valuation_qualified:
+        if controlled is None and not approval.valuation_qualified:
             reasons.append("VALUATION_UNQUALIFIED")
         if intent.input.mark is None or intent.input.mark.state != "KNOWN":
             reasons.append("MISSING_VALUATION")

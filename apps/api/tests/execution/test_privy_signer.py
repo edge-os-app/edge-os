@@ -40,8 +40,10 @@ from edge_os_api.execution.original_transaction import (
     OriginalTransactionTransport,
     ReplyLost,
     RpcError,
+    SignerPolicyDenied,
     is_signer_refusal,
 )
+from edge_os_api.execution.privy_policy_reply import is_policy_denial
 from edge_os_api.execution.privy_signer import PrivySignerClient
 from edge_os_api.execution.transport import PreparedSubmission
 from edge_os_api.research_history.http_clients.client_config import HttpProviderError
@@ -271,9 +273,6 @@ def test_a_wallet_id_that_could_change_the_path_is_refused_before_authorization(
     (with_transaction(nonce=7.0), "QUANTITY_UNSUPPORTED"),
     (with_transaction(nonce="0x7"), "QUANTITY_UNSUPPORTED"),
     (with_transaction(nonce=-1), "QUANTITY_UNSUPPORTED"),
-    (with_transaction(value=2**53), "QUANTITY_UNSUPPORTED"),
-    (with_transaction(gas_limit=2**53), "QUANTITY_UNSUPPORTED"),
-    (with_transaction(max_fee_per_gas=2**64), "QUANTITY_UNSUPPORTED"),
     (with_transaction(max_priority_fee_per_gas=None), "QUANTITY_UNSUPPORTED"),
     (with_transaction(chain_id=0), "QUANTITY_UNSUPPORTED"),
     (with_transaction(to="0x1234"), "ADDRESS_INVALID"),
@@ -648,6 +647,56 @@ def test_a_provider_error_reply_is_signing_unknown_not_signer_refused(tmp_path):
 
     assert (outcome.outcome, outcome.detail) == ("SUBMISSION_POSSIBLE", "SIGNING_UNKNOWN")
     assert broadcasts(recordings) == 0
+
+
+POLICY_DENY_BODY = {"error": {"code": "policy_violation"}}
+
+
+def test_a_privy_policy_denial_keeps_no_liability(tmp_path):
+    # Live proof v3 recorded status 400 with application/json and code policy_violation for every deny.
+    http = FakeHttp(reply(POLICY_DENY_BODY, 400))
+    transport, recordings, stages = original(tmp_path, client(http))
+
+    outcome = submit(transport, stages)
+
+    assert (outcome.outcome, outcome.detail) == ("DEFINITELY_UNSENT", "WALLET_POLICY_REFUSED")
+    assert len(http.calls) == 1
+    assert broadcasts(recordings) == 0
+    assert [stage for stage, _ in stages] == ["PREPARED", "SIGN_REQUESTED", "REFUSED_UNSENT"]
+    assert dict(stages)["REFUSED_UNSENT"] == {"reason": "WALLET_POLICY_REFUSED"}
+
+
+def test_the_adapter_raises_the_typed_policy_denial_only_for_the_exact_reply():
+    with pytest.raises(SignerPolicyDenied):
+        client(FakeHttp(reply(POLICY_DENY_BODY, 400))).rpc(WALLET_ID, body())
+    assert is_policy_denial(400, POLICY_DENY_BODY)
+
+
+@pytest.mark.parametrize("response", [
+    reply(POLICY_DENY_BODY, 401), reply(POLICY_DENY_BODY, 403), reply(POLICY_DENY_BODY, 500),
+    reply({"error": {"code": "policy_violation_extra"}}, 400),
+    reply({"error": {"code": "request_expired"}}, 400),
+    reply({"message": "policy_violation"}, 400),
+    reply({"code": "other", "error": "policy_violation"}, 400),
+    reply({"code": "policy_violation", "method": "eth_signTransaction",
+           "data": {"signed_transaction": SHORT_SIGNED, "encoding": "rlp"}}, 400),
+    reply({"method": "eth_signTransaction",
+           "data": {"signed_transaction": SHORT_SIGNED, "encoding": "rlp"}, "extra": 1}, 200),
+    reply(b"<html><body>policy_violation</body></html>", 400, {"content-type": "text/html"}),
+    reply(b"", 400),
+    reply(b"{not-json", 400),
+    reply(b'{"code":"policy_violation","code":"policy_violation"}', 400),
+])
+def test_a_near_miss_policy_reply_stays_unknown_and_keeps_the_liability(tmp_path, response):
+    http = FakeHttp(response)
+    transport, recordings, stages = original(tmp_path, client(http))
+
+    outcome = submit(transport, stages)
+
+    assert (outcome.outcome, outcome.detail) == ("SUBMISSION_POSSIBLE", "SIGNING_UNKNOWN")
+    assert len(http.calls) == 1
+    assert broadcasts(recordings) == 0
+    assert [stage for stage, _ in stages] == ["PREPARED", "SIGN_REQUESTED", "SIGNING_UNKNOWN"]
 
 
 def test_a_local_refusal_reaches_the_caller_as_definitely_unsent(tmp_path):
@@ -1030,7 +1079,7 @@ HEADERS = ("headers",)
     _set(TRANSACTION + ("data",), "0x1234é"), _set(TRANSACTION + ("to",), "0x" + "０" * 40),
     _set(TRANSACTION + ("nonce",), 7.0), _set(TRANSACTION + ("nonce",), True),
     _set(TRANSACTION + ("value",), float("nan")), _set(TRANSACTION + ("gas_limit",), float("inf")),
-    _set(TRANSACTION + ("value",), 2**53), _set(TRANSACTION + ("chain_id",), 0),
+    _set(TRANSACTION + ("chain_id",), 0),
     _set(("body", "method"), "eth_signTransaction​"),
     _set(TRANSACTION + ("authorization_list",), []), _set(TRANSACTION + ("type",), 4),
     _set(TRANSACTION + ("gas_price",), 1), _set(TRANSACTION + ("data",), "0x" + "ab" * 40_000),
@@ -1220,7 +1269,11 @@ class Listener:
 
 
 def live_timers() -> list[threading.Thread]:
-    return [thread for thread in threading.enumerate() if isinstance(thread, threading.Timer) and thread.is_alive()]
+    # Timer.cancel() only signals the thread; it exits asynchronously, so wait for that condition before asserting.
+    timers = [thread for thread in threading.enumerate() if isinstance(thread, threading.Timer) and thread.is_alive()]
+    for timer in timers:
+        timer.join(timeout=1.0)
+    return [timer for timer in timers if timer.is_alive()]
 
 
 def over_loopback(server: Any, authorize: Any = None, *, on_connect: Callable[[], None] | None = None,

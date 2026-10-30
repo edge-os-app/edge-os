@@ -8,6 +8,7 @@ used in this local task is an authored fake (see `tests/wallet_setup/fake_provid
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -32,12 +33,21 @@ class WalletEvidence:
 
     `network_id` is the application binding. An Ethereum provider wallet is not inherently
     bound to one chain ID, so the provider evidence carries a chain type and address only.
+    A local server wallet also carries the SHA-256 of its A2 release binding; the fixture and
+    unavailable providers leave it `None`.
     """
 
     wallet_id: str
     owner_id: uuid.UUID
     chain_type: str
     address: str
+    release_binding_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.release_binding_sha256 is not None and not (
+                isinstance(self.release_binding_sha256, str)
+                and re.fullmatch(r"[0-9a-f]{64}", self.release_binding_sha256) is not None):
+            raise ValueError("release_binding_sha256 must be 64 lowercase hex characters")
 
 
 class WalletProviderUnavailable(RuntimeError):

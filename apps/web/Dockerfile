@@ -22,13 +22,16 @@ ARG NEXT_PUBLIC_PRIVY_APP_ID
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL} \
     NEXT_PUBLIC_PRIVY_APP_ID=${NEXT_PUBLIC_PRIVY_APP_ID}
 RUN test -n "${NEXT_PUBLIC_API_BASE_URL}" || { echo "NEXT_PUBLIC_API_BASE_URL build argument is required" >&2; exit 1; }
+RUN test -n "${NEXT_PUBLIC_PRIVY_APP_ID}" || { echo "NEXT_PUBLIC_PRIVY_APP_ID build argument is required" >&2; exit 1; }
 RUN npm run build && npm prune --omit=dev --ignore-scripts --no-audit --no-fund
 
 FROM ${NODE_IMAGE} AS runtime
 ARG EDGE_OS_SOURCE_COMMIT=unknown
+# LOCAL is the rehearsal default; the release workflow passes PRODUCTION. The value is an image label only.
+ARG EDGE_OS_PROFILE=LOCAL
 LABEL org.opencontainers.image.title="edge-os-web" \
       org.opencontainers.image.revision="${EDGE_OS_SOURCE_COMMIT}" \
-      edge-os.profile="LOCAL"
+      edge-os.profile="${EDGE_OS_PROFILE}"
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app/apps/web

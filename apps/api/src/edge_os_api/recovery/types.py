@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -151,6 +151,8 @@ class RecoveryCaseView(StrictModel):
     updated_at: str
     reconciled_at: str | None
     evidence: list[RecoveryEvidenceView] = Field(default_factory=list)
+    # The allowance an approve -> swap -> revoke action may have left open; None for a single-swap action.
+    allowance: dict[str, Any] | None = None
 
     def known_outcome(self) -> str | None:
         return self.state if self.state in {"CONFIRMED", "REVERTED", "DENIED_UNSENT"} else None

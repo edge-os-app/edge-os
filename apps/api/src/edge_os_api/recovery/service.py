@@ -29,6 +29,7 @@ from edge_os_api.admission.types import IdentityBinding, parse_utc
 from edge_os_api.execution.models import ClaimRow, IntentRow, QueueRow, SubmissionAttemptRow
 from edge_os_api.execution.service import ExecutionService
 from edge_os_api.execution.types import QueueEntryView
+from edge_os_api.recovery.allowance import allowance_status
 from edge_os_api.recovery.models import RecoveryCaseRow, RecoveryEvidenceRow
 from edge_os_api.recovery.types import (
     OutcomeEvidence,
@@ -454,6 +455,11 @@ class RecoveryService:
             RecoveryEvidenceRow.owner_id == case.owner_id,
             RecoveryEvidenceRow.action_id == case.action_id,
         ).order_by(RecoveryEvidenceRow.created_at, RecoveryEvidenceRow.evidence_id)).scalars().all()
+        attempt = session.execute(select(SubmissionAttemptRow).where(
+            SubmissionAttemptRow.owner_id == case.owner_id, SubmissionAttemptRow.action_id == case.action_id,
+        ).order_by(SubmissionAttemptRow.started_at.desc(),
+                   SubmissionAttemptRow.attempt_id.desc()).limit(1)).scalar_one_or_none()
+        allowance = None if attempt is None else allowance_status((attempt.content or {}).get("original_transaction"))
         return RecoveryCaseView(
             case_id=case.case_id, owner_id=case.owner_id, action_id=case.action_id,
             agent_id=case.agent_id, wallet_id=case.wallet_id, network_id=case.network_id,
@@ -467,4 +473,5 @@ class RecoveryService:
             evidence=[RecoveryEvidenceView(
                 evidence_id=row.evidence_id, fingerprint=row.fingerprint, outcome=row.outcome,
                 state=row.state, rejection_reason=row.rejection_reason, source_ref=row.source_ref,
-                observed_at=_iso(row.observed_at), created_at=_iso(row.created_at)) for row in evidence])
+                observed_at=_iso(row.observed_at), created_at=_iso(row.created_at)) for row in evidence],
+            allowance=allowance)

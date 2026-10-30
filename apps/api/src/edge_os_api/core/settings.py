@@ -3,19 +3,53 @@
 from __future__ import annotations
 
 import functools
+import ipaddress
 import os
+import re
+import socket
 import subprocess
 from typing import Literal
+from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from pydantic import Field, ValidationError, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
+from edge_os_api.core.hosted_deployment import HostedDeployment, HostedDeploymentRefused, check_hosted_deployment
+
 TEST_APP_ID = "edge-os-test-app"
+# Coolify's own database answers to `postgres` and `coolify-db` on the shared `coolify` network. A production URL naming
+# either host can reach Coolify's database instead of ours, so production refuses both; compose.coolify.yml gives ours
+# the unique alias `edge-os-postgres`.
+COOLIFY_RESERVED_DATABASE_HOSTS = frozenset({"postgres", "coolify-db"})
+HERMES_APP_NETWORKS = (ipaddress.IPv4Network("10.0.0.0/8"), ipaddress.IPv4Network("172.16.0.0/12"),
+                       ipaddress.IPv4Network("192.168.0.0/16"))
 FORBIDDEN_ENV_NAMES = ("EDGE_OS_PRIVY_APP_SECRET", "EDGE_OS_AUTH_DISABLED", "EDGE_OS_DEV_AUTH_BYPASS")
+
+
+def is_loopback_database_host(host: str | None) -> bool:
+    """True for a host-less URL, any multi-host list and any loopback or unspecified name or address. No DNS lookup."""
+    if not host or "," in host:
+        return True
+    name = host.strip().strip("[]").split("%", 1)[0].rstrip(".").lower()
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(name)
+    except ValueError:
+        # Short and legacy IPv4 spellings that libpq's resolver still accepts: 127.1, 2130706433, 0x7f000001, 0177.0.0.1.
+        if not re.fullmatch(r"[0-9a-fx.]+", name):
+            return False
+        try:
+            address = ipaddress.IPv4Address(socket.inet_aton(name))
+        except OSError:
+            return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return address.is_loopback or address.is_unspecified
 
 
 class ConfigError(RuntimeError):
@@ -39,17 +73,30 @@ class Settings(BaseSettings):
     privy_verification_key_previous: str | None = None
     cors_allowed_origins: str
     build_sha: str | None = None
+    # Hosted activation. The running configuration may name one deployment id and the absolute path of its frozen
+    # record. The record can only match the code-owned `core.hosted_deployment.APPROVED_HOSTED_DEPLOYMENTS`; no
+    # setting, environment value, file or request adds an approval. Both are set together or neither is.
+    hosted_deployment_id: str | None = None
+    hosted_deployment_record_path: str | None = None
     # `fixture` answers scripted requests only. `hermes_local` runs the pinned Hermes against a local fake provider and
     # needs a runner handed to the application factory. No setting reaches a real provider (decision D7).
     interpreter: Literal["fixture", "hermes_local"] = "fixture"
-    # `fixture` uses the authored local wallet-creation fixture. Production refuses it and uses the
-    # fail-closed `unavailable` provider, so no real wallet provider is configured yet.
-    wallet_provider: Literal["fixture", "unavailable"] = "unavailable"
+    # The Coolify API forwards the six public Hermes paths to this host application. It must be an http URL
+    # naming an IPv4 loopback or RFC 1918 literal and an explicit port. The host application never sets it.
+    hermes_app_url: str | None = None
+    # `fixture` uses the authored local wallet-creation fixture. `privy_server` binds the builder's
+    # already-created Privy server wallet through the separate lookup process; it is local-only.
+    # Production refuses both and uses the fail-closed `unavailable` provider.
+    wallet_provider: Literal["fixture", "unavailable", "privy_server"] = "unavailable"
+    # Optional absolute path of the private Unix socket served by the separate trusted wallet-lookup process
+    # (scripts/privy_wallet_lookup). It is not a credential. Only with `wallet_provider=unavailable`: the browser
+    # creates and the socket answers one owner-bound lookup. Unset keeps the fixture/unavailable behavior.
+    wallet_lookup_socket: str | None = None
     # `fixture` composes the financial journey over authored local provider fixtures: deposit observations,
     # market observations, action quotes, holdings, submission/receipt effects and removal observations, plus a
     # server-owned fixture qualification that lets an adopted INACTIVE consent drive a fixture action. Production
     # refuses it. `unavailable` keeps every provider port fail-closed, so no funded action can run.
-    execution_mode: Literal["fixture", "unavailable"] = "unavailable"
+    execution_mode: Literal["fixture", "unavailable", "controlled"] = "unavailable"
     # Fixture mode only: an append-only file that records each authored submission effect outside the
     # application database, so a restarted process reconciles the original action and a verifier counts effects
     # independently. Without it the fixture keeps effects in process memory.
@@ -111,6 +158,13 @@ class Settings(BaseSettings):
             raise ValueError("must load as an EC P-256 public key") from error
         return value
 
+    @field_validator("hermes_app_url")
+    @classmethod
+    def _hermes_app_url(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        return _parse_hermes_app_url(value.strip())
+
     @field_validator("database_url")
     @classmethod
     def _db(cls, value: str) -> str:
@@ -135,6 +189,13 @@ class Settings(BaseSettings):
 
     def validate_rules(self) -> None:
         problems: list[str] = []
+        deployment = None
+        if self.env == "production":
+            # A named record is validated in every production process. No record keeps the existing refusals.
+            try:
+                deployment = check_hosted_deployment(self)
+            except HostedDeploymentRefused as refused:
+                problems.append(f"hosted_deployment: {refused.code}")
         if not self.cors_origins:
             problems.append("cors_allowed_origins: at least one origin is required")
         for origin in self.cors_origins:
@@ -152,17 +213,44 @@ class Settings(BaseSettings):
             # Names only: no message repeats a configured value, key or token.
             if not (self.build_sha or "").strip():
                 problems.append("build_sha: production needs the exact build identity")
-            if url.host in {"127.0.0.1", "localhost", None}:
+            # Refused: no host, a multi-host list, any spelling of localhost and any loopback or unspecified address.
+            # The one exception is the host research worker's literal 127.0.0.1 (builder decision 2026-10-23, option A):
+            # only with a registered hosted deployment record whose TLS mode is the URL's sslmode.
+            if is_loopback_database_host(url.host) and not (
+                    url.host == "127.0.0.1" and deployment is not None
+                    and url.query.get("sslmode") == deployment.database_tls_mode):
                 problems.append("database_url: production needs a hosted database, not a loopback host")
             if url.query.get("sslmode") not in {"require", "verify-ca", "verify-full"}:
                 problems.append("database_url: production needs sslmode=require or stricter")
+            if (url.host or "").rstrip(".").lower() in COOLIFY_RESERVED_DATABASE_HOSTS:
+                problems.append("database_url: the host is Coolify's own database alias; use edge-os-postgres")
+            # The driver takes query `host`/`hostaddr` over the URL host, which would bypass both host checks.
+            if {"host", "hostaddr"} & {key.lower() for key in url.query}:
+                problems.append("database_url: production refuses host or hostaddr query parameters")
             if self.fixture_effects_path is not None:
                 problems.append("fixture_effects_path: fixture effects are refused in production")
-        if self.env == "production" and self.interpreter != "fixture":
-            problems.append("interpreter: only the fixture interpreter is available in production")
+        if self.interpreter == "hermes_local" and self.hermes_app_url is not None:
+            problems.append("hermes_app_url: a Hermes host application cannot forward to another host application")
+        if self.env == "production" and self.hermes_app_url is not None:
+            address = ipaddress.IPv4Address(urlsplit(self.hermes_app_url).hostname or "")
+            if address.is_loopback:
+                problems.append("hermes_app_url: production needs the private host address, not loopback")
+        if self.env == "production" and self.interpreter != "fixture" and deployment is None:
+            problems.append("interpreter: only the fixture interpreter is available in production without an "
+                            "approved hosted deployment")
         if self.env == "production" and self.wallet_provider != "unavailable":
             problems.append("wallet_provider: only the unavailable provider is allowed in production")
-        if self.env == "production" and self.execution_mode != "unavailable":
+        if self.wallet_lookup_socket is not None:
+            if self.wallet_provider != "unavailable":
+                problems.append("wallet_lookup_socket: only with the unavailable wallet provider")
+            if not (self.wallet_lookup_socket.startswith("/") and ".." not in self.wallet_lookup_socket.split("/")
+                    and len(self.wallet_lookup_socket) <= 100 and "\x00" not in self.wallet_lookup_socket):
+                problems.append("wallet_lookup_socket: must be a short absolute path without '..'")
+        if self.env == "production" and self.execution_mode == "controlled":
+            refusal = _controlled_execution_refusal(deployment)
+            if refusal is not None:
+                problems.append(f"execution_mode: {refusal}")
+        elif self.env == "production" and self.execution_mode != "unavailable":
             problems.append("execution_mode: only the unavailable execution mode is allowed in production")
         if self.env == "production" and self.research_history_mode != "unavailable":
             problems.append("research_history_mode: recorded synthetic history is refused in production")
@@ -195,6 +283,65 @@ class Settings(BaseSettings):
             return "unknown"
 
 
+def _parse_hermes_app_url(value: str) -> str:
+    """A bounded upstream address: http, an IPv4 loopback or RFC 1918 literal, and an explicit port."""
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        raise ValueError("must be a valid URL") from None
+    if parts.scheme != "http":
+        raise ValueError("must use http")
+    if parts.path or parts.query or parts.fragment or parts.username is not None or parts.password is not None:
+        raise ValueError("must not hold a path, query, fragment or user information")
+    try:
+        address = ipaddress.IPv4Address(parts.hostname or "")
+    except ValueError:
+        raise ValueError("must name an IPv4 literal") from None
+    if not (address.is_loopback or any(address in network for network in HERMES_APP_NETWORKS)):
+        raise ValueError("must name a loopback or RFC 1918 address")
+    try:
+        port = parts.port
+    except ValueError:
+        raise ValueError("must hold a valid port") from None
+    if port is None or not 1 <= port <= 65_535:
+        raise ValueError("must hold a port from 1 to 65535")
+    return f"http://{address.compressed}:{port}"
+
+
+def _controlled_execution_refusal(deployment: HostedDeployment | None) -> str | None:
+    """Why production refuses controlled execution, or None when the named registered record binds the exact release.
+
+    The release must be the one code-owned approved actual execution release (`APPROVED_ACTUAL_RELEASES`), with the
+    same id and SHA-256 the record binds. A version 1 record binds none. Nothing here holds or reads a secret."""
+    if deployment is None:
+        return "controlled execution needs an approved hosted deployment"
+    if deployment.execution_release_id is None:
+        return "the hosted deployment record binds no execution release"
+    # Imported here so loading settings does not load the execution packages; read at call time, never cached.
+    from edge_os_api.execution import operating_release
+
+    approved = operating_release.APPROVED_ACTUAL_RELEASES.get(deployment.execution_release_id)
+    if not isinstance(approved, str) or not deployment.admits_execution_release(
+            deployment.execution_release_id, approved):
+        return "the record's execution release is not the approved actual execution release"
+    return None
+
+
+class _SettingsFromMapping(Settings):
+    """Validate only the supplied mapping. Ambient EDGE_OS_* values never fill a missing field."""
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (init_settings,)
+
+
 def load_settings(environ: dict[str, str] | None = None) -> Settings:
     source = os.environ if environ is None else environ
     forbidden = [name for name in FORBIDDEN_ENV_NAMES if name in source]
@@ -204,7 +351,7 @@ def load_settings(environ: dict[str, str] | None = None) -> Settings:
         if environ is None:
             settings = Settings()  # type: ignore[call-arg]
         else:
-            settings = Settings.model_validate(
+            settings = _SettingsFromMapping.model_validate(
                 {k[len("EDGE_OS_"):].lower(): v for k, v in environ.items() if k.startswith("EDGE_OS_")})
     except ValidationError as error:
         fields = sorted({".".join(str(p) for p in item["loc"]) or "settings" for item in error.errors()})

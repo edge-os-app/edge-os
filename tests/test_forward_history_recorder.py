@@ -22,12 +22,16 @@ from edge_os_api.research_history.provider_transport import SourceTimeout
 from scripts.forward_history_recorder import (
     AdmissionRefused,
     AttemptExists,
+    MAX_JOURNAL_BYTES,
+    MAX_TOTAL_REPLY_BYTES,
     RecorderInputError,
+    hypersync_batches,
     main,
     recover_attempt,
     run_attempt,
     validate_input,
 )
+from scripts.history_payload_binding import MAX_HANDOFF_BYTES
 
 T0 = 1_800_000_000
 WE = T0 + 1200
@@ -125,8 +129,8 @@ def creation_page(**log_changes: Any) -> dict[str, Any]:
            "data": "0x" + _addr_word(POOL) + _word(2854)}
     log.update(log_changes)
     return {"archive_height": 5000, "next_block": 901,
-            "data": {"blocks": [{"number": 900, "timestamp": T0 - 86_400, "hash": CREATION_BLOCK_HASH}],
-                     "logs": [log]}}
+            "data": [{"blocks": [{"number": 900, "timestamp": T0 - 86_400, "hash": CREATION_BLOCK_HASH}],
+                      "logs": [log]}]}
 
 
 class SyntheticProviders:
@@ -204,7 +208,7 @@ class SyntheticProviders:
                 log = dict(swap)
                 log["block_hash"] = block_hash(swap["block_number"])
                 logs.append(log)
-        return {"archive_height": head, "next_block": stop, "data": {"blocks": blocks, "logs": logs}}
+        return {"archive_height": head, "next_block": stop, "data": [{"blocks": blocks, "logs": logs}]}
 
 
 def recorder_input(tmp_path: Path, **changes: Any) -> dict[str, Any]:
@@ -360,21 +364,25 @@ def test_never_covered_bucket_closes_incomplete_and_later_replies_do_not_backfil
 
 
 @pytest.mark.parametrize("damage", [
-    lambda page: page["data"].pop("logs"),
-    lambda page: page["data"]["blocks"].pop(3),
-    lambda page: page.update(next_block=page["data"]["blocks"][0]["number"]),
-    lambda page: page["data"]["blocks"][4].update(hash="0x" + "99" * 32) or page["data"]["logs"].append(
-        dict(page["data"]["logs"][0])),
-    lambda page: page["data"]["logs"][0].update(block_hash="0x" + "98" * 32),
-    lambda page: page["data"]["logs"][0].pop("removed"),
-    lambda page: page["data"]["logs"][0].update(removed=True),
-    lambda page: page["data"]["logs"][0].update(topic3="0x" + "00" * 32),
-    lambda page: page["data"]["logs"][0].update(address="0x" + "77" * 20),
-    lambda page: page.update(data=[page["data"]]),
+    lambda page: page["data"][0].clear(),
+    lambda page: page["data"][0]["blocks"].pop(3),
+    lambda page: page.update(next_block=page["data"][0]["blocks"][0]["number"]),
+    lambda page: page["data"][0]["blocks"][4].update(hash="0x" + "99" * 32) or page["data"][0]["logs"].append(
+        dict(page["data"][0]["logs"][0])),
+    lambda page: page["data"][0]["logs"][0].update(block_hash="0x" + "98" * 32),
+    lambda page: page["data"][0]["logs"][0].pop("removed"),
+    lambda page: page["data"][0]["logs"][0].update(removed=True),
+    lambda page: page["data"][0]["logs"][0].update(topic3="0x" + "00" * 32),
+    lambda page: page["data"][0]["logs"][0].update(address="0x" + "77" * 20),
+    lambda page: page.update(data=page["data"][0]),
+    lambda page: page["data"].append("not-an-object"),
+    lambda page: page["data"][0].update(logs={}),
+    lambda page: page["data"][0].update(blocks={}),
     lambda page: page.update(rollback_guard=[1]),
-    lambda page: page["data"]["blocks"][5].update(timestamp=T0 + 2000),
-], ids=["missing-logs", "missing-header", "empty-range", "duplicate-log", "log-hash-differs", "missing-removed",
-        "removed-true", "fourth-topic", "foreign-pool", "array-shape", "guard-not-object", "future-header"])
+    lambda page: page["data"][0]["blocks"][5].update(timestamp=T0 + 2000),
+], ids=["no-logs-and-no-blocks", "missing-header", "empty-range", "duplicate-log", "log-hash-differs", "missing-removed",
+        "removed-true", "fourth-topic", "foreign-pool", "object-shape", "batch-not-object", "logs-not-list",
+        "blocks-not-list", "guard-not-object", "future-header"])
 def test_malformed_first_page_gives_no_delivery_and_no_second_read(tmp_path: Path, damage: Callable) -> None:
     def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
         def damaged(call: dict[str, Any]) -> HttpResponse:
@@ -393,7 +401,7 @@ def test_conflicting_anchor_header_is_a_safety_stop(tmp_path: Path) -> None:
     def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
         def conflicting(call: dict[str, Any]) -> HttpResponse:
             page = providers._query(call["body"])
-            page["data"]["blocks"][0]["hash"] = "0x" + "97" * 32
+            page["data"][0]["blocks"][0]["hash"] = "0x" + "97" * 32
             return HttpResponse(200, {}, json.dumps(page).encode())
         providers.overrides[9] = conflicting
     result, providers, _ = run(tmp_path, configure=configure)
@@ -431,6 +439,80 @@ def test_admission_at_the_last_instant_of_the_slot_is_allowed(tmp_path: Path) ->
         clock.sleep_hook = lambda target: 0.999 if target == T0 + 630 else 0.0
     result, providers, _ = run(tmp_path, configure=configure)
     assert count(providers, "hypersync") == 5
+
+
+# Observed-UTC wake contract: the timer may return before or after the wall-clock target.
+
+
+def test_early_timer_return_before_the_p2_anchor_slot_still_observes_utc(tmp_path: Path) -> None:
+    fired: list[float] = []
+
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        def early(target: float) -> float:
+            if target == T0 - 120 and not fired:  # P2 earliest; the timer returns 2 ms before it
+                fired.append(target)
+                return -0.002
+            return 0.0
+        clock.sleep_hook = early
+
+    result, providers, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    assert fired == [T0 - 120]
+    assert handoff["phases"]["P2"]["outcome"] == "COMPLETED"
+    assert [bucket["status"] for bucket in handoff["buckets"]] == ["DELIVERED"] * 4
+    assert count(providers, "hypersync") == 5
+
+
+def test_early_timer_return_before_a_p3_slot_still_observes_utc(tmp_path: Path) -> None:
+    fired: list[float] = []
+    sleeps: list[float] = []
+
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        plain_sleep = clock.sleep
+
+        def tracked_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            plain_sleep(seconds)
+
+        clock.sleep = tracked_sleep
+
+        def early(target: float) -> float:
+            if target == T0 + 330 and not fired:  # bucket-0 first slot; the timer returns 2 ms before it
+                fired.append(target)
+                return -0.002
+            return 0.0
+        clock.sleep_hook = early
+
+    result, providers, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    assert fired == [T0 + 330]
+    assert handoff["buckets"][0]["status"] == "DELIVERED"
+    assert handoff["buckets"][0]["reason"] is None
+    assert handoff["buckets"][0]["received_at_utc_us"] == (T0 + 330) * 1_000_000 + 250_000
+    assert [bucket["status"] for bucket in handoff["buckets"]] == ["DELIVERED"] * 4
+    assert min(sleeps) > 0  # every wait request stays positive; no zero-length spin
+
+
+def test_late_timer_return_still_misses_the_p2_anchor_window(tmp_path: Path) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        clock.sleep_hook = lambda target: 116.0 if target == T0 - 120 else 0.0  # wakes at T0-4, after the cutoff
+
+    result, providers, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    assert handoff["phases"]["P2"]["outcome"] == "MISSED"
+    assert {bucket["reason"] for bucket in handoff["buckets"]} == {"NO_ANCHOR"}
+    assert count(providers, "hypersync") == 1
+
+
+def test_late_timer_return_still_misses_a_p3_slot(tmp_path: Path) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        clock.sleep_hook = lambda target: 1.0 if target == T0 + 330 else 0.0  # wakes at due + 1 second
+
+    result, providers, _ = run(tmp_path, configure=configure)
+    handoff = handoff_of(result)
+    assert handoff["buckets"][0]["status"] == "INCOMPLETE"
+    assert handoff["buckets"][0]["reason"] == "FIRST_SLOT_MISSED"
+    assert count(providers, "hypersync") == 4
 
 
 def test_clock_reversal_stops_scheduled_sends(tmp_path: Path) -> None:
@@ -556,6 +638,69 @@ def test_p1_hypersync_null_topic3_is_accepted(tmp_path: Path) -> None:
     assert result["status"] == "COMPLETED"
 
 
+FIXTURES = Path(__file__).parents[1] / "apps" / "api" / "tests" / "fixtures" / "research_history_native"
+REAL_REPLY = FIXTURES / "real_hypersync_p1_reply_20261021.json"
+# The real replies of `moe-wmon-fwd20m-actual-20261021c` hold one logs-free batch each; observed 2026-10-21.
+LOGS_FREE_REPLIES = {
+    "real_hypersync_logs_free_09_reply_20261021.json":
+        ("99bcb1463afb7599c834a3d1330e3147d52e742754502538708d5d823dc786a5", 1492, 6),
+    "real_hypersync_logs_free_10_reply_20261021.json":
+        ("b641241ab08698050b2b28a3d4caab12b1116323264f8851759852e0fb779f90", 2486, 8),
+    "real_hypersync_logs_free_12_reply_20261021.json":
+        ("c9bf11fb467603dd467ea087c203c50f5cba1832baee42f27b54655aa3fa999d", 994, 4),
+}
+
+
+@pytest.mark.parametrize("name", sorted(LOGS_FREE_REPLIES))
+def test_the_logs_free_reply_fixtures_are_the_saved_bodies(name: str) -> None:
+    assert hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest() == LOGS_FREE_REPLIES[name][0]
+
+
+@pytest.mark.parametrize("name", sorted(LOGS_FREE_REPLIES))
+def test_hypersync_batches_accepts_a_real_logs_free_batch_as_empty(name: str) -> None:
+    _, expected_blocks, expected_logs = LOGS_FREE_REPLIES[name]
+    raw = json.loads((FIXTURES / name).read_bytes())
+    assert any("blocks" in batch and "logs" not in batch for batch in raw["data"])
+    blocks, logs = hypersync_batches(raw)
+    assert (len(blocks), len(logs)) == (expected_blocks, expected_logs)
+
+
+def test_hypersync_batches_flattens_the_real_reply_data_list() -> None:
+    raw = json.loads(REAL_REPLY.read_bytes())
+    blocks, logs = hypersync_batches(raw)
+    assert [block["number"] for block in blocks] == [107_504_955]
+    assert [log["log_index"] for log in logs] == [6]
+
+
+def test_hypersync_batches_keeps_reply_order_across_batches() -> None:
+    raw = json.loads(REAL_REPLY.read_bytes())
+    first = raw["data"][0]
+    second = {"blocks": [dict(first["blocks"][0], number=107_504_956)], "logs": []}
+    raw["data"] = [first, second]
+    blocks, logs = hypersync_batches(raw)
+    assert [block["number"] for block in blocks] == [107_504_955, 107_504_956]
+    assert [log["log_index"] for log in logs] == [6]
+
+
+def test_hypersync_batches_allows_a_batch_without_blocks_and_one_without_logs() -> None:
+    raw = json.loads(REAL_REPLY.read_bytes())
+    raw["data"] = [{"logs": []}, {"blocks": []}]
+    assert hypersync_batches(raw) == ([], [])
+
+
+@pytest.mark.parametrize("damage", [
+    lambda raw: raw.update(data=raw["data"][0]),
+    lambda raw: raw.update(data=["not-an-object"]),
+    lambda raw: raw.update(data=[{}]),
+    lambda raw: raw["data"][0].update(logs={}),
+    lambda raw: raw["data"][0].update(blocks={}),
+], ids=["data-object", "batch-text", "no-logs-and-no-blocks", "logs-not-list", "blocks-not-list"])
+def test_hypersync_batches_refuses_every_other_shape(damage: Callable) -> None:
+    raw = json.loads(REAL_REPLY.read_bytes())
+    damage(raw)
+    assert hypersync_batches(raw) is None
+
+
 def test_bytecode_identity_hashes_decoded_bytes_and_empty_code_has_none(tmp_path: Path) -> None:
     def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
         providers.overrides[7] = lambda call: HttpResponse(200, {}, _rpc("0x"))
@@ -668,6 +813,65 @@ def test_default_cli_prints_a_redacted_plan_and_sends_nothing(tmp_path: Path,
                                                  "second": "2027-01-15T08:07:00Z"}
     assert plan["sends"] == 0
     assert list((tmp_path / "attempts").iterdir()) == []
+
+
+# Two-hour window (RECORDER-WINDOW-L2)
+
+
+def test_window_shape_accepts_1200_and_7200_seconds_only(tmp_path: Path) -> None:
+    assert validate_input(recorder_input(tmp_path))["bucket_count"] == 4
+    wide = validate_input(recorder_input(tmp_path, window_seconds=7200))
+    assert (wide["window_seconds"], wide["bucket_count"], wide["window_end"] - wide["t0"]) == (7200, 24, 7200)
+    for seconds in (0, 1199, 3600, 7201):
+        with pytest.raises(RecorderInputError) as refused:
+            validate_input(recorder_input(tmp_path, window_seconds=seconds))
+        assert refused.value.code == "WINDOW_SHAPE"
+    with pytest.raises(RecorderInputError) as refused:
+        validate_input(recorder_input(tmp_path, bucket_seconds=60))
+    assert refused.value.code == "WINDOW_SHAPE"
+
+
+def test_two_hour_plan_shows_24_buckets_and_derived_hypersync_ceilings(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    path = tmp_path / "input.json"
+    path.write_text(json.dumps(recorder_input(tmp_path, window_seconds=7200)))
+    assert main(["plan", "--input", str(path)]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert len(plan["p3_admission_slots_utc"]) == 24
+    assert plan["p3_admission_slots_utc"][-1] == {"bucket": 23, "first": "2027-01-15T10:00:30Z",
+                                                  "second": "2027-01-15T10:02:00Z"}
+    assert plan["calls_max"] == {"quicknode": 17, "hypersync": 49, "total": 66}
+    assert plan["phase_limits"]["P3"] == {"hypersync": 48}
+
+
+def test_two_hour_fake_run_completes_all_24_buckets_inside_every_cap(tmp_path: Path) -> None:
+    result, providers, attempt = run(tmp_path, window_seconds=7200)
+    assert result["status"] == "COMPLETED"
+    handoff = handoff_of(result)
+    assert [bucket["status"] for bucket in handoff["buckets"]] == ["DELIVERED"] * 24
+    assert (count(providers, "quicknode"), count(providers, "hypersync")) == (17, 25)
+    assert handoff["accounting"]["ceilings"] == {"quicknode": 17, "hypersync": 49}
+    assert handoff["accounting"]["reply_bytes"] < MAX_TOTAL_REPLY_BYTES
+    assert (attempt / "journal.jsonl").stat().st_size < MAX_JOURNAL_BYTES
+    assert (attempt / "handoff.json").stat().st_size < MAX_HANDOFF_BYTES
+    assert handoff["facts"]["decimals"]["window_start"] == {"token0": 18, "token1": 18}
+    assert handoff["facts"]["pool_tokens_at_start"] == {"token0": "READ", "token1": "READ"}
+
+
+PACKET = Path(__file__).resolve().parents[4] / ".scratch/recorder-window-l2-20261022"
+
+
+@pytest.mark.skipif(not (PACKET / "root/INPUT14.json").exists(), reason="packet input is outside the repository")
+def test_prepared_two_hour_input_passes_every_rule_except_t0(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    path = PACKET / "root/INPUT14.json"
+    raw = json.loads(path.read_text())
+    assert raw["t0_utc"] == "PLACEHOLDER"
+    assert main(["plan", "--input", str(path)]) == 2
+    assert json.loads(capsys.readouterr().out)["code"] == "T0_FORMAT"
+    raw["t0_utc"] = "2026-10-22T20:00:00Z"
+    value = validate_input(raw)
+    assert (value["window_seconds"], value["bucket_count"]) == (7200, 24)
 
 
 # Bounds and admission ceilings
@@ -939,9 +1143,9 @@ def test_rollback_guard_hash_conflict_is_a_safety_stop(tmp_path: Path) -> None:
 def test_consistent_rollback_guard_is_accepted(tmp_path: Path) -> None:
     # GATE1 correction: a guard names the page-end block (source_transport._frame), not an interior block.
     def guard(page: dict[str, Any]) -> None:
-        end = page["data"]["blocks"][-1]
+        end = page["data"][0]["blocks"][-1]
         page["rollback_guard"] = {"block_number": end["number"], "timestamp": end["timestamp"], "hash": end["hash"],
-                                  "first_block_number": page["data"]["blocks"][0]["number"]}
+                                  "first_block_number": page["data"][0]["blocks"][0]["number"]}
     result, providers, _ = run(tmp_path, configure=_page_override(9, guard))
     assert result["status"] == "COMPLETED"
     assert handoff_of(result)["buckets"][0]["status"] == "DELIVERED"
@@ -949,7 +1153,7 @@ def test_consistent_rollback_guard_is_accepted(tmp_path: Path) -> None:
 
 def test_later_reply_contradicting_an_earlier_reply_header_is_a_safety_stop(tmp_path: Path) -> None:
     def damage(page: dict[str, Any]) -> None:
-        page["data"]["blocks"].insert(0, {"number": 33, "timestamp": block_ts(33), "hash": "0x" + "95" * 32})
+        page["data"][0]["blocks"].insert(0, {"number": 33, "timestamp": block_ts(33), "hash": "0x" + "95" * 32})
     result, providers, _ = run(tmp_path, configure=_page_override(10, damage))
     assert (result["status"], result["stop_reason"]) == ("SAFETY_STOP", "CONFLICTING_BLOCK_FACT")
     assert len(providers.calls) == 10
@@ -958,7 +1162,7 @@ def test_later_reply_contradicting_an_earlier_reply_header_is_a_safety_stop(tmp_
 
 def test_later_reply_repeating_an_identical_earlier_header_is_rejected_not_stopped(tmp_path: Path) -> None:
     def damage(page: dict[str, Any]) -> None:
-        page["data"]["blocks"].insert(0, {"number": 33, "timestamp": block_ts(33), "hash": block_hash(33)})
+        page["data"][0]["blocks"].insert(0, {"number": 33, "timestamp": block_ts(33), "hash": block_hash(33)})
     result, providers, _ = run(tmp_path, configure=_page_override(10, damage))
     assert result["status"] == "COMPLETED"
     assert handoff_of(result)["buckets"][1]["reason"] == "FIRST_READ_REJECTED"
@@ -977,6 +1181,20 @@ def test_more_than_61_scan_logs_is_weaker_evidence_and_later_phases_still_run(
     assert handoff["weaker_evidence"] == (["SCAN_LOG_COUNT_EXCEEDS_61"] if flagged else [])
     assert result["status"] == "COMPLETED"
     assert (count(providers, "quicknode"), count(providers, "hypersync")) == (17, 5)
+
+
+@pytest.mark.parametrize("extra,flagged", [(364, False), (365, True)])
+def test_two_hour_scan_log_bound_is_366_not_61(tmp_path: Path, extra: int, flagged: bool) -> None:
+    def configure(providers: SyntheticProviders, clock: FakeClock) -> None:
+        providers.swaps = [ORACLE_SWAP, BOUNDARY_SWAP] + [
+            dict(ORACLE_SWAP, block_number=2 + index, log_index=index + 1,
+                 transaction_hash="0x" + "%064x" % (index + 1))
+            for index in range(extra)]
+    result, _, _ = run(tmp_path, configure=configure, window_seconds=7200)
+    handoff = handoff_of(result)
+    assert handoff["scan_log_count"] == extra + 2
+    assert handoff["weaker_evidence"] == (["SCAN_LOG_COUNT_EXCEEDS_366"] if flagged else [])
+    assert result["status"] == "COMPLETED"
 
 
 @pytest.mark.parametrize("call_number,returned", [(15, MOE), (16, WMON)])
@@ -1173,9 +1391,9 @@ def test_admission_exactly_at_slot_close_is_refused(tmp_path: Path) -> None:
 
 def _guard_page(**changes: Any) -> Callable[[dict[str, Any]], None]:
     def damage(page: dict[str, Any]) -> None:
-        end = page["data"]["blocks"][-1]
+        end = page["data"][0]["blocks"][-1]
         guard = {"block_number": end["number"], "timestamp": end["timestamp"], "hash": end["hash"],
-                 "first_block_number": page["data"]["blocks"][0]["number"]}
+                 "first_block_number": page["data"][0]["blocks"][0]["number"]}
         guard.update({key: (value(end) if callable(value) else value) for key, value in changes.items()})
         page["rollback_guard"] = guard
     return damage

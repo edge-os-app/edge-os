@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 import operating_release_stand_in as stand_in
-from edge_os_api.core.research import environment_credentials, released_runtime_bootstrap
+from edge_os_api.core.research import environment_credentials, operating_release, released_runtime_bootstrap
 from edge_os_api.core.research.environment_credentials import EnvironmentCredentialSource
 from edge_os_api.core.research.operating_release import ReleaseRefused
 from edge_os_api.core.research.released_source_runtime import (
@@ -204,8 +204,21 @@ def test_a_quicknode_url_on_another_host_keeps_the_endpoint_mismatch(environ: Re
     _no_sentinel(str(raised.value))
 
 
-def test_the_empty_bootstrap_with_the_source_composes_nothing_and_reads_nothing(environ: RecordingEnviron) -> None:
-    assert released_runtime_bootstrap.RELEASE_DEFINITIONS == {}
+def test_the_default_bootstrap_composes_the_one_approved_release_and_reads_nothing(
+        environ: RecordingEnviron) -> None:
+    # The code-owned default now carries exactly the one accepted MOE history plus Nansen ACTUAL release and its
+    # approved SHA-256.
+    assert set(released_runtime_bootstrap.RELEASE_DEFINITIONS) == set(operating_release.APPROVED_RELEASES)
+    runtime = released_runtime_bootstrap.server_research_runtime(SETTINGS,
+                                                                 credentials=EnvironmentCredentialSource())
+    assert runtime is not None
+    assert runtime.release_sha256 == operating_release.APPROVED_RELEASES[runtime.release.release_id]
+    assert environ.lookups == []
+
+
+def test_an_explicitly_emptied_registry_composes_nothing_and_reads_nothing(
+        monkeypatch: pytest.MonkeyPatch, environ: RecordingEnviron) -> None:
+    monkeypatch.setattr(released_runtime_bootstrap, "RELEASE_DEFINITIONS", {})
     assert released_runtime_bootstrap.server_research_runtime(SETTINGS,
                                                               credentials=EnvironmentCredentialSource()) is None
     assert environ.lookups == []

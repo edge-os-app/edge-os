@@ -45,7 +45,7 @@ def native_page(next_block: int, blocks: list[dict[str, Any]], logs: list[dict[s
         "archive_height": support.ARCHIVE_HEIGHT,
         "next_block": next_block,
         "total_execution_time": 7,
-        "data": {"blocks": blocks, "logs": logs},
+        "data": [{"blocks": blocks, "logs": logs}],
         "rollback_guard": guard,
     }
 

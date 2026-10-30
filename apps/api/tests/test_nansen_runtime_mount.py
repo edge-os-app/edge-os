@@ -3,9 +3,9 @@ server bootstrap that the API and the worker share.
 
 Host only: no database, Docker, browser or network outside 127.0.0.1. Keys are the stand-in sentinels. The loopback
 provider is an owned 127.0.0.1 server; only an injected connector moves the adapter's fixed `https://api.nansen.ai`
-origin to it, so it can never be the network factory. No actual release is approved and no actual request runs.
-Contract: `docs/qualification/research-provider-composition/CONTRACT.md` section 12; credential delivery:
-`CREDENTIAL_DELIVERY.md` beside it.
+origin to it, so it can never be the network factory. An actual Nansen release is registered in the code-owned default,
+but this module makes no actual provider request. Contract: `docs/qualification/research-provider-composition/CONTRACT.md`
+section 12; credential delivery: `CREDENTIAL_DELIVERY.md` beside it.
 """
 
 from __future__ import annotations
@@ -37,6 +37,8 @@ from edge_os_api.nansen_research import NansenResponse, NansenTimeout, run_resea
 from edge_os_api.nansen_research.http_transport import NANSEN_ORIGIN
 from edge_os_api.research import investigation_jobs, nansen_reports
 
+from test_actual_binding_admission import authored_actual_history
+
 LOCAL = type("Local", (), {"env": "local"})()
 QUESTION = "Which holder records does MOE return, and what do basic flow records show?"
 ACTUAL_ENVIO, ACTUAL_QUICKNODE = "https://hypersync.actual-test.example", "quicknode.actual-test.example"
@@ -47,7 +49,8 @@ def actual_release(*, history: bool = True, nansen: bool = True, nansen_endpoint
     """An ACTUAL definition for composition checks only. Its hosts are `.example`; no job runs over it."""
     base = stand_in.stand_in_release(envio_endpoint=ACTUAL_ENVIO, quicknode_host=ACTUAL_QUICKNODE, history=history,
                                      nansen=nansen, nansen_endpoint=nansen_endpoint)
-    return OperatingRelease(release_id, "ACTUAL", history=base.history, nansen=base.nansen)
+    return OperatingRelease(release_id, "ACTUAL",
+                            history=None if base.history is None else authored_actual_history(base.history), nansen=base.nansen)
 
 
 def approve(monkeypatch, *releases: OperatingRelease) -> None:
@@ -76,9 +79,22 @@ def no_sockets(monkeypatch):
 
 # --------------------------------------------------------------------------------------------- bootstrap
 
-def test_the_default_server_composes_no_release_reads_no_key_and_opens_no_socket(no_sockets):
+def test_the_default_server_composes_the_one_approved_release_and_reads_no_key_or_opens_no_socket(no_sockets):
+    # The code-owned default now carries exactly the one accepted MOE history plus Nansen ACTUAL release and its
+    # approved SHA-256.
+    assert set(released_runtime_bootstrap.RELEASE_DEFINITIONS) == set(operating_release.APPROVED_RELEASES)
+    assert released_runtime_bootstrap.RELEASE_DEFINITIONS != {}
     creds = stand_in.credentials()
-    assert released_runtime_bootstrap.RELEASE_DEFINITIONS == {} and operating_release.APPROVED_RELEASES == {}
+    runtime = released_runtime_bootstrap.server_research_runtime(LOCAL, credentials=creds)
+    assert runtime is not None and runtime.release.history is not None and runtime.release.nansen is not None
+    assert runtime.network_transport is True and runtime.nansen_network is True
+    assert runtime.release_sha256 == operating_release.APPROVED_RELEASES[runtime.release.release_id]
+    assert creds.reads == [] and no_sockets == []
+
+
+def test_an_explicitly_emptied_registry_composes_no_release_reads_no_key_and_opens_no_socket(monkeypatch, no_sockets):
+    monkeypatch.setattr(released_runtime_bootstrap, "RELEASE_DEFINITIONS", {})
+    creds = stand_in.credentials()
     assert released_runtime_bootstrap.server_research_runtime(LOCAL, credentials=creds) is None
     assert released_runtime_bootstrap.server_research_runtime(LOCAL) is None
     assert creds.reads == [] and no_sockets == []

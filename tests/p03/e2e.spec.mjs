@@ -101,7 +101,7 @@ async function checkP09Interface(page) {
 
 async function open(page, token) {
   await injectAuth(page, token);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByTestId("fixture-banner")).toContainText("TEST AUTH FIXTURE");
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
 }
@@ -110,9 +110,9 @@ test.describe.configure({ mode: "serial" });
 
 test("signed-out and rejected sessions never show data", async ({ page }, info) => {
   await injectAuth(page, tokens.bad);
-  await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Sign in to start" })).toBeVisible();
-  await expect(page.getByText("Signing in does not create a wallet")).toBeVisible();
+  await page.goto("/app");
+  await expect(page.getByRole("heading", { name: "Sign in to Edge OS" })).toBeVisible();
+  await expect(page.getByText("Signing in doesn't move funds")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Saved requests" })).toHaveCount(0);
   await shot(page, info.project.name, "signed-out");
 });
@@ -130,7 +130,7 @@ test("error state when saved requests cannot load", async ({ page }) => {
   await page.route("**/v1/research/requests", (route) => route.request().method() === "GET"
     ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ code: "service_unavailable", findings: [{ detail: "A required service is unavailable. Retry later." }] }) })
     : route.continue());
-  await page.goto("/");
+  await page.goto("/app");
   await expect(alerts(page)).toContainText("unavailable");
 });
 
@@ -564,7 +564,7 @@ test("loading states are announced while the service is slow", async ({ page }) 
     await new Promise((resolve) => setTimeout(resolve, 1200));
     return route.continue();
   });
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByText("Loading saved requests.")).toBeVisible();
   await expect(page.getByText("Nothing saved yet.")).toBeVisible();
 });

@@ -26,7 +26,7 @@ RUNTIME_ASSETS = [
     "apps/api/tests/fixtures/spot_replay/runtime_wc01.json", "apps/api/tests/fixtures/research_history_recorded",
     "apps/api/tests/fixtures/research_history_native", "apps/api/tests/fixtures/nansen_research_authored",
     "scripts/hermes_interpretation/spend_ledger.py", "scripts/hermes_job_support/transport_turn_job.py",
-    "scripts/history_payload_binding.py", "deploy/local/public_entry.py", "deploy/local/http_probe.py",
+    "scripts/history_payload_binding.py", "scripts/history_payload_binding_v2.py", "deploy/local/public_entry.py", "deploy/local/http_probe.py",
 ]
 WEB_SOURCES = ["apps/web/package.json", "apps/web/package-lock.json", "apps/web/next.config.ts", "apps/web/tsconfig.json",
                "apps/web/app/layout.tsx", "apps/web/lib/api.ts", "apps/web/components", "apps/web/public"]

@@ -58,13 +58,18 @@ MAX_STDOUT_BYTES = 1024 * 1024  # the host keeps at most this much of the job's 
 MAX_CREDENTIAL_BYTES = 64 * 1024
 MAX_RESULT_BYTES = 256 * 1024  # a result file larger than this is not read: the turn ends as UNKNOWN (real ones: ~6 KiB)
 # Parsing, checking, mapping and freeing a result cannot be stopped part way, so it starts only when the time left
-# covers its worst case: deeply nested lists measured up to 0.06 s per MiB to parse under load, and about as much to
-# free; this allows about twice that sum. With less time left the result is not read and the turn ends as UNKNOWN.
-RESULT_SECONDS_PER_BYTE = 0.25 / (1024 * 1024)
-RESULT_MIN_SECONDS = 0.005
+# covers its worst case. A 256 KiB invalid nested result measured 0.363 s to parse inside the test process under load
+# on 2026-10-22 (0.008-0.022 s in a quiet standalone process); the scan and the mapping after it add a little. This
+# allows about twice that measured sum, and RESULT_MIN_SECONDS covers the small-result tail. With less time left the
+# result is not read and the turn ends as UNKNOWN.
+RESULT_SECONDS_PER_BYTE = 3.0 / (1024 * 1024)
+RESULT_MIN_SECONDS = 0.02
 MAX_ENTRIES = 10_000  # more files and folders than this in one output are not scanned: the output is removed
 ENTRYPOINT = "/opt/hermes/.venv/bin/python"
 JOB_FILES_FOLDER = PurePosixPath("/opt/p05job")  # the one folder a different job entry may add read-only files to
+# The relay runs with the same group as this runner, so one attempt's channel folder must let that group write the
+# reply. The unit's `UMask=0077` hides the group bit, so the runner sets the mode again after `mkdir`.
+TURN_FOLDER_MODE = 0o770
 # The longest step of sealing or removal that cannot be stopped part way (one form replaced in at most 1 MiB, one 1 MiB
 # read or write, one search of 8 MiB, one batch of 1,024 undone escapes, one scan for escapes that finds none) measured
 # about 0.002 s to 0.016 s idle and up to about 0.02 s under heavy load; sealing stops at least this long before
@@ -279,6 +284,12 @@ class EvidenceNotSealed(RuntimeError):
 
 class CredentialUnavailable(RuntimeError):
     """The credential file is missing, unreadable or empty. The message names neither the path nor any value."""
+
+
+def _make_shared_folder(path: Path) -> None:
+    """Create one turn folder exclusively and let the relay's shared group write the reply into it."""
+    path.mkdir()
+    os.chmod(path, TURN_FOLDER_MODE)  # the unit's UMask would hide the group write bit
 
 
 @dataclass(frozen=True)
@@ -1140,10 +1151,17 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
         record = self._run_folder() / f"{task_dir.name}.json"
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
         try:
-            task_dir.mkdir()  # exclusively: a turn folder that already exists belongs to someone else, never to this turn
+            _make_shared_folder(task_dir)  # exclusively: an existing turn folder belongs to someone else
         except FileExistsError:
             return HermesTurnResult(status="PROVIDER_FAILED", text=None, usage=Usage(), request_count=0,
                                     observed={"guard_admitted": 0}, error_class="TurnFolderInUse")
+        except OSError:
+            try:
+                task_dir.rmdir()  # the empty folder this turn may have made
+            except OSError:
+                pass
+            return HermesTurnResult(status="PROVIDER_FAILED", text=None, usage=Usage(), request_count=0,
+                                    observed={"guard_admitted": 0}, error_class="CleanupStorageUnwritable")
         with _ACTIVE_LOCK:  # this process's own live turn: it does not block its own runner
             _ACTIVE_RECORDS.add(str(record))
         lock = None
@@ -1162,7 +1180,7 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
                                         observed={"guard_admitted": 0}, error_class="CleanupStorageUnwritable")
             if lock is None:
                 raise EvidenceNotSealed(f"the pending-cleanup lock of {record.name} is held by someone else")
-            output.mkdir()  # only once the turn is durably registered
+            _make_shared_folder(output)  # only once the turn is durably registered; the relay writes the reply here
             try:
                 result = self._run_turn_steps(turn, plan, task_dir, output)
             except BaseException:

@@ -7,6 +7,7 @@ import { financial, formatRaw, heldKey, peekKey, releaseKey, type FundingView } 
 const MODE_COPY: Record<string, string> = {
   fixture: "Authored local fixture ports. Deposits and holdings here are not a wallet, a transfer or chain evidence.",
   unavailable: "Real deposit and holdings observation is unavailable in this build. Reviewed deposits stay pending and nothing is credited.",
+  controlled: "Current holdings require the release's independent observer. Deposit references require separate verified evidence; a reviewed reference does not credit funds.",
 };
 
 /** Funding for one confirmed agent wallet: declared assets, reviewed deposits, credited deposits and current holdings. */

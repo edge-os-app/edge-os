@@ -56,7 +56,7 @@ function detail(over: Partial<ActionDetail> = {}): ActionDetail {
     receipts: [{ outcome: "SUBMISSION_UNKNOWN", breach: false, created_at: "2026-10-12T01:05:01Z", content: {} }],
     attempts: [{ attempt_id: "a", state: "TERMINAL", outcome: "SUBMISSION_POSSIBLE", detail: null,
       content: { original_references: { transaction_hash: null, absent_reason: "FIXTURE_TRANSPORT_SIGNS_NOTHING" } } }],
-    recovery: null, ...over };
+    refusal: null, recovery: null, ...over };
 }
 
 beforeEach(() => {
@@ -313,6 +313,81 @@ describe("original transaction and observed holdings (ORIGINAL-LOCAL)", () => {
     expect(screen.getByRole("button", { name: "Reconcile original action" })).toBeEnabled();
   });
 
+  it("links a saved original transaction hash to the Monad explorer in a new tab", async () => {
+    const hash = "0x" + "7".repeat(64);
+    const base = detail();
+    mocks.actions.mockResolvedValue(actions({ jobs: [{ job_id: "j", agent_id: "agent-a", request_key: "k",
+      decision_slot: "2026-10-12T01:05:00Z", state: "SUBMITTED", publication_revision_id: "r", execution_revision_id: "s:abc",
+      consent_adoption_id: "m-1", decision_id: "d", action_id: "p23:d:ENTRY", outcome: "SUBMITTED_UNKNOWN",
+      reason: "BROADCAST_RETURNED", runs: 1, created_at: "t", updated_at: "t" }] }));
+    mocks.action.mockResolvedValue(detail({ attempts: [{ ...base.attempts[0],
+      content: { original_transaction: { ...ORIGINAL, transaction_hash: hash } } }] }));
+    render(<AgentActions agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: /Open action/ }));
+    const link = await screen.findByRole("link", { name: hash });
+    expect(link).toHaveAttribute("href", `https://monadscan.com/tx/${hash}`);
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("links the saved references hash when no original transaction is saved", async () => {
+    const hash = "0x" + "8".repeat(64);
+    const base = detail();
+    mocks.actions.mockResolvedValue(actions({ jobs: [{ job_id: "j", agent_id: "agent-a", request_key: "k",
+      decision_slot: "2026-10-12T01:05:00Z", state: "SUBMITTED", publication_revision_id: "r", execution_revision_id: "s:abc",
+      consent_adoption_id: "m-1", decision_id: "d", action_id: "p23:d:ENTRY", outcome: "SUBMITTED_UNKNOWN",
+      reason: "BROADCAST_RETURNED", runs: 1, created_at: "t", updated_at: "t" }] }));
+    mocks.action.mockResolvedValue(detail({ attempts: [{ ...base.attempts[0],
+      content: { original_references: { transaction_hash: hash } } }] }));
+    render(<AgentActions agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: /Open action/ }));
+    const link = await screen.findByRole("link", { name: hash });
+    expect(link).toHaveAttribute("href", `https://monadscan.com/tx/${hash}`);
+  });
+
+  it("shows text without a link for a hash that is not a 32-byte hex value", async () => {
+    const base = detail();
+    mocks.actions.mockResolvedValue(actions({ jobs: [{ job_id: "j", agent_id: "agent-a", request_key: "k",
+      decision_slot: "2026-10-12T01:05:00Z", state: "SUBMITTED", publication_revision_id: "r", execution_revision_id: "s:abc",
+      consent_adoption_id: "m-1", decision_id: "d", action_id: "p23:d:ENTRY", outcome: "SUBMITTED_UNKNOWN",
+      reason: "BROADCAST_RETURNED", runs: 1, created_at: "t", updated_at: "t" }] }));
+    mocks.action.mockResolvedValue(detail({ attempts: [{ ...base.attempts[0],
+      content: { original_transaction: { ...ORIGINAL, transaction_hash: "0xnothex" } } }] }));
+    render(<AgentActions agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: /Open action/ }));
+    expect(await screen.findByTestId("action-original-hash")).toHaveTextContent("0xnothex");
+    expect(screen.queryByRole("link", { name: "0xnothex" })).toBeNull();
+  });
+
+  it("shows the exact wallet-policy refusal and nothing-sent text", async () => {
+    const base = detail();
+    mocks.actions.mockResolvedValue(actions({ jobs: [{ job_id: "j", agent_id: "agent-a", request_key: "k",
+      decision_slot: "2026-10-12T01:05:00Z", state: "SUBMITTED", publication_revision_id: "r", execution_revision_id: "s:abc",
+      consent_adoption_id: "m-1", decision_id: "d", action_id: "p23:d:ENTRY", outcome: "DENIED_UNSENT",
+      reason: "WALLET_POLICY_REFUSED", runs: 1, created_at: "t", updated_at: "t" }] }));
+    mocks.action.mockResolvedValue(detail({ refusal: { reason: "WALLET_POLICY_REFUSED", message: "Refused by the wallet policy." },
+      attempts: [{ ...base.attempts[0], content: { original_transaction: { ...ORIGINAL, stage: "REFUSED_UNSENT",
+        reason: "WALLET_POLICY_REFUSED", transaction_hash: undefined } } }] }));
+    render(<AgentActions agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: /Open action/ }));
+    expect(await screen.findByTestId("action-refusal")).toHaveTextContent("Refused by the wallet policy. Nothing was sent.");
+  });
+
+  it("keeps today's text when the refusal reason is not the exact wallet-policy refusal", async () => {
+    const base = detail();
+    mocks.actions.mockResolvedValue(actions({ jobs: [{ job_id: "j", agent_id: "agent-a", request_key: "k",
+      decision_slot: "2026-10-12T01:05:00Z", state: "SUBMITTED", publication_revision_id: "r", execution_revision_id: "s:abc",
+      consent_adoption_id: "m-1", decision_id: "d", action_id: "p23:d:ENTRY", outcome: "DENIED_UNSENT",
+      reason: "SIGNER_REFUSED", runs: 1, created_at: "t", updated_at: "t" }] }));
+    mocks.action.mockResolvedValue(detail({ refusal: { reason: "OTHER_REFUSAL", message: "Another refusal." },
+      attempts: [{ ...base.attempts[0], content: { original_transaction: { ...ORIGINAL, stage: "REFUSED_UNSENT",
+        reason: "SIGNER_REFUSED", transaction_hash: undefined } } }] }));
+    render(<AgentActions agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name: /Open action/ }));
+    expect(await screen.findByTestId("action-original-stage")).toHaveTextContent("The signer refused. Nothing was signed or sent.");
+    expect(screen.queryByTestId("action-refusal")).toBeNull();
+  });
+
   it("says an explicit signer refusal signed and sent nothing, and an unusable reply keeps the amounts held", async () => {
     mocks.actions.mockResolvedValue(actions({ jobs: [{ job_id: "j", agent_id: "agent-a", request_key: "k",
       decision_slot: "2026-10-12T01:05:00Z", state: "COMPLETED", publication_revision_id: "r", execution_revision_id: "s:abc",
@@ -348,5 +423,86 @@ describe("original transaction and observed holdings (ORIGINAL-LOCAL)", () => {
     render(<AgentFunding agentId="agent-a" />);
     expect(await screen.findByTestId("funding-holdings")).toHaveTextContent(
       "Current holdings are unavailable (HOLDINGS_STALE). No balance is shown or assumed.");
+  });
+});
+
+const CONTROLLED = {
+  scope: "CONTROLLED_ONE_ACTION_QUALIFICATION", release_id: "bounded-release", release_sha256: "1".repeat(64),
+  binding_sha256: "2".repeat(64), evidence_class: "PROVIDER_ACTUAL",
+  input: { asset_id: "monad:143/0x2222222222222222222222222222222222222222", decimals: 6, raw: "100000000" },
+  minimum_output: { asset_id: "monad:143/0x1111111111111111111111111111111111111111", decimals: 18, raw: "49500000000000000000" },
+  recipient: "0x3333333333333333333333333333333333333333", entrypoint: "0x4444444444444444444444444444444444444444",
+  method: "EXECUTE_SWAP", allowance_raw: "100000000", gas: { gas_limit: "300000", max_fee_per_gas: "3000000000",
+    max_priority_fee_per_gas: "1000000000", budget_raw: "900000000000000" },
+  fees: { fee_bps: 0, referrer_fee_bps: 0, fee_collector_address: "0x3333333333333333333333333333333333333333",
+    referrer_address: "0x3333333333333333333333333333333333333333", is_in_token_fee: false },
+  expires_at: "2030-01-01T00:00:00Z", signer_id: "bounded-signer", policy_id: "bounded-policy", policy_content_sha256: "3".repeat(64),
+  recurring: "UNAVAILABLE" as const, exit_execution: "UNAVAILABLE" as const,
+};
+
+describe("controlled action propagation", () => {
+  it("shows the fixed input, minimum output and an unavailable USD ceiling from the release", async () => {
+    mocks.consent.mockResolvedValue(consent({ provider_mode: "controlled", controlled_action: CONTROLLED }));
+    render(<AgentAuthority agentId="agent-a" />);
+    const limits = await screen.findByTestId("release-limits");
+    expect(limits).toHaveTextContent("Fixed input100");
+    expect(limits).toHaveTextContent(CONTROLLED.input.asset_id);
+    expect(limits).toHaveTextContent("Minimum output49.5");
+    expect(limits).toHaveTextContent(CONTROLLED.minimum_output.asset_id);
+    expect(limits).toHaveTextContent("USD ceiling including gasNot available");
+  });
+
+  it("shows controlled raw minimum and deferred capabilities before adoption", async () => {
+    mocks.consent.mockResolvedValue(consent({ provider_mode: "controlled", controlled_action: CONTROLLED }));
+    render(<AgentAuthority agentId="agent-a" />);
+    const terms = await screen.findByTestId("controlled-action-terms");
+    expect(terms).toHaveTextContent("100000000");
+    expect(terms).toHaveTextContent("49500000000000000000");
+    expect(terms).toHaveTextContent(CONTROLLED.recipient);
+    expect(terms).toHaveTextContent(/exit and recurring execution are unavailable/i);
+  });
+
+  it("submits controlled terms with the exact signer and policy instead of exit permission", async () => {
+    mocks.consent.mockResolvedValue(consent({ provider_mode: "controlled", controlled_action: CONTROLLED,
+      assets: { quote: CONTROLLED.input, base: CONTROLLED.minimum_output, gas: { asset_id:"monad:143/native", decimals:18 } } }));
+    mocks.review.mockImplementation(async (_agent, terms) => ({ review_id: "r", agent_id:"agent-a", wallet_id:"w", network_id:"monad:143",
+      strategy_id:"s", strategy_revision_id:"rev", content_sha256:"a".repeat(64), manifest_sha256:"b".repeat(64),
+      terms_hash:"sha256:t", review_hash:"sha256:r", status:"INACTIVE", content:{terms}, created_at:"2026-10-18T00:00:00Z" }));
+    render(<AgentAuthority agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", { name:"Review exact terms" }));
+    await screen.findByTestId("consent-review");
+    expect(mocks.review).toHaveBeenCalledWith("agent-a", expect.objectContaining({ terms_version:"connected-one-action/1",
+      supported_actions:["ENTRY"], signer:"bounded-signer", policy:{ policy_id:"bounded-policy", status:"UNQUALIFIED",
+        content_sha256:"3".repeat(64) }, route:{ adapter:"KURU_FLOW_FIXED_INPUT", identity_state:"KNOWN", identity:CONTROLLED.entrypoint } }));
+  });
+
+  it("shows controlled current observations and finalized receipt cost without authored copy", async () => {
+    mocks.actions.mockResolvedValue(actions({ provider_mode:"controlled", jobs:[{ job_id:"j", agent_id:"agent-a", request_key:"k",
+      decision_slot:"2026-10-18T00:00:00Z", state:"SUBMITTED", publication_revision_id:"rev", execution_revision_id:"execution",
+      consent_adoption_id:"consent", decision_id:"d", action_id:"p23:d:ENTRY", outcome:"SUBMITTED_UNKNOWN", reason:null,
+      runs:1, created_at:"2026-10-18T00:00:00Z", updated_at:"2026-10-18T00:00:01Z", provenance:{ observations:{
+        evidence_class:"PROVIDER_ACTUAL", source:"qualified-current-source", finality:"finalized", collected_at:"2026-10-18T00:00:00Z",
+        warmup_buckets:20, delivery_profile_sha256:"4".repeat(64), forward_observation:{event:"current-event-a"} } } }] }));
+    mocks.action.mockResolvedValue(detail({ attempts:[{ attempt_id:"a", state:"TERMINAL", outcome:"SUBMISSION_POSSIBLE", detail:null,
+      content:{original_transaction:{stage:"BROADCAST_RETURNED", evidence_class:"PROVIDER_ACTUAL", chain_id:143,
+        wallet_address:CONTROLLED.recipient, scope:CONTROLLED.scope, release_sha256:CONTROLLED.release_sha256,
+        approved_minimum:CONTROLLED.minimum_output, transaction_hash:"0x"+"5".repeat(64), stages:[]}} }],
+      receipts:[{outcome:"CONFIRMED", breach:false, created_at:"2026-10-18T00:00:01Z", content:{
+        actual_gas:{asset_id:"monad:143/native", decimals:18, raw:"600000000000000"}, source_ref:"original-receipt:finalized:block-a"}}] }));
+    render(<AgentActions agentId="agent-a" />);
+    await userEvent.click(await screen.findByRole("button", {name:"Open action p23:d:ENTRY"}));
+    expect(screen.getByTestId("actions-mode")).toHaveTextContent(/one controlled action/i);
+    expect(screen.getByText(/qualified-current-source/)).toBeInTheDocument();
+    expect(screen.getByTestId("action-original")).not.toHaveTextContent(/authored recorded responses/i);
+    expect(screen.getByTestId("action-receipt-evidence")).toHaveTextContent("0.0006");
+    expect(screen.getByTestId("action-receipt-evidence")).toHaveTextContent("finalized:block-a");
+  });
+
+  it("keeps controlled holdings separate from unqualified deposit references", async () => {
+    mocks.funding.mockResolvedValue(funding({ provider_mode:"controlled", current_holdings:{state:"UNAVAILABLE",
+      reason:"HOLDINGS_FINALITY_UNQUALIFIED", evidence_class:null, assets:[]} }));
+    render(<AgentFunding agentId="agent-a" />);
+    expect(await screen.findByText(/independent observer/i)).toBeInTheDocument();
+    expect(screen.getByText(/deposit references require separate verified evidence/i)).toBeInTheDocument();
   });
 });

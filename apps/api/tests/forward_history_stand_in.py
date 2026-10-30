@@ -47,10 +47,10 @@ def recording() -> dict[str, Any]:
     """The four-bucket recording: one page of blocks 500..505, its five Swap logs and their five receipts."""
     source = copy.deepcopy(stand_in.recording())
     page = source["envio_pages"][0]
-    blocks = [block for block in page["data"]["blocks"] if _number(block["number"]) <= B_POST]
-    logs = [log for log in page["data"]["logs"] if log["block_number"] <= B_POST]
+    blocks = [block for block in page["data"][0]["blocks"] if _number(block["number"]) <= B_POST]
+    logs = [log for log in page["data"][0]["logs"] if log["block_number"] <= B_POST]
     last = blocks[-1]
-    source["envio_pages"] = [{**page, "data": {"blocks": blocks, "logs": logs},
+    source["envio_pages"] = [{**page, "data": [{"blocks": blocks, "logs": logs}],
                               "next_block": hex(SCAN["to_block_exclusive"]),
                               "rollback_guard": {"block_number": B_POST, "first_block_number": SCAN["from_block"],
                                                  "hash": last["hash"], "timestamp": last["timestamp"]}}]
@@ -85,9 +85,9 @@ def handoff(source: Mapping[str, Any] | None = None, **changes: Any) -> dict[str
     page = source["envio_pages"][0]
     headers = {_number(block["number"]): (checker.quantity(block["timestamp"], "timestamp"),
                                           checker.hex_value(block["hash"], 32, "hash"))
-               for block in page["data"]["blocks"] if block.get("hash")}
+               for block in page["data"][0]["blocks"] if block.get("hash")}
     projected = [checker.project_log(log, block_timestamp=headers[log["block_number"]][0])
-                 for log in page["data"]["logs"]]
+                 for log in page["data"][0]["logs"]]
     profile = source["profile"]
     tokens = {token["role"]: token["address"] for token in profile["pool_tokens"]}
     token0, token1 = sorted((tokens["BASE"], tokens["QUOTE"]))

@@ -91,6 +91,32 @@ class SourceContractError(SourceFailure):
         self.detail = detail
 
 
+def _page_batches(data: Any) -> tuple[list[Any], list[Any]]:
+    """Flatten the reply's `data` list of batches in reply order, or refuse another shape.
+
+    The live HyperSync JSON reply carries `data` as a list of batch objects. Observed 2026-10-21: a batch
+    with no logs omits the `logs` key. A batch that carries a `blocks` list and no `logs` key contributes
+    zero logs. A batch with neither key, a non-list `logs` or `blocks`, a non-list `data` or a batch that is
+    not an object is refused."""
+    if not isinstance(data, list):
+        raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "data is not a list of batches")
+    logs: list[Any] = []
+    blocks: list[Any] = []
+    for batch in data:
+        if not isinstance(batch, Mapping):
+            raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "a data batch is not an object")
+        if "logs" not in batch and "blocks" not in batch:
+            raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "a data batch has neither logs nor blocks")
+        batch_logs, batch_blocks = batch.get("logs", []), batch.get("blocks", [])
+        if not isinstance(batch_logs, list):
+            raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "a data batch logs is not a list")
+        if not isinstance(batch_blocks, list):
+            raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "a data batch blocks is not a list")
+        logs.extend(batch_logs)
+        blocks.extend(batch_blocks)
+    return blocks, logs
+
+
 def _strict_quantity(value: Any, detail: str) -> int | None:
     """A quantity that is absent (None) or valid; a present non-quantity is refused."""
     if value is None:
@@ -221,12 +247,9 @@ class EnvioHypersyncSource:
             if chain_id != self._context.chain_id:
                 raise SourceContractError("WRONG_NETWORK", f"expected chain {self._context.chain_id}, got {chain_id!r}")
 
-    def _block_index(self, data: Mapping[str, Any], from_block: int,
+    def _block_index(self, blocks: list[Any], from_block: int,
                      next_block: int) -> dict[int, Mapping[str, Any]]:
         """Every present block fact inside the page, refusing an out-of-range or self-contradicting fact."""
-        blocks = data.get("blocks", [])
-        if not isinstance(blocks, Sequence) or isinstance(blocks, (str, bytes)):
-            raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "data.blocks is not a list")
         index: dict[int, Mapping[str, Any]] = {}
         for block in blocks:
             if not isinstance(block, Mapping):
@@ -254,14 +277,7 @@ class EnvioHypersyncSource:
         self._check_network(raw)
 
         data = raw.get("data")
-        if not isinstance(data, Mapping):
-            raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "data is not an object")
-        if "logs" not in data:
-            # Absence is not proved emptiness on the pinned schema.
-            raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "data.logs is absent")
-        logs = data["logs"]
-        if not isinstance(logs, Sequence) or isinstance(logs, (str, bytes)):
-            raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "data.logs is not a list")
+        block_facts, logs = _page_batches(data)
 
         next_block = _quantity(raw.get("next_block"))
         if next_block is None or next_block <= 0:
@@ -275,7 +291,7 @@ class EnvioHypersyncSource:
             raise SourceContractError("PAGE_BOUNDS_CONTRADICTED",
                                       f"next_block {next_block} passes the requested end {request.to_block_exclusive}")
 
-        blocks = self._block_index(data, from_block, next_block)
+        blocks = self._block_index(block_facts, from_block, next_block)
         guard_raw = raw.get("rollback_guard")
         if guard_raw is not None and not isinstance(guard_raw, Mapping):
             raise SourceContractError("MALFORMED_PROVIDER_RESPONSE", "rollback_guard is not an object")

@@ -17,7 +17,7 @@ const MIN = 44;
 
 async function open(page, token) {
   await injectAuth(page, token);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
 }
 
@@ -582,7 +582,7 @@ test("a lost reply on the first submit says the request may be saved and refresh
 test("signing out and back in keeps focus on the sign-in heading and returns to Research", async ({ page }) => {
   await open(page, tokens.a);
   await page.getByRole("button", { name: "Sign out" }).click();
-  const heading = page.getByRole("heading", { name: "Sign in to start" });
+  const heading = page.getByRole("heading", { name: "Sign in to Edge OS" });
   await expect(heading).toBeVisible();
   await expect(heading).toBeFocused();
   const signIn = page.getByRole("button", { name: "Sign in" });
@@ -614,7 +614,7 @@ test("a rejected session explains itself, keeps the draft for the same person an
     ? route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ code: "auth_invalid", findings: [{ detail: "The credential is not valid for this application." }] }) })
     : route.continue());
   await page.getByRole("button", { name: "Prepare request" }).click();
-  await expect(page.getByRole("heading", { name: "Sign in to start" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in to Edge OS" })).toBeVisible();
   const message = page.locator('[role="alert"]', { hasText: "session was rejected" });
   await expect(message).toBeVisible();
   await expect(message).toBeFocused(); // no silent drop to the page body
@@ -630,7 +630,7 @@ test("signing out removes the draft, and another person never sees it", async ({
   await page.getByLabel("Your words", { exact: true }).fill("Owner A private unsent hunch.");
   await page.getByRole("button", { name: /Add “no leverage”/ }).click();
   await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page.getByRole("heading", { name: "Sign in to start" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in to Edge OS" })).toBeVisible();
   const kept = await page.evaluate(() => Object.keys(window.sessionStorage).filter((k) => k.startsWith("edge-os:")));
   expect(kept, "nothing this app stored may survive a sign-out").toEqual([]);
   await page.evaluate((token) => { window.__EDGE_OS_TEST_AUTH__.getAccessToken = async () => token; }, tokens.b); // the next person signs in

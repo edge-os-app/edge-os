@@ -66,7 +66,7 @@ async function readyOriginalAgent(page, thesisUrl, agentId, project) {
   await shot(page, project, `${agentId}-holdings`);
   await noSidewaysScroll(page);
 
-  await page.goto(`/#/agents?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/agents?agent=${encodeURIComponent(agentId)}`);
   const authority = page.getByRole("region", { name: "Agent authority" });
   await authority.getByRole("button", { name: "Review exact terms" }).click();
   await expect(authority.getByTestId("consent-review")).toContainText("Review hash");
@@ -75,7 +75,7 @@ async function readyOriginalAgent(page, thesisUrl, agentId, project) {
 }
 
 async function runAndWait(page, agentId, text) {
-  await page.goto(`/#/positions?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/positions?agent=${encodeURIComponent(agentId)}`);
   const actions = page.getByRole("region", { name: "Agent actions" });
   await actions.getByRole("button", { name: "Run one bounded evaluation" }).click();
   await expect(actions.getByRole("status").filter({ hasText: "Evaluation saved" })).toBeVisible();

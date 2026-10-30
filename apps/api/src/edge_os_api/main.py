@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Callable, TypeVar
 
@@ -30,7 +31,12 @@ from edge_os_api.research.interpretation_workflow import LOCAL_FAKE_CONFIG, Herm
 from edge_os_api.replay import saved_runs as spot_replay_api
 from edge_os_api.core.authentication import Principal, Verifier, require_principal
 from edge_os_api.core.database import current_revision, make_engine, make_session_factory, require_head, script_head
-from edge_os_api.core.errors import AppError, finding, install_handlers, invalid, not_found, service_unavailable
+from edge_os_api.core.errors import (
+    AppError, finding, install_handlers, interpreter_unavailable, invalid, not_found, service_unavailable,
+)
+from edge_os_api.core.hosted_deployment import HostedDeploymentRefused, check_hosted_deployment
+from edge_os_api.core.hermes_proxy import HermesProxyMiddleware, public_forward_enabled
+from edge_os_api.core.limits import MAX_BODY_BYTES
 from edge_os_api.research.fixture_interpreter import samples
 from edge_os_api.core.request_schemas import ClarificationBody, EffectAttemptBody, EffectRunBody, IntakeBody, HistoryInvestigationBody, InvestigationBody, InvestigationJobBody, MarketAdoptionBody, NansenReportBody, PublicationBody, RetryBody, SpotReplayBody
 from edge_os_api.core.settings import ConfigError, Settings, load_settings
@@ -48,7 +54,6 @@ from edge_os_api.revocation import routes as removal_routes
 from edge_os_api.stops import routes as stop_routes
 
 log = logging.getLogger("edge_os")
-MAX_BODY_BYTES = 256 * 1024
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
@@ -106,6 +111,19 @@ def parse_body(model: type[ModelT], data: Any) -> ModelT:
         raise AppError(422, "VALIDATION", "INVALID_INPUT", "validation_error", findings) from None
 
 
+def enforce_write_limit(request: Request, principal: Principal, settings: Settings,
+                        session_factory: Callable[[], Session]) -> None:
+    """Count every authenticated write in the owner's shared PostgreSQL window; reads are not limited."""
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return
+    with session_factory() as session:
+        try:
+            rate_limit.count_write(session, principal.user_id, settings.write_rate_per_minute)
+        except SQLAlchemyError:
+            session.rollback()
+            raise service_unavailable("SAFE_SAME_KEY") from None
+
+
 def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner | None = None,
                research_runtime: ReleasedSourceRuntime | None = None,
                hermes_config: HermesInterpreterConfig | None = None) -> FastAPI:
@@ -113,19 +131,35 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
 
     Only the `hermes_local` setting uses it, and that setting needs it. `hermes_config` is the interpreter configuration
     of the release that runner serves (`research/hermes_relay_composition.py`); without one the runner serves the local
-    fake provider configuration. A configuration needs its runner and is refused in production.
+    fake provider configuration. A configuration needs its runner. In production it also needs an approved hosted
+    deployment record that names its relay release, and a production `hermes_local` without a configuration is refused.
 
     `research_runtime` is a composed operating release (`core/research/released_source_runtime.py`). Without one, the
-    server bootstrap composes the approved code-owned release, the same one the worker composes; none exists and no
-    setting adds one, so the default reaches no provider.
+    server bootstrap composes the approved code-owned release, the same one the worker composes; exactly one is
+    registered and no setting adds or changes one. The composed release reads no credential until a job prepares it, so
+    the default reaches no provider by itself.
     """
     settings = settings or load_settings()
+    deployment = None
+    if settings.env == "production":
+        try:
+            deployment = check_hosted_deployment(settings)
+        except HostedDeploymentRefused as refused:
+            raise ConfigError(f"invalid configuration: hosted_deployment: {refused.code}") from None
     if settings.interpreter == "hermes_local" and hermes_runner is None:
         raise ConfigError("invalid configuration: interpreter: hermes_local needs a Hermes runner")
-    if hermes_config is not None and (settings.interpreter != "hermes_local" or hermes_runner is None
-                                      or settings.env == "production"):
-        raise ConfigError("invalid configuration: interpreter: a Hermes release configuration needs hermes_local, "
-                          "its Hermes runner and a non-production environment")
+    if settings.env == "production" and settings.interpreter == "hermes_local" and hermes_config is None:
+        raise ConfigError("invalid configuration: interpreter: production hermes_local needs the approved relay "
+                          "release configuration")
+    if hermes_config is not None and (settings.interpreter != "hermes_local" or hermes_runner is None):
+        raise ConfigError("invalid configuration: interpreter: a Hermes release configuration needs hermes_local "
+                          "and its Hermes runner")
+    if hermes_config is not None and settings.env == "production":
+        live = hermes_config.live_release
+        if (deployment is None or live is None or hermes_config.runtime_label != "LIVE"
+                or not deployment.admits_hermes_release_id(live.release_id)):
+            raise ConfigError("invalid configuration: interpreter: a production Hermes release configuration needs "
+                              "an approved hosted deployment naming its relay release")
     if research_runtime is None:
         try:
             research_runtime = released_runtime_bootstrap.server_research_runtime(settings)
@@ -134,6 +168,10 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     if research_runtime is not None:
         if research_runtime.release.kind == "STAND_IN" and settings.env == "production":
             raise ConfigError("invalid configuration: research_runtime: a stand-in release is refused in production")
+        if settings.env == "production" and (deployment is None or not deployment.admits_research_release(
+                research_runtime.release.release_id, research_runtime.release_sha256)):
+            raise ConfigError("invalid configuration: research_runtime: no approved hosted deployment record names "
+                              "this exact research release")
         if research_runtime.release.nansen is not None and settings.nansen_research_mode != "unavailable":
             raise ConfigError("invalid configuration: research_runtime: a release Nansen part and "
                               "nansen_research_mode cannot both serve Nansen reports")
@@ -175,8 +213,12 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     app.state.research_runtime = research_runtime
     # One composition of the accepted financial services. Its provider ports follow `execution_mode`:
     # authored fixtures in local/test configuration, fail-closed unavailable ports in production.
-    app.state.financial = build_financial_services(session_factory, settings)
+    app.state.financial = build_financial_services(session_factory, settings, role="api")
     install_handlers(app)
+    if public_forward_enabled(settings):
+        app.add_middleware(HermesProxyMiddleware, settings=settings,
+                           write_limit=lambda request, principal: enforce_write_limit(
+                               request, principal, settings, session_factory))
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["GET", "POST"],
                        allow_headers=["Authorization", "Content-Type"], allow_credentials=False)
 
@@ -216,15 +258,7 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
         return JSONResponse(ready)
 
     def limit_writes(request: Request, principal: Principal = Depends(require_principal)) -> None:
-        """Count every authenticated write in the owner's shared PostgreSQL window; reads are not limited."""
-        if request.method in {"GET", "HEAD", "OPTIONS"}:
-            return
-        with session_factory() as session:
-            try:
-                rate_limit.count_write(session, principal.user_id, settings.write_rate_per_minute)
-            except SQLAlchemyError:
-                session.rollback()
-                raise service_unavailable("SAFE_SAME_KEY") from None
+        enforce_write_limit(request, principal, settings, session_factory)
 
     private = APIRouter(prefix="/v1", dependencies=[Depends(require_principal), Depends(limit_writes)])
 
@@ -278,6 +312,11 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
                       session: Session = Depends(get_session)) -> dict[str, Any]:
         list_saved = hermes.list_requests if hermes else service.list_requests
         requests, has_more = run(session, lambda: list_saved(session, principal))
+        if hermes is None and requests:
+            ids = [uuid.UUID(row["intake_record_id"]) for row in requests]
+            if run(session, lambda: service.has_attempts_for(session, principal, ids)):
+                raise interpreter_unavailable("The saved list includes a request read by the live Hermes interpreter. "
+                                              "Use the live interpretation service.")
         return {"requests": requests, "has_more": has_more}
 
     @private.get("/research/requests/{intake_id}")
@@ -286,6 +325,9 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
         parsed = service.parse_uuid(intake_id)
         if parsed is None:
             raise not_found()
+        if hermes is None and run(session, lambda: service.has_attempts(session, principal, parsed)):
+            raise interpreter_unavailable("This request is read by the live Hermes interpreter. "
+                                          "Use the live interpretation service.")
         return run(session, lambda: service.load_bundle(session, principal, parsed, hermes))
 
     @private.get("/research/requests/{intake_id}/investigation-proposal")
@@ -452,6 +494,11 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     def answer(intake_id: str, data: Any = Depends(read_json), principal: Principal = Depends(require_principal),
                session: Session = Depends(get_session)) -> JSONResponse:
         body = parse_body(ClarificationBody, data).model_dump()
+        parsed = service.parse_uuid(intake_id)
+        if hermes is None and parsed is not None and run(
+                session, lambda: service.has_attempts(session, principal, parsed)):
+            raise interpreter_unavailable("This request is read by the live Hermes interpreter. "
+                                          "Use the live interpretation service.")
         if hermes is not None:
             status, bundle = run(session, lambda: hermes.answer_question(session, principal, intake_id, body))
             return JSONResponse(bundle, status_code=status)

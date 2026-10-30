@@ -16,8 +16,8 @@ from typing import Any
 import pytest
 
 from edge_os_api.research.hermes_interpreter import (
-    PROMPT_VERSION, HermesInterpreter, HermesInterpreterConfig, HermesTurn, HermesTurnResult, Interpreted, LiveRelease,
-    LiveReleaseRequired, OutputRejected, Unavailable, apply_choice_answer, open_questions,
+    PROMPT_VERSION, SYSTEM_PROMPT, HermesInterpreter, HermesInterpreterConfig, HermesTurn, HermesTurnResult,
+    Interpreted, LiveRelease, LiveReleaseRequired, OutputRejected, Unavailable, apply_choice_answer, open_questions,
 )
 from edge_os_api.research.interpretation_attempts import AttemptLedger, Usage
 from edge_os_api.research.interpretation_response import ClarificationAnswer, ParsedInterpretation
@@ -145,7 +145,7 @@ def test_the_attempt_keeps_exact_request_configuration_and_source_identities() -
     start = ledger.history(OWNER, INTAKE)[0].start
     turn = runner.turns[0]
     assert start.identity.purpose == "INTERPRET"
-    assert start.identity.prompt_version == PROMPT_VERSION == "p05-interpretation/4"
+    assert start.identity.prompt_version == PROMPT_VERSION == "p05-interpretation/5"
     assert start.identity.system_prompt_sha256 == hashlib.sha256(turn.system_prompt.encode()).hexdigest()
     assert start.identity.task_sha256 == hashlib.sha256(turn.user_message.encode()).hexdigest()
     assert start.identity.task_text == turn.user_message  # the exact request, not only its hash
@@ -159,6 +159,27 @@ def test_the_attempt_keeps_exact_request_configuration_and_source_identities() -
     assert len(start.identity.manifest_sha256) == 64 and len(start.identity.response_shape_sha256) == 64
     assert (turn.model, turn.route, turn.max_output_tokens, turn.attempt_id) == (
         "fixture-model/1", "local-fake-provider", 4096, start.attempt_id)
+
+
+def test_the_instructions_require_an_option_for_every_question() -> None:
+    text = " ".join(SYSTEM_PROMPT.lower().split())
+    assert "every question has at least one option" in text
+    assert "if you cannot offer a concrete option for a field, do not ask a question for it" in text
+    assert "leave that field missing" in text
+    assert "each option label states every number that its value carries" in text
+
+
+def test_a_question_without_options_is_rejected_whole_and_a_compliant_answer_is_accepted() -> None:
+    empty = hunch_response()
+    empty["questions"][0]["options"] = []
+    interpreter, _, _, _ = build(returned(json.dumps(empty)))
+    rejected = interpreter.interpret(OWNER, INTAKE, HUNCH_INTAKE)
+    assert isinstance(rejected, OutputRejected) and rejected.rejection.reason_code == "question_needs_options"
+
+    interpreter, _, _, _ = build(returned(json.dumps(hunch_response())))
+    accepted = interpreter.interpret(OWNER, INTAKE, HUNCH_INTAKE)
+    assert isinstance(accepted, Interpreted)
+    assert [question.question_id for question in accepted.parsed.questions] == ["choose-entry"]
 
 
 def test_the_request_carries_the_users_words_and_nothing_that_identifies_the_owner() -> None:

@@ -2,9 +2,9 @@
 
 The adapter copies one owner's saved, hash-verified dataset into `ReplayDataset` and `ReplayBucket` values. It never
 changes a bucket, fills a gap, moves an availability time, upgrades a verdict or relabels evidence: the runtime's own
-checks decide warm-up, coverage, truncation, lookahead and market identity. The P07 profile's evidence class is passed
-through as stated. `PROVIDER_ACTUAL` passes only from a dataset an approved actual release wrote (source class
-`PROVIDER_ACTUAL`, saved release kind `ACTUAL`); the runtime then applies the same qualification, coverage and market
+checks decide warm-up, coverage, truncation, lookahead and market identity. P07's saved `REAL_SOURCE` profile class maps to replay `PROVIDER_ACTUAL` only for a dataset an approved actual
+release wrote (source class `PROVIDER_ACTUAL`, saved release kind `ACTUAL`). Legacy saved `PROVIDER_ACTUAL` profiles
+keep the same source/release consistency check; the runtime then applies the same qualification, coverage and market
 checks as to a fixture, so the class upgrades nothing.
 """
 
@@ -58,9 +58,10 @@ def refuse_protected(session: Session, row: history_dataset.HistoryDatasetRow, w
 
 
 def replay_dataset(row: history_dataset.HistoryDatasetRow, window_end: dt.datetime) -> spot_replay.ReplayDataset:
-    """Every saved bucket that ends before the run's exclusive end, unchanged. Later buckets are not passed in."""
+    """Keep saved buckets unchanged; map a consistent ACTUAL release's P07 REAL_SOURCE to the replay class."""
     content = row.content
-    if content["profile_evidence_class"] == "PROVIDER_ACTUAL" and (
+    profile_class = content["profile_evidence_class"]
+    if profile_class in ("REAL_SOURCE", "PROVIDER_ACTUAL") and (
             content["evidence_class"] != "PROVIDER_ACTUAL"
             or (content.get("operating_release") or {}).get("kind") != "ACTUAL"):
         raise AppError(409, "SPOT_REPLAY", "CONFLICTED", "evidence_class_inconsistent",
@@ -88,7 +89,7 @@ def replay_dataset(row: history_dataset.HistoryDatasetRow, window_end: dt.dateti
         revision_id=str(row.dataset_id), qualification=content["verdict"]["overall"],
         coverage_complete=content["status"] == "COMPLETE" and content["coverage"]["covers_requested_scan"] is True,
         market_binding_id=market_id, buckets=tuple(buckets),
-        evidence_class=content["profile_evidence_class"])
+        evidence_class="PROVIDER_ACTUAL" if profile_class == "REAL_SOURCE" else profile_class)
 
 
 def rule_linkage(session: Session, row: history_dataset.HistoryDatasetRow, strategy: dict[str, Any]) -> dict[str, Any]:

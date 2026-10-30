@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.strategies import compiler as strategy_compiler
-from edge_os_api.replay import history_inputs, simulator as spot_replay
+from edge_os_api.replay import delayed_history_profile, history_inputs, simulator as spot_replay
 from edge_os_api.core.authentication import Principal
 from edge_os_api.core.errors import AppError, finding, not_found
 from edge_os_api.records.models import SpotReplayConfiguration, SpotReplayRun
@@ -30,6 +30,49 @@ FIXTURE_ID = "p13.wc01/1"
 FIXTURE_PATH = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "spot_replay" / "runtime_wc01.json"
 PROFILE_PATH = Path(__file__).resolve().parents[5] / "docs" / "implementation" / "SPOT_REPLAY_RUNTIME_PROFILE.md"
 _PATH = "/v1/spot-replays"
+DEFAULT_TIMING_PROFILE = spot_replay.PROFILE_VERSION
+DELAYED_TIMING_PROFILE = delayed_history_profile.PROFILE_VERSION
+SUPPORTED_TIMING_PROFILES = frozenset({DEFAULT_TIMING_PROFILE, DELAYED_TIMING_PROFILE})
+
+
+def resolve_timing_profile(value: Any) -> str:
+    """Return the selected profile; an unknown or non-string value is refused before anything is saved."""
+    if value is None:
+        return DEFAULT_TIMING_PROFILE
+    if not isinstance(value, str) or value not in SUPPORTED_TIMING_PROFILES:
+        raise AppError(422, "SPOT_REPLAY", "INVALID_INPUT", "UNSUPPORTED_TIMING_PROFILE",
+                       [finding("UNSUPPORTED_TIMING_PROFILE", "/timing_profile",
+                                "Use the default replay profile or the delayed hypothetical replay profile.")])
+    return value
+
+
+def timing_snapshot(timing_profile: str) -> dict[str, Any]:
+    """The saved identity keys the delayed profile adds. The default profile adds none."""
+    if timing_profile == DEFAULT_TIMING_PROFILE:
+        return {}
+    return {"timing_profile": timing_profile, "timing_policy": dict(delayed_history_profile.POLICY)}
+
+
+def _request_fields(body: SpotReplayBody, timing_profile: str) -> dict[str, Any]:
+    """The request record that the idempotency fingerprint covers.
+
+    An omitted default profile and an explicit default profile share the original record; the
+    delayed profile adds its exact identity.
+    """
+    request = body.model_dump(mode="json")
+    if request["history_dataset_id"] is None:
+        del request["history_dataset_id"]  # keeps every fixture request's original fingerprint
+    if request["dataset_fixture_id"] is None:
+        del request["dataset_fixture_id"]
+    if timing_profile == DEFAULT_TIMING_PROFILE:
+        request.pop("timing_profile", None)
+    return request
+
+
+def request_fingerprint(owner_id: uuid.UUID, request: dict[str, Any]) -> str:
+    fingerprint_body = {key: value for key, value in request.items() if key != "idempotency_key"}
+    return record_contract.sha256_hex({"owner_id": str(owner_id), "method": "POST", "path": _PATH,
+                                       "request": fingerprint_body})
 
 
 def _sha256(path: Path) -> str:
@@ -176,7 +219,7 @@ def _bind_configuration(session: Session, owner_id: uuid.UUID, run_configuration
 
 
 def _fixture_run(session: Session, principal: Principal, body: SpotReplayBody,
-                 strategy: dict[str, Any]) -> tuple[dict[str, Any], spot_replay.ReplayInput]:
+                 strategy: dict[str, Any], timing_profile: str) -> tuple[dict[str, Any], spot_replay.ReplayInput]:
     if body.dataset_fixture_id != FIXTURE_ID:
         raise AppError(422, "SPOT_REPLAY", "INVALID_INPUT", "unsupported_dataset_fixture",
                        [finding("unsupported_dataset_fixture", "/dataset_fixture_id",
@@ -192,11 +235,12 @@ def _fixture_run(session: Session, principal: Principal, body: SpotReplayBody,
     descriptor = _descriptor(body, strategy, fixture["dataset_revision_id"], market_binding_id)
     snapshot = _input_snapshot(body, strategy, fixture, descriptor, market_binding_id)
     snapshot["fixture_sha256"], snapshot["profile_sha256"] = fixture_hash, profile_hash
+    snapshot.update(timing_snapshot(timing_profile))
     return snapshot, _replay_input(body, fixture, descriptor, market_binding_id)
 
 
 def _history_run(session: Session, principal: Principal, body: SpotReplayBody,
-                 strategy: dict[str, Any]) -> tuple[dict[str, Any], spot_replay.ReplayInput, str]:
+                 strategy: dict[str, Any], timing_profile: str) -> tuple[dict[str, Any], spot_replay.ReplayInput, str]:
     """The owner's saved dataset through the unchanged runtime. The runtime decides every refusal."""
     row = history_inputs.load(session, principal, body.history_dataset_id or "")
     history_inputs.refuse_protected(session, row, body.window_end)
@@ -223,6 +267,7 @@ def _history_run(session: Session, principal: Principal, body: SpotReplayBody,
         "initial_basis_quote": body.initial_basis_quote, "essential_evidence": descriptor,
         "buckets": [bucket for bucket in row.content["buckets"]
                     if history_inputs._moment(bucket["bucket_end"]) < body.window_end],
+        **timing_snapshot(timing_profile),
     }
     run_input = spot_replay.ReplayInput(
         strategy_revision_id=body.strategy_revision_id, run_configuration_id=body.run_configuration_id,
@@ -243,14 +288,9 @@ def notice_for(evidence_class: str) -> str:
 
 def create_spot_replay(session: Session, principal: Principal, body: SpotReplayBody) -> tuple[int, dict[str, Any]]:
     """Create one immutable replay, or return the identical result for its idempotency key."""
-    request = body.model_dump(mode="json")
-    if request["history_dataset_id"] is None:
-        del request["history_dataset_id"]  # keeps every fixture request's original fingerprint
-    if request["dataset_fixture_id"] is None:
-        del request["dataset_fixture_id"]
-    fingerprint_body = {key: value for key, value in request.items() if key != "idempotency_key"}
-    fingerprint = record_contract.sha256_hex({"owner_id": str(principal.user_id), "method": "POST", "path": _PATH,
-                                  "request": fingerprint_body})
+    timing_profile = resolve_timing_profile(body.timing_profile)
+    request = _request_fields(body, timing_profile)
+    fingerprint = request_fingerprint(principal.user_id, request)
     existing = session.execute(select(SpotReplayRun).where(
         SpotReplayRun.owner_id == principal.user_id,
         SpotReplayRun.method == "POST", SpotReplayRun.path == _PATH,
@@ -274,16 +314,16 @@ def create_spot_replay(session: Session, principal: Principal, body: SpotReplayB
                                 "The saved strategy revision failed its integrity check.")])
     strategy = revision["strategy"]
     if body.history_dataset_id is not None:
-        snapshot, run_input, evidence_class = _history_run(session, principal, body, strategy)
+        snapshot, run_input, evidence_class = _history_run(session, principal, body, strategy, timing_profile)
         notice = notice_for(evidence_class)
     else:
-        snapshot, run_input = _fixture_run(session, principal, body, strategy)
+        snapshot, run_input = _fixture_run(session, principal, body, strategy, timing_profile)
         evidence_class = "SYNTHETIC_FIXTURE"
         notice = ("Synthetic replay only. Assumed fills; no gas, spread, additional impact, or capacity model. "
                   "No trading permission is granted.")
     _bind_configuration(session, principal.user_id, body.run_configuration_id, snapshot)
     try:
-        result = spot_replay.run_spot_replay(strategy, run_input)
+        result = spot_replay.run_spot_replay(strategy, run_input, timing_profile=timing_profile)
         result_snapshot = {"status": "COMPLETE", "evidence_class": result.evidence_class,
                            "repeatability_id": result.repeatability_id,
                            "samples": _json_value(result.samples), "events": _json_value(result.events),

@@ -38,7 +38,8 @@ def test_a_failed_phase_still_hands_its_replacement_api_to_the_caller(tmp_path: 
     def build_fails(self: Any) -> str:
         raise RuntimeError("docker build failed")
 
-    def start_api(env: Any, port: int, log_dir: Path, name: str = "api") -> FakeProcess:
+    def start_api(env: Any, port: int, log_dir: Path, name: str = "api",
+                  factory: str = "edge_os_api.main:create_app", app_dir: Path | None = None) -> FakeProcess:
         started.append(FakeProcess(name))
         return started[-1]
 

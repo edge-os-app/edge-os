@@ -29,6 +29,11 @@ MAX_REQUEST_BODY_BYTES = 4096
 MAX_RECORD_BYTES = 4096
 MAX_SPECIMENS_PER_PROFILE = 32
 
+# Code-owned manifests admitted for an actual run in addition to the frozen
+# synthetic table. The actual packet module seals one reviewed literal per packet.
+CODE_OWNED_ACTUAL_MANIFESTS: frozenset[str] = frozenset()
+
+
 DESTINATION = "https://api.privy.io/v1/wallets/{wallet_id}/rpc"
 HTTP_METHOD = "POST"
 WALLETS = {
@@ -303,6 +308,13 @@ class SpecimenTable:
     def manifest_matches_rows(self) -> bool:
         return _manifest_sha256(self.rows) == self.manifest_sha256 == MANIFEST_SHA256
 
+    def matches_actual_manifest(self) -> bool:
+        """The actual runner accepts the frozen synthetic table or one code-owned actual table."""
+        recomputed = _manifest_sha256(self.rows)
+        return (recomputed == self.manifest_sha256
+                and (self.manifest_sha256 == MANIFEST_SHA256
+                     or self.manifest_sha256 in CODE_OWNED_ACTUAL_MANIFESTS))
+
 
 def build_table(rows: Sequence[Specimen], check_frozen: bool = False) -> SpecimenTable:
     """Admit a specimen table. ``check_frozen`` also requires the frozen manifest."""
@@ -464,6 +476,15 @@ class AttemptStore:
             return AttemptState.UNCERTAIN
         return AttemptState.TERMINAL
 
+    def claim_record(self, specimen_id: str, record: Mapping[str, Any]) -> None:
+        """Save one intent record with exclusive create and fsync. One claimant wins."""
+        try:
+            self._create(self._path(specimen_id, "intent"), encode_bounded_record(record))
+        except FileExistsError:
+            raise SpecimenRefused("ALREADY_CLAIMED") from None
+        except (OSError, EvidenceOverBound):
+            raise SpecimenRefused("INTENT_NOT_PERSISTED") from None
+
     def claim(self, specimen: Specimen, at: str) -> None:
         """Save intent with exclusive create and fsync. One claimant wins."""
         if specimen.request is None:
@@ -478,12 +499,7 @@ class AttemptStore:
             "intent_at": at,
             "evidence_class": EVIDENCE_CLASS,
         }
-        try:
-            self._create(self._path(specimen.specimen_id, "intent"), encode_bounded_record(record))
-        except FileExistsError:
-            raise SpecimenRefused("ALREADY_CLAIMED") from None
-        except (OSError, EvidenceOverBound):
-            raise SpecimenRefused("INTENT_NOT_PERSISTED") from None
+        self.claim_record(specimen.specimen_id, record)
 
     def write_capture(self, specimen_id: str, record: Mapping[str, Any]) -> bytes:
         data = encode_bounded_record(record)

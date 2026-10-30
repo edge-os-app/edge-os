@@ -8,17 +8,23 @@ caller, setting or factory constructs it, and it reads no environment, file or n
 The `privy-authorization-signature` value comes from an injected callable. `make_p256_authorizer` builds one from an
 already loaded P-256 private-key object: it accepts only the payload this adapter builds, serializes it with the same
 compact sorted-key JSON, and signs those bytes with ECDSA SHA-256. That serialization equals RFC 8785 only for the
-accepted value domain (fixed ASCII keys, ASCII strings, safe integers); it is not a general RFC 8785 implementation.
+accepted value domain (fixed ASCII keys, ASCII strings, small integers and canonical large-quantity hex strings); it
+is not a general RFC 8785 implementation. A quantity field other than ``chain_id`` may be any exact unsigned integer
+from 0 to 2**256 - 1. The wire body keeps a value at or below 2**53 - 1 as a JSON number and sends a larger value as
+a canonical lowercase ``0x`` string with no leading zeros, so no JSON number above 2**53 - 1 is ever sent. The fields
+that can be hex strings are ``nonce``, ``value``, ``gas_limit``, ``max_fee_per_gas`` and
+``max_priority_fee_per_gas``. ``chain_id`` stays a JSON number in the safe-integer range; ``type`` stays the integer 2.
 The authorizer signs Privy API requests only. It never signs a wallet transaction and loads, stores or creates no key.
 
 Outcomes, matched to the caller's existing vocabulary:
 - nothing was sent (invalid input, stop or authorization failure before HTTP) → the `LOCAL_UNSENT` error envelope,
   the only reply `is_signer_refusal` treats as a refusal;
 - a request may have been sent and its reply did not arrive → `ReplyLost`;
-- any reply other than the documented success, including every Privy error → `RpcError`.
-No provider reply becomes a refusal: Privy documents error codes but not an error body shape. Errors carry a stable
-code only and are raised outside exception handlers, so no cause or context keeps provider text, credentials, the
-authorization signature or signed bytes.
+- the exact HTTP 400 `policy_violation` reply → `SignerPolicyDenied`, the one provider reply that proves a refusal;
+- any other reply, including every other Privy error → `RpcError`.
+Only the proof's exact policy-denial status and code become a refusal; a timeout, 5xx, malformed, unknown or
+near-miss reply stays `RpcError`. Errors carry a stable code only and are raised outside exception handlers, so no
+cause or context keeps provider text, credentials, the authorization signature or signed bytes.
 """
 
 from __future__ import annotations
@@ -35,7 +41,8 @@ from typing import Any
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from edge_os_api.execution.original_transaction import SIGNED_BYTES_LIMIT, ReplyLost, RpcError
+from edge_os_api.execution.original_transaction import SIGNED_BYTES_LIMIT, ReplyLost, RpcError, SignerPolicyDenied
+from edge_os_api.execution.privy_policy_reply import is_policy_denial
 from edge_os_api.research_history.http_clients.client_config import HttpProviderError
 from edge_os_api.research_history.http_clients.http_transport import HttpResponse, HttpTransport
 
@@ -44,8 +51,10 @@ METHOD = "eth_signTransaction"
 TRANSACTION_FIELDS = frozenset({"type", "chain_id", "nonce", "to", "value", "data", "gas_limit", "max_fee_per_gas",
                                 "max_priority_fee_per_gas"})
 QUANTITY_FIELDS = ("chain_id", "nonce", "value", "gas_limit", "max_fee_per_gas", "max_priority_fee_per_gas")
-# RFC 8785 writes numbers as IEEE doubles: a larger integer would sign a different value than the body sends.
+# RFC 8785 writes numbers as IEEE doubles: a larger integer must not be a JSON number.
 MAX_SAFE_INTEGER = 2**53 - 1
+MAX_UINT256 = 2**256 - 1
+_CANONICAL_QUANTITY_HEX = re.compile(r"0x(?:0|[1-9a-f][0-9a-f]*)")
 REQUEST_BYTES_LIMIT = 65_536
 SIGNATURE_LIMIT = 4_096
 _WALLET_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
@@ -133,7 +142,7 @@ class PrivySignerClient:
         try:
             refusal = _refuse_request(wallet_id, body)
             if refusal is None:
-                request_body = copy.deepcopy(dict(body))
+                request_body = _wire_body(body)
                 wire = _encode(request_body).encode("ascii")
         except Exception:  # noqa: BLE001 - a body that cannot be read, copied or encoded leaves nothing sent
             refusal = "BODY_INVALID"
@@ -217,6 +226,8 @@ class PrivySignerClient:
         if self._echoes(headers, raw, signature):
             raise RpcError("PRIVY_REPLY_ECHOED_CREDENTIAL")
         if status != 200:
+            if _policy_denial(status, headers, raw):
+                raise SignerPolicyDenied("PRIVY_POLICY_VIOLATION")
             raise RpcError("PRIVY_REPLY_STATUS")
         encoding = next((value for name, value in headers.items() if str(name).lower() == "content-encoding"), None)
         if encoding is not None and str(encoding).lower() != "identity":
@@ -288,7 +299,8 @@ def _authorization_message(payload: Any) -> bytes:
 
 
 def _accepted_authorization_payload(payload: Any) -> bool:
-    """Whether the payload is exactly what `PrivySignerClient.rpc` signs: fixed ASCII keys, ASCII strings, safe ints."""
+    """Whether the payload is exactly what `PrivySignerClient.rpc` signs: fixed ASCII keys, ASCII strings, small
+    integers and canonical large-quantity hex strings."""
     if not isinstance(payload, Mapping) or set(payload) != {"version", "method", "url", "body", "headers"}:
         return False
     if not _is_int(payload["version"]) or payload["version"] != 1 or payload["method"] != "POST":
@@ -296,6 +308,8 @@ def _accepted_authorization_payload(payload: Any) -> bool:
     url = payload["url"]
     match = _RPC_URL.fullmatch(url) if isinstance(url, str) else None
     if match is None or _refuse_request(match.group(1), payload["body"]) is not None:
+        return False
+    if not _wire_quantities(payload["body"]):
         return False
     if len(_encode(payload["body"]).encode("ascii")) > REQUEST_BYTES_LIMIT:
         return False
@@ -328,8 +342,76 @@ def _parse(raw: bytes) -> Any:
         return None
 
 
+def _policy_denial(status: Any, headers: Mapping[Any, Any], raw: bytes) -> bool:
+    """Whether this non-200 reply is the proof's exact policy denial: JSON media type, 400 and code."""
+    content_type = next((value for name, value in headers.items() if str(name).lower() == "content-type"), None)
+    if not isinstance(content_type, str) or content_type.split(";")[0].strip().lower() != "application/json":
+        return False
+    return is_policy_denial(status, _parse(raw))
+
+
+def _quantity(name: str, value: Any) -> int | None:
+    """An exact unsigned quantity from a Python int or, except for `chain_id`, a canonical large-value hex string.
+
+    A string is the wire form of a value above 2**53 - 1 only. `chain_id` keeps its accepted number-only form. A
+    small hex string is not the accepted input shape and is refused.
+    """
+    if type(value) is int:
+        return value
+    if name == "chain_id":
+        return None
+    if isinstance(value, str) and _CANONICAL_QUANTITY_HEX.fullmatch(value):
+        parsed = int(value, 16)
+        return parsed if parsed > MAX_SAFE_INTEGER else None
+    return None
+
+
+def _is_wire_quantity(name: str, value: Any) -> bool:
+    """Whether a quantity is exactly the wire form: a small number, or a canonical large-value hex string."""
+    minimum = 1 if name == "chain_id" else 0
+    if type(value) is int:
+        return minimum <= value <= MAX_SAFE_INTEGER
+    if name == "chain_id":
+        return False
+    if isinstance(value, str) and _CANONICAL_QUANTITY_HEX.fullmatch(value):
+        parsed = int(value, 16)
+        return MAX_SAFE_INTEGER < parsed <= MAX_UINT256
+    return False
+
+
+def _wire_quantities(body: Any) -> bool:
+    """The authorizer signs only a body whose quantities are already in the exact wire form."""
+    try:
+        transaction = body["params"]["transaction"]
+    except (KeyError, TypeError):
+        return False
+    if not isinstance(transaction, Mapping):
+        return False
+    return all(_is_wire_quantity(name, transaction.get(name)) for name in QUANTITY_FIELDS)
+
+
+def _wire_body(body: Mapping[str, Any]) -> dict[str, Any]:
+    """The exact body to send: small quantities stay numbers, larger ones become canonical hex strings."""
+    wire = copy.deepcopy(dict(body))
+    transaction: Any = wire["params"]["transaction"]
+    for name in QUANTITY_FIELDS:
+        value = _quantity(name, transaction[name])
+        if value is None or value > MAX_UINT256:
+            raise ValueError("quantity outside the accepted range")
+        if name == "chain_id" and value > MAX_SAFE_INTEGER:
+            raise ValueError("chain_id must stay a safe integer")
+        transaction[name] = value if value <= MAX_SAFE_INTEGER else hex(value)
+    return wire
+
+
 def _refuse_request(wallet_id: Any, body: Any) -> str | None:
-    """The stable reason this request is outside the accepted shape, or None. Reads only; never changes the body."""
+    """The stable reason this request is outside the accepted shape, or None. Reads only; never changes the body.
+
+    Every quantity may be an exact unsigned integer from 0 to 2**256 - 1. Except for ``chain_id``, a canonical
+    lowercase ``0x`` string is the wire form of a value above 2**53 - 1; a smaller hex string is refused.
+    ``_wire_body`` keeps a smaller value as a number and sends a larger value as the canonical string. ``chain_id``
+    stays a JSON number in the safe-integer range.
+    """
     if not isinstance(wallet_id, str) or not _WALLET_ID.fullmatch(wallet_id):
         return "WALLET_ID_INVALID"
     if not isinstance(body, Mapping):
@@ -357,8 +439,11 @@ def _refuse_request(wallet_id: Any, body: Any) -> str | None:
     if not _is_int(transaction["type"]) or transaction["type"] != 2:
         return "TRANSACTION_TYPE_UNSUPPORTED"
     for name in QUANTITY_FIELDS:
-        value = transaction[name]
-        if not _is_int(value) or not (1 if name == "chain_id" else 0) <= value <= MAX_SAFE_INTEGER:
+        value = _quantity(name, transaction[name])
+        if name == "chain_id":
+            if value is None or not 1 <= value <= MAX_SAFE_INTEGER:
+                return "QUANTITY_UNSUPPORTED"
+        elif value is None or not 0 <= value <= MAX_UINT256:
             return "QUANTITY_UNSUPPORTED"
     if not isinstance(transaction["to"], str) or not _ADDRESS.fullmatch(transaction["to"]):
         return "ADDRESS_INVALID"

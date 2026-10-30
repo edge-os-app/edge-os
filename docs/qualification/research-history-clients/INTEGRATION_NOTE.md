@@ -60,11 +60,25 @@ implements the accepted `QuickNodeRpcClient.call(method, params)`. Both satisfy 
   read-only methods (`READ_ONLY_METHODS`); no signing, broadcast, account or state-changing method can
   be enabled.
 
-Pinned wire (public first-party documentation, read 2026-10-12): HyperSync body fields `from_block`,
-`to_block`, `logs[]`, `field_selection`, `include_all_blocks`, `max_num_logs`, `max_num_blocks`; the
-response carries `archive_height`, `next_block`, `total_execution_time`, `data` (`blocks`, `logs`) and
-an optional `rollback_guard`. Monad QuickNode is standard JSON-RPC 2.0. Monad coverage and the exact
-served shape are `NOT_VERIFIED` until a separately authorized run.
+Request wire (public first-party documentation, read 2026-10-12): HyperSync body fields `from_block`,
+`to_block`, `logs[]`, `field_selection`, `include_all_blocks`, `max_num_logs`, `max_num_blocks`.
+
+The full response field set is observed in one Monad reply: the recorder run
+`moe-wmon-fwd20m-actual-20261021b`, call `03-P1-hypersync`, body SHA256
+`b740b4de94e174db9ff341eca43250ea98f8b6ee3600e14c46f5d99e33d3d6d1`, carried
+`archive_height`, `next_block`, `total_execution_time`, `data` as a list of batch objects (each with
+`blocks`, `logs`) and an optional `rollback_guard`. Observed 2026-10-21 in the three
+`moe-wmon-fwd20m-actual-20261021c` P3 replies: a batch with no logs omits the `logs` key.
+
+The controller's pool census (9 `/query` requests) and MOE behavior check (4 `/query` requests; 5 HyperSync
+calls including one `/height`) also received `data` as a list of batch objects and read their `logs`. Those
+scripts selected log fields only and kept no reply bodies, so they do not show `blocks`, `archive_height`,
+`total_execution_time` or `rollback_guard`.
+
+The first-party documentation, read 2026-10-12 and rechecked through Context7 `/enviodev/docs` on
+2026-10-21, describes `data` as one `ResponseData` object; it disagrees with those served replies, and the
+code follows the replies. The full field set is observed on that one P1 reply; other chains and response
+fields remain `NOT_VERIFIED`. Monad QuickNode is standard JSON-RPC 2.0.
 
 ## Accounting and liability
 

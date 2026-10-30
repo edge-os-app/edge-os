@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import json
 import uuid
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
 
 import native_history_recordings
+from edge_os_api.core.research import released_runtime_bootstrap
 from edge_os_api.core.settings import load_settings
 from edge_os_api.main import create_app
 from edge_os_api.research.investigation_jobs import InvestigationWorker
@@ -28,8 +30,11 @@ NATIVE_BOUNDS = {"provider_requests": 27, "compute_seconds": 30, "max_pages": 2,
 def native(env, migrated):
     values = {**env, "EDGE_OS_RESEARCH_HISTORY_MODE": "recorded", "EDGE_OS_RESEARCH_BUDGET_PROVIDER_REQUESTS": "400",
               "EDGE_OS_RESEARCH_BUDGET_COMPUTE_SECONDS": "3600"}
-    with TestClient(create_app(load_settings(values))) as client:
-        yield client
+    # Recorded native sources are not offered while an approved ACTUAL release is composed. This module proves their
+    # own behavior, so it composes no release.
+    with mock.patch.dict(released_runtime_bootstrap.RELEASE_DEFINITIONS, {}, clear=True):
+        with TestClient(create_app(load_settings(values))) as client:
+            yield client
 
 
 def run(client, job_id: str) -> dict:

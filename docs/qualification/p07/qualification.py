@@ -785,7 +785,8 @@ def feasibility(claim: Mapping[str, Any], segments: Sequence[Mapping[str, Any]],
                 usable += 1
         required = None if triggered is None else triggered + control
         report.append({
-            "name": partition["name"], "schedule_slots": len(slots), "usable": usable, "required_total": required,
+            "name": partition["name"], "schedule_slots": len(slots), "usable": usable,
+            "required_triggered": triggered, "required_control": control, "required_total": required,
             "shortfall": None if required is None else max(0, required - usable),
             "excluded_outcome_window": counts["outcome_window"], "excluded_outcome_coverage": counts["outcome_coverage"],
             "excluded_availability": counts["availability"], "excluded_warmup": counts["warmup"],
@@ -1130,6 +1131,14 @@ def to_p02_binding(profile: Mapping[str, Any], result: Mapping[str, Any]) -> dic
 
 # ---- per-claim qualification -----------------------------------------------------------------------
 
+# Token mechanics has one bounded exception beside the source-proof `QUALIFIED` value. Observed behavior is accepted
+# only for one exact evidence file, only with its declared basis, and never under the plain `QUALIFIED` label.
+OBSERVED_TOKEN_MECHANICS_STATE = "QUALIFIED_BY_OBSERVATION"
+OBSERVED_TOKEN_MECHANICS_BASIS = "OBSERVED_BEHAVIOR"
+OBSERVED_TOKEN_MECHANICS_WINDOW_SECONDS = 12 * 60 * 60
+OBSERVED_TOKEN_MECHANICS_EVIDENCE_SHA256 = "5ad3a7c3e11f48e6f32fe2ab9f1edf7bf968962e4854c98d16e70327cfc9e73b"
+_OBSERVED_TOKEN_MECHANICS_KEYS = frozenset({"state", "basis", "window_seconds", "evidence_sha256", "source_proof"})
+
 CLAIMS = ("BINDING_IDENTITY", "EVENT_AND_AMOUNT_MEANING", "HISTORY_COMPLETENESS_AND_ORDER",
           "POINT_IN_TIME_AVAILABILITY", "SCHEDULE_FEASIBILITY")
 NOT_ASSESSED = ("EXECUTION_ATTAINABILITY", "PROFITABILITY_OR_VALIDATION", "TRADER_NET_FILL_OR_PROFIT")
@@ -1260,6 +1269,35 @@ def _history_window(profile: Mapping[str, Any], observations: Any) -> Any:
     return None
 
 
+def _observed_token_mechanics(event: Any, observations: Mapping[str, Any]) -> None:
+    """Accept source proof as `QUALIFIED`, or the one bounded observed-behavior state with its exact evidence.
+
+    `QUALIFIED_BY_OBSERVATION` never falls through to `QUALIFIED`: an unbound or contradictory record stays
+    unresolved. The accepted record names its basis, its 12-hour window and that it is not source proof.
+    """
+    semantics = _look(observations, "event_meaning", "fee_transfer_semantics")
+    if semantics == "QUALIFIED":
+        return
+    if semantics == OBSERVED_TOKEN_MECHANICS_STATE:
+        record = _look(observations, "event_meaning", "token_mechanics")
+        if (isinstance(record, Mapping) and set(record) == _OBSERVED_TOKEN_MECHANICS_KEYS
+                and record.get("state") == OBSERVED_TOKEN_MECHANICS_STATE
+                and record.get("basis") == OBSERVED_TOKEN_MECHANICS_BASIS
+                and _is_int(record.get("window_seconds"))
+                and record.get("window_seconds") == OBSERVED_TOKEN_MECHANICS_WINDOW_SECONDS
+                and record.get("evidence_sha256") == OBSERVED_TOKEN_MECHANICS_EVIDENCE_SHA256
+                and record.get("source_proof") is False):
+            event.add("BASIS", "TOKEN_MECHANICS_QUALIFIED_BY_OBSERVATION",
+                      f"state {OBSERVED_TOKEN_MECHANICS_STATE}; basis {OBSERVED_TOKEN_MECHANICS_BASIS}; "
+                      f"window {OBSERVED_TOKEN_MECHANICS_WINDOW_SECONDS} s; "
+                      f"evidence sha256 {OBSERVED_TOKEN_MECHANICS_EVIDENCE_SHA256}; not source proof")
+            return
+        event.add("MISSING_EVIDENCE", "TOKEN_MECHANICS_OBSERVATION_UNBOUND",
+                  "observed behavior needs its accepted evidence hash, basis, window and source-proof flag")
+        return
+    event.add("LIMIT", "TOKEN_MECHANICS_UNQUALIFIED", "amounts are pool-gross only")
+
+
 def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict[str, Any]:
     """One verdict per claim. Missing or unrecognized evidence is never a pass.
 
@@ -1318,8 +1356,7 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
                 event.add("ASSUMPTION", f"DECIMALS_IMMUTABILITY_ASSUMED:{role}", "no read at the window start")
             else:
                 event.add("MISSING_EVIDENCE", f"DECIMALS_NOT_READ:{role}")
-    if _look(observations, "event_meaning", "fee_transfer_semantics") != "QUALIFIED":
-        event.add("LIMIT", "TOKEN_MECHANICS_UNQUALIFIED", "amounts are pool-gross only")
+    _observed_token_mechanics(event, observations)
 
     history = claims["HISTORY_COMPLETENESS_AND_ORDER"]
     if trades is None:
@@ -1422,6 +1459,15 @@ def qualify(profile: Mapping[str, Any], observations: Mapping[str, Any]) -> dict
     rows_problem = _feasibility_rows(shown) if status == "FEASIBLE" else None
     if rows_problem is not None:
         schedule.add(*rows_problem)
+    if status == "FEASIBLE" and rows_problem is None:
+        for row in shown:  # the declared floors and the counted slots, shown beside the verdict
+            triggered, control, slots = (row.get("required_triggered"), row.get("required_control"),
+                                         row.get("schedule_slots"))
+            if triggered is None or control is None or not _is_int(slots):
+                continue  # a row without the split and slot count adds no reason; never a crash
+            schedule.add("BASIS", "DECLARED_FLOORS",
+                         f"{row['name']}: required triggered {triggered} + control {control} "
+                         f"(demo floors, not statistical evidence); usable {row['usable']} of {slots}")
     if status == "INFEASIBLE":
         schedule.add("FAILED_CHECK", "INFEASIBLE_BEFORE_OUTCOMES", "declared sample floors cannot be met")
     elif status != "FEASIBLE":

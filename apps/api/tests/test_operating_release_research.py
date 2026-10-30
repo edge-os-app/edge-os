@@ -6,7 +6,8 @@ public read, adoption, replay, restart and other owner. Provider request counts 
 outside the application. Expected values are written by hand from the SOURCE-LOCAL native recordings (24 swaps on two
 pages; one chain read and one receipt per sampled swap) and the authored Nansen fixture (5 + 1 credits).
 
-No actual provider, credential or network outside loopback is used. No actual release is approved.
+No actual provider, credential or network outside loopback is used. One actual release is registered in the code-owned
+default; it is admitted and refused locally, but no actual provider report runs in this module.
 """
 
 from __future__ import annotations
@@ -24,9 +25,12 @@ from sqlalchemy.engine import make_url
 
 import harness
 import operating_release_stand_in as stand_in
-from edge_os_api.core.research import operating_release
+from edge_os_api.core.research import operating_release, released_runtime_bootstrap
 from edge_os_api.core.research.operating_release import ReleaseRefused
-from edge_os_api.core.research.released_source_runtime import open_released_runtime
+from edge_os_api.core.research.released_source_runtime import (
+    nansen_request as released_nansen_request,
+    open_released_runtime,
+)
 from edge_os_api.core.settings import ConfigError, load_settings
 from edge_os_api.main import create_app
 from edge_os_api.research.investigation_jobs import InvestigationWorker
@@ -34,8 +38,21 @@ from edge_os_api.research_history.http_clients import HttpResponse, StdlibHttpTr
 from flows import compiled_thesis, publish, submit
 from research_flows import adoption_body, declare, history_body, history_replay_body, investigation_request, jobs_path
 
+from test_actual_binding_admission import authored_actual_history
+
 SOURCE = stand_in.SOURCE_ID
 QUESTION = "Which holder records does MOE return, and what do basic flow records show?"
+REGISTERED_RELEASE_ID = "actual-moe-history2h-nansen-20261022/1"
+REGISTERED_RELEASE_SHA256 = "45c8cfbf5d61eb519ee3140e02e50b2b7091669dc28cbef224bdc6a0e77ca877"
+REGISTERED_NANSEN_REQUEST: dict[str, Any] = {
+    "token_address": "0xd8e004acba279417c04c0633cb5a21ceca207777", "token_symbol": "MOE",
+    "window": {"start_utc": "2026-10-21T23:40:00Z", "end_utc": "2026-10-22T23:40:00Z"},
+    "operations": ["holders", "flows"],
+    "holder_query": {"label_type": "all_holders", "aggregate_by_entity": False, "order_field": "token_amount",
+                     "value_usd_min": None},
+    "flow_query": {"label": "top_100_holders"},
+    "limits": {"max_requests": 2, "max_pages": 1, "max_bytes": 2000000, "max_credits": "6", "per_page": 100},
+    "deadline_seconds": 300, "compute_seconds": 300}
 
 
 @pytest.fixture(scope="module")
@@ -112,17 +129,35 @@ def started_job(client, headers, runtime) -> str:
 
 # --------------------------------------------------------------------------------------- composition default
 
-def test_without_a_composed_release_nothing_is_listed_and_provider_keys_change_nothing(settings, env, owner_a):
+def test_the_default_composes_only_the_registered_release_and_provider_keys_change_nothing(settings, env, owner_a):
     keyed = load_settings({**env, "HYPERSYNC_API_KEY": "x", "QUICKNODE_API_URL": "https://example.invalid/k/",
                            "NANSEN_API_KEY": "y", "EDGE_OS_RESEARCH_OPERATING_RELEASE": "stand-in-native/1"})
     with app(keyed) as client:
         sources = client.get("/v1/research/history-sources", headers=owner_a).json()
-        assert SOURCE not in {item["source_id"] for item in sources["sources"]}
+        assert SOURCE not in {item["source_id"] for item in sources["sources"]}  # no stand-in source is served
+        runtime = client.app.state.research_runtime  # the server bootstrap composes the registered release
+        assert runtime is not None and runtime.release.history is not None and runtime.release.nansen is not None
+        assert (runtime.release.release_id, runtime.release_sha256) == (REGISTERED_RELEASE_ID,
+                                                                       REGISTERED_RELEASE_SHA256)
+        assert sources["operating_release"]["sha256"] == REGISTERED_RELEASE_SHA256
+        # A provider key, an environment value or a request cannot add a release or change its class: the composed one
+        # is the registered ACTUAL release, never `stand-in-native/1` and never a stand-in.
+        assert sources["operating_release"]["kind"] == "ACTUAL"
+        assert runtime.release.release_id != "stand-in-native/1"
+        listed = client.get(f"/v1/research/requests/{investigation_request(client, owner_a)['intake']['record_id']}"
+                            "/nansen-reports", headers=owner_a).json()
+        assert listed["available"] is True and listed["operating_release"]["sha256"] == REGISTERED_RELEASE_SHA256
+
+
+def test_an_explicitly_emptied_registry_composes_no_release_and_lists_nothing(settings, env, owner_a, monkeypatch):
+    monkeypatch.setattr(released_runtime_bootstrap, "RELEASE_DEFINITIONS", {})
+    with app(load_settings({**env})) as client:
+        sources = client.get("/v1/research/history-sources", headers=owner_a).json()
         assert sources["operating_release"] is None
         listed = client.get(f"/v1/research/requests/{investigation_request(client, owner_a)['intake']['record_id']}"
                             "/nansen-reports", headers=owner_a).json()
         assert listed == {"available": False, "jobs": []}  # unchanged when no release is composed
-        assert client.app.state.research_runtime is None  # the server bootstrap composes no release by default
+        assert client.app.state.research_runtime is None  # an explicitly emptied registry composes nothing
 
 
 def test_a_stand_in_release_is_listed_with_its_fixed_bounds_and_stand_in_class(composed, owner_a):
@@ -235,11 +270,12 @@ def test_a_declaration_must_use_the_release_limits_and_its_served_class(composed
 
 
 def test_without_the_release_a_saved_declaration_cannot_start_and_a_saved_job_ends_before_effect(
-        settings, composed, owner_a):
+        settings, composed, owner_a, monkeypatch):
     client, runtime = composed["client"], composed["runtime"]
     intake_id, declaration_id = declare_release(client, owner_a, runtime)
     queued = started_job(client, owner_a, runtime)
     before = budget(client, owner_a)
+    monkeypatch.setattr(released_runtime_bootstrap, "RELEASE_DEFINITIONS", {})  # truly no composed release
     with app(settings) as plain:
         refused = start(plain, owner_a, intake_id, declaration_id)
         assert (refused.status_code, refused.json()["code"]) == (409, "operating_release_unavailable")
@@ -698,9 +734,9 @@ def test_release_validation_refuses_before_any_credential_read(settings, monkeyp
     for name, (release, kind, transport) in cases.items():
         if kind == "ACTUAL":
             release = operating_release.OperatingRelease(
-                release.release_id, "ACTUAL", history=stand_in.stand_in_release(
+                release.release_id, "ACTUAL", history=authored_actual_history(stand_in.stand_in_release(
                     envio_endpoint="https://hypersync.actual-test.example", quicknode_host="quicknode.actual-test.example",
-                    nansen=False).history)
+                    nansen=False).history))
         with pytest.raises(ReleaseRefused) as refused:
             open_released_runtime(settings, release, credentials=creds, http_transport=transport)
         refusals[name] = refused.value.code
@@ -708,9 +744,9 @@ def test_release_validation_refuses_before_any_credential_read(settings, monkeyp
                         "stand_in_real_host": "stand_in_endpoint_not_local",
                         "unknown_kind": "operating_release_invalid",
                         "limits_too_small": "operating_release_invalid"}
-    actual = operating_release.OperatingRelease("actual-test/1", "ACTUAL", history=stand_in.stand_in_release(
+    actual = operating_release.OperatingRelease("actual-test/1", "ACTUAL", history=authored_actual_history(stand_in.stand_in_release(
         envio_endpoint="https://hypersync.actual-test.example", quicknode_host="quicknode.actual-test.example",
-        nansen=False).history)
+        nansen=False).history))
     monkeypatch.setattr(operating_release, "APPROVED_RELEASES",
                         {"actual-test/1": operating_release.release_sha256(actual)})
     with pytest.raises(ReleaseRefused) as refused:  # an approved actual release never runs over a recording
@@ -729,9 +765,9 @@ def test_release_validation_refuses_before_any_credential_read(settings, monkeyp
 
 def test_an_approved_actual_release_lists_actual_labels_and_no_stand_in_can_claim_them(settings, monkeypatch,
                                                                                          owner_a):
-    actual = operating_release.OperatingRelease("actual-test/1", "ACTUAL", history=stand_in.stand_in_release(
+    actual = operating_release.OperatingRelease("actual-test/1", "ACTUAL", history=authored_actual_history(stand_in.stand_in_release(
         envio_endpoint="https://hypersync.actual-test.example", quicknode_host="quicknode.actual-test.example",
-        nansen=False).history)
+        nansen=False).history))
     monkeypatch.setattr(operating_release, "APPROVED_RELEASES",
                         {"actual-test/1": operating_release.release_sha256(actual)})
     creds = stand_in.credentials()
@@ -828,6 +864,53 @@ def test_a_release_nansen_job_ends_before_any_request_without_its_release_or_cre
     assert (job["state"], job["terminal_reason"]) == ("UNAVAILABLE", reason)
     assert job["budget"]["released"] == {"provider_requests": 4, "compute_seconds": 30, "nansen_credits": 12}
     assert nansen.requests == []
+
+
+def test_the_registered_actual_default_admits_a_job_and_refuses_before_any_provider_io(settings, owner_a, owner_b,
+                                                                                        monkeypatch):
+    """The ordinary create_app composes the registered ACTUAL default. With the one selected slot missing, the worker
+    refuses at preparation and reaches no provider. This is local admission and refusal proof, not an actual report."""
+    reached: list[str] = []
+
+    def sentinel(*args: Any, **kwargs: Any) -> Any:
+        reached.append("provider-http-boundary")
+        raise AssertionError("a real provider HTTP request was attempted")
+
+    monkeypatch.setattr(StdlibHttpTransport, "request", sentinel)  # the real HTTP boundary must stay unreached
+    monkeypatch.delenv("NANSEN_API_KEY", raising=False)  # the one selected slot is explicitly missing
+    with app(settings) as client:  # no injected runtime: the default bootstrap composes the release
+        runtime = client.app.state.research_runtime
+        assert runtime is not None and runtime.release.history is not None and runtime.release.nansen is not None
+        assert (runtime.release.release_id, runtime.release.kind, runtime.release_sha256) == (
+            REGISTERED_RELEASE_ID, "ACTUAL", REGISTERED_RELEASE_SHA256)
+        # The fixed request is frozen before the worker and equals the registered release exactly.
+        assert released_nansen_request(runtime.release.nansen) == REGISTERED_NANSEN_REQUEST
+        intake_id = nansen_intake(client, owner_a)
+        listed = client.get(f"/v1/research/requests/{intake_id}/nansen-reports", headers=owner_a).json()
+        assert listed["available"] is True
+        assert listed["operating_release"]["sha256"] == REGISTERED_RELEASE_SHA256
+        assert listed["operating_release"]["request"] == REGISTERED_NANSEN_REQUEST
+        body = {"operation_id": str(uuid.uuid4()), "request_key": f"actual-{uuid.uuid4()}",
+                **REGISTERED_NANSEN_REQUEST}
+        started = client.post(f"/v1/research/requests/{intake_id}/nansen-reports", headers=owner_a, json=body)
+        assert started.status_code == 201, started.text
+        job_id = started.json()["job_id"]
+        assert reached == []  # a start sends nothing
+        worker(client, runtime).run_job(uuid.UUID(job_id))  # the worker uses the default composed runtime
+        job = view(client, owner_a, job_id)
+        assert (job["state"], job["terminal_reason"]) == ("UNAVAILABLE", "operating_release_credential_unavailable")
+        assert job["budget"]["reserved"] == {"provider_requests": 2, "compute_seconds": 300, "nansen_credits": 6}
+        assert job["budget"]["released"] == {"provider_requests": 2, "compute_seconds": 300, "nansen_credits": 6}
+        assert job["budget"]["consumed"] == {"provider_requests": 0, "compute_seconds": 0, "nansen_credits": 0}
+        assert job["budget"]["unknown_liability"] == {"provider_requests": 0, "compute_seconds": 0, "nansen_credits": 0}
+        kinds = [event["kind"] for event in job["events"]]
+        assert "SOURCE_REFUSED" in kinds and "ATTEMPT_STARTED" not in kinds and "JOB_QUEUED" in kinds
+        assert reached == []  # no provider call, and no attempt or debit
+    # A restart reopens the same saved job for the owner only: nothing is reserved, called or charged again.
+    with app(settings) as restarted:
+        assert view(restarted, owner_a, job_id) == job
+        assert restarted.get(f"/v1/research/investigation-jobs/{job_id}", headers=owner_b).status_code == 404
+    assert reached == []
 
 
 # --------------------------------------------------------------------------------------- R58-RESEARCH-MOUNT-L2

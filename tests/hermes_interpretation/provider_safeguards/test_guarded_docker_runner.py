@@ -2341,10 +2341,12 @@ def test_a_deeply_nested_result_at_the_size_limit_is_read_inside_the_deadline_or
 
 
 def test_the_result_budget_covers_parsing_and_freeing_at_the_worst_measured_rate() -> None:
-    """Round 23 measured up to 0.06 s per MiB to parse deeply nested lists under load, and freeing them costs about as
-    much. Both happen in the turn, so the time that admits a result of the largest size must cover both."""
+    """A 256 KiB invalid nested result measured 0.363 s to parse inside the test process under load on 2026-10-22; the
+    scan and the mapping after it add a little. The time that admits a result of the largest size must cover the
+    measured worst with the same factor of two."""
     import guarded_docker_runner as module
-    worst_seconds = 2 * 0.06 * module.MAX_RESULT_BYTES / (1024 * 1024)
+    measured_bytes = 256 * 1024
+    worst_seconds = 0.363 * module.MAX_RESULT_BYTES / measured_bytes
     admitted = module.RESULT_MIN_SECONDS + module.MAX_RESULT_BYTES * module.RESULT_SECONDS_PER_BYTE
     assert admitted >= 2 * worst_seconds, (admitted, worst_seconds)  # twice the worst, as the constant's comment says
 

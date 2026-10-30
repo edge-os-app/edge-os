@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
-import { financial, formatRaw, heldKey, releaseKey, type ActionDetail, type AgentActions as AgentActionsView,
+import { financial, formatRaw, heldKey, MONAD_EXPLORER_BASE, releaseKey, type ActionDetail, type AgentActions as AgentActionsView,
   type OriginalTransaction, type Removal, type Stop } from "../lib/financial";
 
 const JOB_COPY: Record<string, string> = {
@@ -15,6 +15,14 @@ const JOB_COPY: Record<string, string> = {
 };
 
 const UNSETTLED = new Set(["SUBMITTED_UNKNOWN", "CLAIMED", "BREACHED", "RECONCILE_MISMATCH"]);
+const TRANSACTION_HASH = /^0x[0-9a-fA-F]{64}$/;
+
+/** A saved hash links only when it is the exact 32-byte hex shape. Anything else stays plain text. */
+function TransactionHash({ hash }: { hash: string }) {
+  return TRANSACTION_HASH.test(hash)
+    ? <a className="mono" href={`${MONAD_EXPLORER_BASE}/tx/${hash}`} target="_blank" rel="noopener noreferrer">{hash}</a>
+    : <span className="mono">{hash}</span>;
+}
 
 /** Bounded evaluations, the original action's lineage and recovery, and the owner's stop and removal controls. */
 export function AgentActions({ agentId }: { agentId: string }) {
@@ -86,6 +94,8 @@ export function AgentActions({ agentId }: { agentId: string }) {
       {view && <>
         <p className="muted" data-testid="actions-mode">{view.provider_mode === "fixture"
           ? "Authored fixture market, quotes, transport and receipts. No transaction is signed or sent."
+          : view.provider_mode === "controlled"
+          ? "One controlled action requires its exact release and qualified current observations. Exit and recurring execution are unavailable."
           : "No qualified execution route exists in this build. Evaluations end unavailable and nothing is submitted."}</p>
         <p>Each run evaluates the saved rules once for the current five-minute slot. It is not continuous trading.</p>
         {error ? <p role="alert" className="status err">{error}</p> : null}
@@ -109,6 +119,14 @@ export function AgentActions({ agentId }: { agentId: string }) {
         <ul data-testid="actions-jobs">{[...view.jobs].reverse().map((job) => <li key={job.job_id}>
           <strong>{job.state}</strong>{job.outcome ? ` · ${job.outcome}` : ""}{job.reason ? ` · ${job.reason}` : ""} · slot <time dateTime={job.decision_slot}>{job.decision_slot}</time>
           <p className="muted">{JOB_COPY[job.state] ?? job.state}</p>
+          {job.provenance?.observations && <p className="muted">
+            Observation: {job.provenance.observations.source ?? "source unavailable"} · {job.provenance.observations.evidence_class ?? "unqualified"}
+            {job.provenance.observations.finality && ` · ${job.provenance.observations.finality}`}
+            {job.provenance.observations.collected_at && ` · collected ${job.provenance.observations.collected_at}`}
+            {job.provenance.observations.delivery_profile_sha256 && ` · delivery ${job.provenance.observations.delivery_profile_sha256}`}
+            {job.provenance.observations.warmup_buckets != null && ` · warmup ${job.provenance.observations.warmup_buckets} buckets`}
+            {job.provenance.observations.forward_observation?.event && ` · event ${job.provenance.observations.forward_observation.event}`}
+          </p>}
           {job.action_id && <button className="btn btn-ghost" style={{ minHeight: 44 }} type="button"
             onClick={() => void openAction(job.action_id!)}>Open action {job.action_id}</button>}
         </li>)}</ul>
@@ -136,6 +154,7 @@ export function AgentActions({ agentId }: { agentId: string }) {
 
         <h3>Remove agent</h3>
         <p className="muted">Removal withdraws the agent's signer. A requested removal denies new submissions at once. You keep access to the wallet and its holdings.</p>
+        {view.provider_mode === "controlled" && <p className="muted">A removal request blocks new submissions. Provider signer removal requires separate verified evidence.</p>}
         {!latestRemoval ? <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={blocked}
           onClick={() => void write(() => financial.requestRemoval(agentId, heldKey("removal", agentId), "Owner removed the agent"),
             "Removal requested. New submissions are denied.")}>Request removal</button>
@@ -154,6 +173,7 @@ function ActionLineage({ detail, busy, onReconcile }: { detail: ActionDetail; bu
   const references = detail.attempts[0]?.content.original_references;
   const original = detail.attempts[detail.attempts.length - 1]?.content.original_transaction ?? null;
   const unsettled = detail.queue ? UNSETTLED.has(detail.queue.state) : false;
+  const refused = detail.refusal?.reason === "WALLET_POLICY_REFUSED";
   return (
     <div data-testid="action-lineage">
       <h3>Action {detail.action_id}</h3>
@@ -169,8 +189,15 @@ function ActionLineage({ detail, busy, onReconcile }: { detail: ActionDetail; bu
         <dt>Queue</dt><dd data-testid="action-queue-state">{detail.queue ? `${detail.queue.state}${detail.queue.blocking_reason ? ` (${detail.queue.blocking_reason})` : ""}` : "None"}</dd>
         <dt>Receipts</dt><dd data-testid="action-receipts">{detail.receipts.length ? detail.receipts.map((r) => `${r.outcome}${r.breach ? " (breach)" : ""}`).join(" → ") : "None yet"}</dd>
         <dt>Recovery</dt><dd>{detail.recovery ? detail.recovery.state : "Not opened"}</dd>
-        {!original && <><dt>Transaction hash</dt><dd className="mono">{references?.transaction_hash ?? `None (${references?.absent_reason ?? "not recorded"})`}</dd></>}
+        {!original && <><dt>Transaction hash</dt><dd className="mono">{references?.transaction_hash
+          ? <TransactionHash hash={references.transaction_hash} /> : `None (${references?.absent_reason ?? "not recorded"})`}</dd></>}
       </dl>
+      {refused && <p className="status err" data-testid="action-refusal">Refused by the wallet policy. Nothing was sent.</p>}
+      {detail.receipts.length > 0 && <ul data-testid="action-receipt-evidence">{detail.receipts.map((receipt, index) => <li key={index}>
+        {receipt.outcome} · gas charge {receipt.content.actual_gas
+          ? `${formatRaw(receipt.content.actual_gas.raw, receipt.content.actual_gas.decimals)} ${receipt.content.actual_gas.asset_id}`
+          : "not observed"} · source <span className="mono">{receipt.content.source_ref ?? "not recorded"}</span>
+      </li>)}</ul>}
       {original && <OriginalTransactionFacts original={original} settled={!unsettled} />}
       <h4>Reservations</h4>
       <ul>{detail.reservations.map((item, index) => <li key={index}>{item.scope} · {formatRaw(item.raw, item.decimals)} <span className="mono">{item.asset_id}</span> · {item.state}</li>)}</ul>
@@ -193,7 +220,7 @@ const STAGE_COPY: Record<string, string> = {
   REFUSED_UNSENT: "Refused before signing. Nothing was signed or sent.",
 };
 
-/** The original transaction's saved identities (recorded test responses only; never a live chain claim). */
+/** The saved original identities and their evidence class; pending effects remain unknown. */
 function OriginalTransactionFacts({ original, settled }: { original: OriginalTransaction; settled: boolean }) {
   return (
     <div data-testid="action-original">
@@ -203,13 +230,26 @@ function OriginalTransactionFacts({ original, settled }: { original: OriginalTra
         {!settled && " No replacement is ever created."}</p>
       <dl className="kv">
         <dt>Stage</dt><dd>{original.stage}{original.reason ? ` (${original.reason})` : ""}{original.reasons?.length ? ` · ${original.reasons.join(", ")}` : ""}</dd>
-        <dt>Transaction hash</dt><dd className="mono" data-testid="action-original-hash">{original.transaction_hash ?? "None saved"}</dd>
+        <dt>Transaction hash</dt><dd className="mono" data-testid="action-original-hash">{original.transaction_hash
+          ? <TransactionHash hash={original.transaction_hash} /> : "None saved"}</dd>
         <dt>Candidate identity</dt><dd className="mono">{original.candidate_hash ?? "None"}</dd>
         <dt>Nonce</dt><dd>{original.nonce ?? "None"}</dd>
         {original.fee_envelope && <><dt>Fee limit</dt><dd>{original.fee_envelope.gas_limit} gas at most {formatRaw(String(original.fee_envelope.max_fee_per_gas), 9)} gwei</dd></>}
         <dt>Signing request</dt><dd className="mono">{original.signing_request_id ?? "None"}</dd>
         <dt>Wallet</dt><dd className="mono">{original.wallet_address} on chain {original.chain_id}</dd>
-        <dt>Evidence</dt><dd>{original.evidence_class}: authored recorded responses, not a live provider or chain.</dd>
+        <dt>Evidence</dt><dd>{original.evidence_class}: {original.evidence_class === "PROVIDER_ACTUAL"
+          ? "release-bound provider evidence; settlement requires the original receipt."
+          : original.evidence_class === "SYNTHETIC_FIXTURE"
+          ? "synthetic controlled test responses; no real wallet or chain effect."
+          : original.evidence_class === "AUTHORED_RECORDING"
+          ? "authored recorded responses, not a live provider or chain." : "unqualified; effects remain unknown."}</dd>
+        {original.scope && <><dt>Scope</dt><dd>{original.scope}</dd></>}
+        {original.release_sha256 && <><dt>Release</dt><dd className="mono">{original.release_id} · {original.release_sha256}</dd></>}
+        {original.approved_minimum && <><dt>Approved minimum, raw</dt><dd>{original.approved_minimum.raw} <span className="mono">{original.approved_minimum.asset_id}</span></dd></>}
+        {original.quote_observation && <>
+          <dt>Quote request and receipt</dt><dd>{original.quote_observation.requested_at} → {original.quote_observation.received_at} · elapsed {original.quote_observation.elapsed_seconds} seconds</dd>
+          <dt>Provider quote creation time</dt><dd>{original.quote_observation.provider_created_at ?? "Unknown"}</dd>
+        </>}
       </dl>
     </div>
   );

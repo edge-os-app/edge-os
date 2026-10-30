@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { payloadBindingText, payloadBindingUsable } from "../lib/types";
 import type { DatasetSummary, HistorySpotReplayBody } from "../lib/api";
-import type { SpotReplayBody, SpotReplayDependency, SpotReplayRecord, Strategy } from "../lib/types";
+import type { SpotReplayBody, SpotReplayDependency, SpotReplayRecord, SpotReplayTimingProfile, Strategy } from "../lib/types";
 import { ReplayResult } from "./ReplayResult";
 
 type FieldName = "entry" | "exit";
@@ -13,20 +13,35 @@ type Dependencies = Record<FieldName, SpotReplayDependency[]>;
 
 interface Props { strategy: Strategy; strategyId: string; strategyRevisionId: string }
 
+const DEFAULT_TIMING_PROFILE: SpotReplayTimingProfile = "p12.spot-replay/1";
+const DELAYED_TIMING_PROFILE: SpotReplayTimingProfile = "edge-os.delayed-history-replay/1";
+
 function emptyDependencies(): Dependencies { return { entry: [], exit: [] }; }
 
-function makeBody(strategyId: string, revisionId: string, dependencies: Dependencies): SpotReplayBody {
+const KNOWN_SYNTHETIC_CLASSES = new Set([
+  "SYNTHETIC_FIXTURE", "RECORDED_RESPONSE", "RECORDED_NATIVE_RESPONSE",
+  "AUTHORED_HTTP_RESPONSE", "RELEASE_STAND_IN_RESPONSE",
+]);
+
+function datasetProvenance(dataset: DatasetSummary): "provider" | "synthetic" | "unknown" {
+  if (dataset.evidence_class === "PROVIDER_ACTUAL") return "provider";
+  return KNOWN_SYNTHETIC_CLASSES.has(dataset.evidence_class) ? "synthetic" : "unknown";
+}
+
+function makeBody(strategyId: string, revisionId: string, dependencies: Dependencies,
+                  timingProfile: SpotReplayTimingProfile): SpotReplayBody {
   return {
     idempotency_key: `p13-${crypto.randomUUID()}`,
     strategy_id: strategyId,
     strategy_revision_id: revisionId,
     dataset_fixture_id: "p13.wc01/1",
     run_configuration_id: `p13-config-${crypto.randomUUID()}`,
-    window_start: "2026-10-01T12:05:00Z",
+    window_start: timingProfile === DELAYED_TIMING_PROFILE ? "2026-10-01T12:10:00Z" : "2026-10-01T12:05:00Z",
     window_end: "2026-10-01T12:35:00Z",
     initial_cash_quote: "1000",
     initial_base_amount: "0",
     initial_basis_quote: "0",
+    ...(timingProfile === DELAYED_TIMING_PROFILE ? { timing_profile: timingProfile } : {}),
     essential_fields: {
       entry: { state: "BOUND", essential_dependencies: dependencies.entry },
       exit: { state: "BOUND", essential_dependencies: dependencies.exit },
@@ -62,6 +77,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
     return () => { current = false; };
   }, []);
   const dataset = datasets.find((item) => item.dataset_id === source) ?? null;
+  const datasetClass = dataset ? datasetProvenance(dataset) : "unknown";
   const chooseSource = (value: string) => {
     setSource(value); setPendingBody(null);
     const chosen = datasets.find((item) => item.dataset_id === value);
@@ -81,6 +97,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
   const [record, setRecord] = useState<SpotReplayRecord | null>(null);
   const [replayId, setReplayId] = useState("");
   const [loadNotice, setLoadNotice] = useState("");
+  const [timingProfile, setTimingProfile] = useState<SpotReplayTimingProfile>(DEFAULT_TIMING_PROFILE);
   const [pendingBody, setPendingBody] = useState<SpotReplayBody | HistorySpotReplayBody | null>(null);
 
   const updateDependency = (field: FieldName, index: number, changes: Partial<SpotReplayDependency>) => {
@@ -101,7 +118,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
   const save = async () => {
     if (busy || !reviewed.entry || !reviewed.exit) return;
     setBusy(true); setError(""); setLoadNotice("");
-    const fixtureBody = makeBody(strategyId, strategyRevisionId, dependencies);
+    const fixtureBody = makeBody(strategyId, strategyRevisionId, dependencies, timingProfile);
     const body = pendingBody ?? (dataset ? historyBody(fixtureBody, dataset, windowStart, windowEnd) : fixtureBody);
     setPendingBody(body);
     try {
@@ -131,9 +148,20 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
 
   return (
     <section className="panel spot-replay" aria-labelledby="spot-replay-title" data-testid="spot-replay">
-      <h2 id="spot-replay-title">Test the saved strategy on synthetic prices</h2>
-      <p className="muted">The authored synthetic fixture covers 12:05 to 12:35 UTC, with three earlier buckets for warm-up. Fills are assumptions. The replay uses saved fee and slippage rates, and omits gas, spread, extra impact, and capacity. Review each essential input set before saving.</p>
+      <h2 id="spot-replay-title">Test the saved strategy on price data</h2>
+      <p className="muted">{source === "fixture" ? "The authored synthetic fixture covers 12:05 to 12:35 UTC, with three earlier buckets for warm-up. The delayed profile starts at 12:10 so its first delayed decision keeps that warm-up. " : "The replay runs on the selected saved price data. "}Fills are assumptions. The replay uses saved fee and slippage rates, and omits gas, spread, extra impact, and capacity. Review each essential input set before saving.</p>
       <h3>New run settings (editable)</h3>
+      <div className="field">
+        <label htmlFor="spot-replay-timing-profile">Timing profile</label>
+        <select id="spot-replay-timing-profile" className="input" value={timingProfile} disabled={busy}
+          onChange={(event) => setTimingProfile(event.target.value as SpotReplayTimingProfile)}>
+          <option value={DEFAULT_TIMING_PROFILE}>Default replay (p12.spot-replay/1)</option>
+          <option value={DELAYED_TIMING_PROFILE}>Delayed hypothetical replay (300 s decision delay)</option>
+        </select>
+      </div>
+      {timingProfile === DELAYED_TIMING_PROFILE ? (
+        <p className="muted" data-testid="spot-replay-delayed-note">The delayed profile decides each source bucket 300 seconds after it ends. Its window starts one bucket later than the default, so the first delayed decision keeps its full warm-up. Each fill uses the next bucket&rsquo;s stale historical close, a hypothetical price, not a tradable quote.</p>
+      ) : null}
       <div className="field">
         <label htmlFor="spot-replay-source">Price data</label>
         <select id="spot-replay-source" className="input" value={source} onChange={(event) => chooseSource(event.target.value)}>
@@ -149,7 +177,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
       ) : null}
       {dataset ? (
         <div className="stack" data-testid="spot-replay-history-source" style={{ overflowWrap: "anywhere" }}>
-          <p className="status stop">Simulated fills on saved recorded-history dataset {dataset.dataset_id}: {dataset.evidence_class}, {dataset.content_label}. These prices are synthetic recorded responses, not observed market history. The replay runs only if this revision uses the same market. Data after {dataset.readable_until} is protected and cannot be replayed.</p>
+          <p className="status stop">Simulated fills on {datasetClass === "provider" ? "saved provider history dataset" : datasetClass === "synthetic" ? "saved recorded-history dataset" : "saved history dataset"} {dataset.dataset_id}: {dataset.evidence_class}, {dataset.content_label}. {datasetClass === "provider" ? "These prices are saved provider history, not synthetic." : datasetClass === "synthetic" ? "These prices are synthetic recorded responses, not observed market history." : `${dataset.evidence_class} is an unrecognized saved evidence class, so this view claims neither observed history nor synthetic prices.`} The replay runs only if this revision uses the same market. Data after {dataset.readable_until} is protected and cannot be replayed.</p>
           <p data-testid="spot-replay-history-binding">{payloadBindingText(dataset.payload_binding)}</p>
           <div className="field">
             <label htmlFor="spot-replay-window-start">Window start (UTC)</label>
@@ -163,7 +191,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
       ) : null}
       <dl className="kv">
         <dt>Data</dt><dd className="mono">{dataset ? `${dataset.source_id} · simulated fills` : "p13.wc01/1 · synthetic only"}</dd>
-        <dt>Window</dt><dd>{dataset ? `${windowStart} to ${windowEnd}` : "2026-10-01 12:05 to 12:35 UTC"}</dd>
+        <dt>Window</dt><dd>{dataset ? `${windowStart} to ${windowEnd}` : timingProfile === DELAYED_TIMING_PROFILE ? "2026-10-01 12:10 to 12:35 UTC" : "2026-10-01 12:05 to 12:35 UTC"}</dd>
         <dt>Starting capital (quote)</dt><dd>1000. This fixed amount will be used for a new run.</dd>
         <dt>Starting base amount</dt><dd>0</dd>
         <dt>Starting cost basis</dt><dd>0</dd>

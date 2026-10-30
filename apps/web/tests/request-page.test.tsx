@@ -4,7 +4,12 @@ import { RequestPage } from "../components/RequestPage";
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), revision: vi.fn() }));
 vi.mock("../lib/api", () => ({
-  ApiError: class extends Error { status = 503; detail = "Unavailable"; },
+  ApiError: class extends Error {
+    status: number; code: string; detail: string;
+    constructor(status = 503, code = "error", detail = "Unavailable") {
+      super(detail); this.status = status; this.code = code; this.detail = detail;
+    }
+  },
   api: {
     get: (...args: unknown[]) => mocks.get(...args),
     revision: (...args: unknown[]) => mocks.revision(...args),
@@ -64,5 +69,19 @@ describe("stored revision verification", () => {
       && element.textContent?.includes("The saved request opened, but source record unrelated-source is not in this detail."))).toBeInTheDocument();
     expect(screen.queryByText(/Opened source record unrelated-source/)).toBeNull();
     expect(screen.getByText("test request")).toBeInTheDocument();
+  });
+});
+
+
+describe("the explicit unavailable state", () => {
+  it("shows the live interpretation detail instead of the generic load message", async () => {
+    const { ApiError } = await import("../lib/api");
+    mocks.get.mockRejectedValue(new ApiError(503, "interpreter_unavailable",
+      "The live interpretation service is unavailable. The saved request is unchanged."));
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    expect(await screen.findByText("The live interpretation service is unavailable. The saved request is unchanged."))
+      .toBeInTheDocument();
+    expect(screen.queryByText("The request could not be loaded.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
 });

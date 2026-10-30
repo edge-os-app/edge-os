@@ -54,7 +54,7 @@ async function noSeriousAxe(page) {
 async function openRecurring(page, project) {
   const agentId = agentFor(project);
   await injectAuth(page, ownerToken(project));
-  await page.goto(`/#/positions?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/positions?agent=${encodeURIComponent(agentId)}`);
   const recurring = page.getByRole("region", { name: "Recurring operation" });
   await expect(recurring.getByTestId("recurring-deployment")).toBeVisible();
   return { agentId, recurring, actions: page.getByRole("region", { name: "Agent actions" }) };

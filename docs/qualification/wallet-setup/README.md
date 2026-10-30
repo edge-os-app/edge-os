@@ -84,3 +84,8 @@ Recorded in the worker evidence directory `.scratch/wallet-wave/p17/evidence/`. 
 identity, command output, timings and the verify-edge-os recipe run are captured there. Provider
 and owner checks are `NOT RUN`; the browser checks run only against the authored local fixture and
 prove the wiring, never a real provider. Full P17 (real provider qualification) stays open.
+
+## Actual Privy creation path (local candidate, 2026-10-16)
+
+`docs/implementation/PRIVY_WALLET_CONNECTION.md` describes the browser-begin permission, the owner-bound private
+lookup process and their limits. The fixture path above is unchanged. No actual wallet or provider call qualified it.

@@ -1,6 +1,9 @@
 /** Client types and calls for the connected financial journey (#58). Every call is owner-scoped on the server. */
 import { request } from "./api";
 
+/** Monad mainnet block explorer. The app trades on chain 143. */
+export const MONAD_EXPLORER_BASE = "https://monadscan.com";
+
 export interface Amount { asset_id: string; raw: string; decimals: number }
 
 export interface FundingFlow {
@@ -19,14 +22,16 @@ export interface CurrentHoldings {
 /** The owner's view of the original transaction: identities and stages, never signed bytes. */
 export interface OriginalTransaction {
   stage: string; reason?: string; reasons?: string[]; evidence_class: string; chain_id: number;
-  wallet_address: string; candidate_hash?: string; transaction_hash?: string; nonce?: number;
-  fee_envelope?: { gas_limit: number; max_fee_per_gas: number; max_priority_fee_per_gas: number };
+  wallet_address: string; candidate_hash?: string; transaction_hash?: string; nonce?: number | string;
+  fee_envelope?: { gas_limit: number | string; max_fee_per_gas: number | string; max_priority_fee_per_gas: number | string };
   signing_request_id?: string; signed_bytes_sha256?: string; signed_bytes_length?: number;
   broadcast_returned?: string | null; stages: { stage: string; at: string }[];
+  scope?: string; release_id?: string; release_sha256?: string; binding_sha256?: string; approved_minimum?: Amount;
+  quote_observation?: { requested_at: string; received_at: string; elapsed_seconds: number; provider_created_at: string | null };
 }
 
 export interface FundingView {
-  agent_id: string; wallet_id: string; network_id: number; provider_mode: "fixture" | "unavailable";
+  agent_id: string; wallet_id: string; network_id: number; provider_mode: "fixture" | "unavailable" | "controlled";
   declaration: { trading_asset: Amount; gas_asset: Amount } | null;
   flows: FundingFlow[];
   deposit_balances: { asset_class: string; asset_id: string; credited_deposits: Amount; pending_deposits: Amount }[];
@@ -38,13 +43,25 @@ export interface ReviewedTerms {
   terms_version: string; operating_purpose: "TRIAL" | "ONGOING"; trial_objective?: string | null;
   allocation: Amount[]; allowances: { name: string; amount: Amount }[]; attempt_budget: number;
   gas_budget: Amount | null; expiry: string; supported_actions: string[]; supported_assets: string[];
-  supported_routes: string[]; route: { adapter: string }; evidence: { status: string; source: string };
+  supported_routes: string[]; route: { adapter: string; identity_state?: "KNOWN" | "UNKNOWN"; identity?: string | null };
+  signer?: string; policy?: { policy_id: string; status: "UNQUALIFIED" | "UNKNOWN"; content_sha256: string };
+  evidence: { status: string; source: string };
   stop_effects: string[];
 }
 
 export interface Activation {
-  state: "FIXTURE_QUALIFIED" | "UNAVAILABLE"; reason: string | null; evidence_class: string | null;
+  state: "FIXTURE_QUALIFIED" | "CONTROLLED_QUALIFIED" | "UNAVAILABLE"; reason: string | null; evidence_class: string | null;
   mandate_id?: string; policy_binding?: string; execution_revision_id?: string; expires_at?: string;
+  scope?: string; release_sha256?: string; binding_sha256?: string;
+}
+
+export interface ControlledAction {
+  scope: string; release_id: string; release_sha256: string; binding_sha256: string; evidence_class: string;
+  input: Amount; minimum_output: Amount; recipient: string; entrypoint: string; method: string; allowance_raw: string;
+  gas: { gas_limit: string; max_fee_per_gas: string; max_priority_fee_per_gas: string; budget_raw: string };
+  fees: { fee_bps: number; referrer_fee_bps: number; fee_collector_address: string; referrer_address: string; is_in_token_fee: boolean };
+  expires_at: string; signer_id: string; policy_id: string; policy_content_sha256: string;
+  recurring: "UNAVAILABLE"; exit_execution: "UNAVAILABLE";
 }
 
 export interface ConsentReview {
@@ -65,6 +82,7 @@ export interface ConsentState {
   agent_id: string; adoptions: ConsentAdoption[]; reviews: ConsentReview[]; activation: Activation;
   assets: { quote: AssetIdentity; base: AssetIdentity; gas: AssetIdentity } | null;
   identity: Record<string, string> | null;
+  provider_mode?: string; controlled_action?: ControlledAction | null;
 }
 
 export interface EvaluationJob {
@@ -72,6 +90,8 @@ export interface EvaluationJob {
   publication_revision_id: string; execution_revision_id: string; consent_adoption_id: string;
   decision_id: string | null; action_id: string | null; outcome: string | null; reason: string | null; runs: number;
   created_at: string; updated_at: string;
+  provenance?: { observations?: { evidence_class?: string; source?: string; collected_at?: string; finality?: string;
+    delivery_profile_sha256?: string; warmup_buckets?: number; forward_observation?: { event?: string; observed_at?: string } } };
 }
 
 export interface Decision { decision_id: string; decision_at: string; status: string; operation: string | null; reasons: string[] }
@@ -89,14 +109,18 @@ export interface ActionDetail {
   payload: { quantity: Amount; input: { quote_input: Amount | null; expected_quote: Amount | null } };
   decision: Decision; queue: QueueEntry | null; admission: { status: string; reason: string | null }[];
   reservations: { scope: string; asset_id: string; decimals: number; raw: string; state: string }[];
-  receipts: { outcome: string; breach: boolean; created_at: string; content: Record<string, unknown> }[];
+  receipts: { outcome: string; breach: boolean; created_at: string; content: { actual_input?: Amount | null;
+    actual_output?: Amount | null; actual_gas?: Amount | null; source_ref?: string; [key: string]: unknown } }[];
   attempts: { attempt_id: string; state: string; outcome: string | null; detail: string | null;
     content: { original_references?: Record<string, string | null>; original_transaction?: OriginalTransaction | null } }[];
+  refusal: WalletPolicyRefusal | null;
   recovery: { state: string; blocking_reason: string | null } | null;
 }
 
 export interface Stop { stop_id: string; scope: string; mode: string; trigger: string; position_id: string | null; created_at: string }
 export interface Removal { request_id: string; state: string; reason: string; requested_at: string; updated_at: string; evidenced_signer: string | null }
+/** The newest attempt's definite refusal, when the API classifies one. */
+export interface WalletPolicyRefusal { reason: string; message: string }
 
 /** P27 LOCAL recurring operation: one explicit deployment per adopted consent and its durable projection. */
 export interface RecurringDeployment {

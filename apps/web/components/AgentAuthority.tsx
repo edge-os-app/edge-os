@@ -43,12 +43,20 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
   const [expiry, setExpiry] = useState(defaultExpiry);
   const [review, setReview] = useState<ConsentReview | null>(null);
   const seq = useRef(0);
+  const preparedBinding = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     const current = (seq.current += 1);
     try {
       const saved = await financial.consent(agentId);
       if (current !== seq.current) return false;
+      if (saved.controlled_action && preparedBinding.current !== saved.controlled_action.binding_sha256) {
+        const action = saved.controlled_action;
+        preparedBinding.current = action.binding_sha256;
+        setLimits((previous) => ({ ...previous, allocation: action.input.raw, quote_input: action.input.raw,
+          per_action_gas: action.gas.budget_raw }));
+        setExpiry(action.expires_at); setAttempts("2");
+      }
       setState(saved); setPhase("loaded"); setUncertain(false); setError("");
       return true;
     } catch (failure) {
@@ -61,24 +69,31 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
   useEffect(() => { setPhase("loading"); void load(); }, [load]);
 
   const assets = state?.assets;
+  const controlledMode = state?.provider_mode === "controlled";
+  const controlled = controlledMode ? state?.controlled_action : null;
   const valid = LIMITS.every((item) => /^(0|[1-9][0-9]*)$/.test(limits[item.key])) && /^\d{1,7}$/.test(attempts)
-    && !Number.isNaN(Date.parse(expiry));
+    && !Number.isNaN(Date.parse(expiry)) && (!controlledMode || Boolean(controlled));
 
   const terms = (): ReviewedTerms | null => {
     if (!assets) return null;
     const amount = (asset: "quote" | "base" | "gas", raw: string) => ({ ...assets[asset], raw });
     const named = (key: LimitKey) => LIMITS.find((item) => item.key === key)!;
     return {
-      terms_version: "connected-spot/1", operating_purpose: "TRIAL",
+      terms_version: controlled ? "connected-one-action/1" : "connected-spot/1", operating_purpose: "TRIAL",
       trial_objective: "Observe one bounded action through the application.",
       allocation: [amount("quote", limits.allocation)],
       allowances: (["quote_input", "base_inventory", "per_action_gas", "per_exit_gas"] as const)
         .map((key) => ({ name: key, amount: amount(named(key).asset, limits[key]) })),
       attempt_budget: Number(attempts), gas_budget: amount("gas", limits.gas_budget), expiry,
-      supported_actions: ["ENTRY", "EXIT"], supported_assets: [assets.quote.asset_id, assets.base.asset_id],
-      supported_routes: ["KURU_FLOW_FIXED_INPUT"], route: { adapter: "KURU_FLOW_FIXED_INPUT" },
+      supported_actions: controlled ? ["ENTRY"] : ["ENTRY", "EXIT"], supported_assets: [assets.quote.asset_id, assets.base.asset_id],
+      supported_routes: ["KURU_FLOW_FIXED_INPUT"], route: controlled
+        ? { adapter: "KURU_FLOW_FIXED_INPUT", identity_state: "KNOWN", identity: controlled.entrypoint }
+        : { adapter: "KURU_FLOW_FIXED_INPUT" },
+      ...(controlled ? { signer: controlled.signer_id, policy: { policy_id: controlled.policy_id,
+        status: "UNQUALIFIED" as const, content_sha256: controlled.policy_content_sha256 } } : {}),
       evidence: { status: "HYPOTHESIS", source: "saved-research" },
-      stop_effects: ["STOP_NEW_ENTRIES denies new entries and keeps approved exits",
+      stop_effects: [controlled ? "STOP_NEW_ENTRIES denies the controlled entry; held funds stay"
+        : "STOP_NEW_ENTRIES denies new entries and keeps approved exits",
         "HALT_ALL_SWAPS denies every swap; pending actions and holdings stay"],
     };
   };
@@ -113,8 +128,39 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
         <p data-testid="activation-state" role="status">
           {activation?.state === "FIXTURE_QUALIFIED"
             ? `Fixture qualification (${activation.evidence_class}). Bounded fixture actions can run under these exact terms; this is not live authority.`
+            : activation?.state === "CONTROLLED_QUALIFIED"
+            ? `One controlled action is qualified (${activation.evidence_class}) under its exact release. Exit and recurring execution are unavailable.`
             : ACTIVATION_COPY[activation?.reason ?? ""] ?? `Unavailable: ${activation?.reason}`}
         </p>
+        {controlledMode && !controlled && <p>No prepared controlled action is available. Exact terms cannot be reviewed yet.</p>}
+        {controlled && <div data-testid="controlled-action-terms">
+          <h3>One controlled entry</h3>
+          <p>These are prepared terms. The activation status above determines whether they can run.</p>
+          <dl className="kv">
+            <dt>Input, raw</dt><dd>{controlled.input.raw} <span className="mono">{controlled.input.asset_id}</span></dd>
+            <dt>Minimum output, raw</dt><dd>{controlled.minimum_output.raw} <span className="mono">{controlled.minimum_output.asset_id}</span></dd>
+            <dt>Recipient</dt><dd className="mono">{controlled.recipient}</dd>
+            <dt>Route</dt><dd className="mono">{controlled.entrypoint} · {controlled.method}</dd>
+            <dt>Allowance, raw</dt><dd>{controlled.allowance_raw}</dd>
+            <dt>Gas limits</dt><dd>{controlled.gas.gas_limit} gas · maximum {controlled.gas.max_fee_per_gas} wei per gas · priority {controlled.gas.max_priority_fee_per_gas} wei per gas · budget {controlled.gas.budget_raw} wei</dd>
+            <dt>Fees</dt><dd>{controlled.fees.fee_bps} basis points; referral {controlled.fees.referrer_fee_bps} basis points; input-token fee: {controlled.fees.is_in_token_fee ? "yes" : "no"}</dd>
+            <dt>Fee collector</dt><dd className="mono">{controlled.fees.fee_collector_address}</dd>
+            <dt>Referrer</dt><dd className="mono">{controlled.fees.referrer_address}</dd>
+            <dt>Expiry</dt><dd><time dateTime={controlled.expires_at}>{controlled.expires_at}</time></dd>
+            <dt>Signer and policy</dt><dd className="mono">{controlled.signer_id} · {controlled.policy_id} · {controlled.policy_content_sha256}</dd>
+            <dt>Release and evidence</dt><dd className="mono">{controlled.release_id} · {controlled.release_sha256} · {controlled.evidence_class}</dd>
+          </dl>
+          <div data-testid="release-limits">
+            <h4>Release limits</h4>
+            <dl className="kv">
+              <dt>Fixed input</dt><dd>{formatRaw(controlled.input.raw, controlled.input.decimals)} <span className="mono">{controlled.input.asset_id}</span></dd>
+              <dt>Minimum output</dt><dd>{formatRaw(controlled.minimum_output.raw, controlled.minimum_output.decimals)} <span className="mono">{controlled.minimum_output.asset_id}</span></dd>
+              <dt>USD ceiling including gas</dt><dd>Not available</dd>
+            </dl>
+            <p className="muted">The server does not report a USD ceiling, so none is shown. No value is calculated in the browser.</p>
+          </div>
+          <p>Exit and recurring execution are unavailable. The exit gas and attempt reservations remain as protection for held inventory.</p>
+        </div>}
         {error ? <p role="alert" className="status err">{error}</p> : null}
         {uncertain && <div className="btn-row">
           <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={() => void load()}>Check saved consent</button>

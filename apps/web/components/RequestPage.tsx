@@ -52,7 +52,12 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
   useEffect(() => {
     let cancelled = false;
     api.get(id).then((b) => { if (!cancelled) { setBundle(b); setOpened("loaded"); setError(""); } })
-      .catch((e: unknown) => { if (!cancelled) setError(e instanceof ApiError && e.status === 404 ? "This request was not found." : "The request could not be loaded."); })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        if (e instanceof ApiError && e.status === 404) { setError("This request was not found."); return; }
+        const unavailable = e instanceof ApiError && [0, 502, 503, 504].includes(e.status);
+        setError(unavailable ? e.detail : "The request could not be loaded.");
+      })
       .finally(() => { if (!cancelled) setRetrying(false); });
     return () => { cancelled = true; };
   }, [id, attempt]);
@@ -360,7 +365,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
       {revision && draft && <SpotReplayPanel strategy={draft.content.source_syntax as Strategy}
         strategyId={revision.strategy_id} strategyRevisionId={revision.revision_id} />}
 
-      <InterpretationAttempts attempts={bundle.attempts} lateResults={bundle.late_results} currentRevisionId={head.interpretation_revision_id}
+      <InterpretationAttempts attempts={bundle.attempts} modelCost={bundle.model_cost} lateResults={bundle.late_results} currentRevisionId={head.interpretation_revision_id}
         open={Boolean(failure) || Boolean(pending) || Boolean(head.reply) || (lastAttempt !== undefined && lastAttempt.status !== "COMPLETED")} />
 
       <details>

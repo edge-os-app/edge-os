@@ -4,6 +4,11 @@ import { ReplayBalanceChart } from "./ReplayBalanceChart";
 
 interface Props { replay: SpotReplayRecord }
 
+const KNOWN_SYNTHETIC_CLASSES = new Set([
+  "SYNTHETIC_FIXTURE", "RECORDED_RESPONSE", "RECORDED_NATIVE_RESPONSE",
+  "AUTHORED_HTTP_RESPONSE", "RELEASE_STAND_IN_RESPONSE",
+]);
+
 function displayUtc(value: string): string {
   const normalized = new Date(value);
   if (Number.isNaN(normalized.valueOf())) return value;
@@ -19,6 +24,9 @@ export function ReplayResult({ replay }: Props) {
     fill_label: string; dataset_content_sha256: string;
     rule_linkage?: { state: string; evaluation_id: string | null };
     payload_binding?: PayloadBindingLineage } }).history_input ?? null;
+  const timingProfile = inputs.timing_profile;
+  const delayed = timingProfile === "edge-os.delayed-history-replay/1";
+  const orderEvents = result.events.filter((event) => event.kind === "ORDER");
   const dependencies = (field: "entry" | "exit") => inputs.essential_evidence.fields[field];
   const bindingSummary = (field: "entry" | "exit") => {
     const binding = dependencies(field);
@@ -42,6 +50,7 @@ export function ReplayResult({ replay }: Props) {
     <section className={`status ${result.status === "COMPLETE" ? "ok" : "stop"}`} data-testid="spot-replay-result"
       aria-labelledby="spot-replay-result-title">
       <h3 id="spot-replay-result-title">Saved replay: {result.status === "COMPLETE" ? "complete" : "unavailable"}</h3>
+      {delayed ? <p data-testid="spot-replay-delayed-note"><strong>Delayed hypothetical replay (300 s decision delay)</strong>. Each fill uses the next bucket&rsquo;s stale historical close, a hypothetical price, not a tradable quote.</p> : null}
       {result.reason ? <p role="alert">{result.reason.code} at {result.reason.path}: {result.reason.detail}</p> : null}
       <section className="spot-replay-summary" aria-labelledby="spot-replay-summary-title">
         <h4 id="spot-replay-summary-title">Simulated replay summary</h4>
@@ -56,7 +65,11 @@ export function ReplayResult({ replay }: Props) {
         <dt>Replay ID</dt><dd className="mono" data-testid="spot-replay-id">{replay.replay_id}</dd>
         <dt>Saved hash</dt><dd className="mono">{replay.content_sha256}</dd>
         <dt>Evidence</dt><dd>{history
-          ? `${result.evidence_class}. Simulated fills on saved recorded-history dataset ${history.dataset_id} (${history.source_id}, ${history.content_label}). Not observed market history.`
+          ? `${result.evidence_class}. ${String(result.evidence_class) === "PROVIDER_ACTUAL"
+            ? `Simulated fills on saved provider history dataset ${history.dataset_id} (${history.source_id}, ${history.content_label}). These prices are saved provider history, not synthetic.`
+            : KNOWN_SYNTHETIC_CLASSES.has(String(result.evidence_class))
+            ? `Simulated fills on saved recorded-history dataset ${history.dataset_id} (${history.source_id}, ${history.content_label}). Not observed market history.`
+            : `Saved history dataset ${history.dataset_id} (${history.source_id}, ${history.content_label}) has an unrecognized evidence class. This view claims neither observed history nor synthetic prices.`}`
           : `${result.evidence_class}. This is an authored fixture, not observed market history.`}</dd>
         <dt>Repeatability</dt><dd className="mono">{result.repeatability_id ?? "Unavailable before replay"}</dd>
       </dl>
@@ -82,6 +95,7 @@ export function ReplayResult({ replay }: Props) {
         <h4 id="spot-replay-saved-inputs-title">Exact saved run settings</h4>
         <dl className="kv">
           <dt>Profile</dt><dd data-testid="spot-replay-saved-profile">{inputs.profile_version}{inputs.profile_sha256 ? ` · ${inputs.profile_sha256}` : ""}</dd>
+          <dt>Timing profile</dt><dd data-testid="spot-replay-timing-profile">{timingProfile ?? "p12.spot-replay/1"}{inputs.timing_policy ? ` · ${inputs.timing_policy.decision_delay_seconds} s decision delay · ${inputs.timing_policy.fill_rule}` : ""}</dd>
           <dt>Strategy revision</dt><dd className="mono">{inputs.strategy_revision_id}</dd>
           <dt>Run configuration</dt><dd className="mono">{inputs.run_configuration_id}</dd>
           <dt>Fixture and dataset</dt><dd>{inputs.dataset_fixture_id} · {inputs.dataset_revision_id}</dd>
@@ -107,6 +121,18 @@ export function ReplayResult({ replay }: Props) {
           ))}</tbody>
         </table>
       </div>
+      {orderEvents.length ? (
+        <section aria-labelledby="spot-replay-order-events-title" data-testid="spot-replay-order-events">
+          <h4 id="spot-replay-order-events-title">Saved order events</h4>
+          <p className="muted">A FILL_UNAVAILABLE or NO_NEXT_BUCKET event is a recorded event. It is not a failed replay.</p>
+          <ul>
+            {orderEvents.map((event, index) => (
+              <li key={index}>{String(event.status)}{event.fill_label ? ` · ${String(event.fill_label)}` : ""}
+                {event.at ? ` · ${displayUtc(String(event.at))}` : ""}</li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <details>
         <summary>Saved events, trades, and samples</summary>
         <pre className="spot-replay-json">{JSON.stringify({ events: result.events, trades: result.trades,

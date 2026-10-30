@@ -4,6 +4,7 @@ like Docker does, and plays the containers' readiness files. Synthetic key, reco
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import itertools
 import json
@@ -12,6 +13,7 @@ import stat
 import subprocess
 import sys
 from collections.abc import Callable
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,8 @@ import pytest
 import relay_admission
 import relay_operator
 import relay_supervisor
+from edge_os_api.research import hermes_relay_composition as composition
+from edge_os_api.research.hermes_relay_composition import RelayApplicationDefinition
 from relay_operator import OperatorRefused, load_config, main, read_handoff
 from relay_supervisor import LABEL
 
@@ -27,6 +31,10 @@ from conftest import SENTINEL
 
 IMAGE_ID = "sha256:" + "1" * 64
 OTHER_ID = "sha256:" + "2" * 64
+LOST_AMD64_IMAGE = "sha256:224ede5ab50f69f4a73bcce46a054140b20e2337ead5684147df062879b2f0e1"  # 2026-10-23; lost
+REAL_RECORD = (Path(__file__).resolve().parents[2] / "docs" / "qualification" / "hermes-actual-operation" /
+               "release" / "hermes_first_call_record.json")
+REAL_RECORD_SHA256 = "3fa94dd73e53a72ca8af6cda9c8633770de89c262fa5303756c1965bb92fed8f"
 SETTINGS = {"release_id": "local-relay-1", "route_id": "authored-local-1", "kind": "AUTHORED",
             "model": "fixture-model/1", "max_output_tokens": 4096, "max_request_bytes": 12_000, "max_reply_bytes": 65_536}
 SCHEMA = {"type": "json_schema", "json_schema": {"name": "answer", "strict": True, "schema": {"type": "object"}}}
@@ -330,7 +338,70 @@ def test_the_channel_folder_must_be_new_and_task_owned(tmp_path: Path, key: Path
 def test_a_channel_folder_inside_the_run_root_is_created_by_the_operator(tmp_path: Path, key: Path,
                                                                           fake: FakeDocker) -> None:
     loaded, _, _ = started(tmp_path, key, channel={"name": "jobs", "path": str(tmp_path / "run" / "jobs")})
-    assert stat.S_IMODE((tmp_path / "run" / "jobs").stat().st_mode) == 0o700 and owned_state(fake, loaded)["container"]
+    assert stat.S_IMODE((tmp_path / "run" / "jobs").stat().st_mode) == 0o770 and owned_state(fake, loaded)["container"]
+
+
+def test_the_run_root_and_shared_folders_have_the_reviewed_group_and_modes(tmp_path: Path, key: Path,
+                                                                           fake: FakeDocker) -> None:
+    started(tmp_path, key)
+    relay = tmp_path / "run" / "relay"
+    expected = {
+        tmp_path / "run": 0o750,
+        tmp_path / "jobs": 0o770,
+        relay: 0o750,
+        relay / "grants": 0o770,
+        relay / "revocations": 0o770,
+        relay / "state": 0o750,
+        relay / "secrets": 0o750,
+        relay / "tls": 0o700,
+        relay / "secrets" / "admission-key": 0o440,
+    }
+    for path, mode in expected.items():
+        assert stat.S_IMODE(path.stat().st_mode) == mode, (path, oct(stat.S_IMODE(path.stat().st_mode)))
+
+
+def test_a_start_succeeds_under_the_unit_setgid_filter(tmp_path: Path, key: Path, fake: FakeDocker,
+                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    """`RestrictSUIDSGID=yes` denies a mode argument with S_ISGID (or S_ISUID) on every mode-taking call."""
+    real_chmod, real_mkdir, real_open, real_fchmod = os.chmod, os.mkdir, os.open, os.fchmod
+
+    def refuse(mode: int, path: Any) -> None:
+        if mode & 0o6000:
+            raise PermissionError(1, "Operation not permitted", str(path))
+
+    def filtered_chmod(path: Any, mode: int, *args: Any, **kwargs: Any) -> None:
+        refuse(mode, path)
+        real_chmod(path, mode, *args, **kwargs)
+
+    def filtered_mkdir(path: Any, mode: int = 0o777, *args: Any, **kwargs: Any) -> None:
+        refuse(mode, path)
+        real_mkdir(path, mode, *args, **kwargs)
+
+    def filtered_open(path: Any, flags: int, mode: int = 0o777, *args: Any, **kwargs: Any) -> int:
+        if flags & os.O_CREAT:
+            refuse(mode, path)
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    def filtered_fchmod(fd: int, mode: int) -> None:
+        refuse(mode, f"fd {fd}")
+        real_fchmod(fd, mode)
+
+    monkeypatch.setattr(os, "chmod", filtered_chmod)
+    monkeypatch.setattr(os, "mkdir", filtered_mkdir)
+    monkeypatch.setattr(os, "open", filtered_open)
+    monkeypatch.setattr(os, "fchmod", filtered_fchmod)
+
+    # Positive control: each wrapper refuses a special bit before it reaches the real call.
+    for call in (lambda: os.chmod(tmp_path, 0o2770), lambda: os.mkdir(tmp_path / "x", 0o2770),
+                 lambda: os.open(tmp_path / "y", os.O_CREAT, 0o2770), lambda: os.fchmod(1, 0o2770)):
+        with pytest.raises(PermissionError):
+            call()
+
+    loaded, _, _ = started(tmp_path, key)
+    assert owned_state(fake, loaded)["container"]
+    for path in (tmp_path / "run", tmp_path / "jobs", tmp_path / "run" / "relay" / "grants",
+                 tmp_path / "run" / "relay" / "state"):
+        assert stat.S_IMODE(path.stat().st_mode) & 0o6000 == 0
 
 
 # --- ACTUAL: only the default registry, the record and its CA bundle ----------------------------------------------------
@@ -370,9 +441,23 @@ def test_an_actual_configuration_for_a_record_outside_the_default_registry_is_re
     assert fake.calls == [] and not (tmp_path / "run").exists()
 
 
-def approve(monkeypatch: pytest.MonkeyPatch, value: dict[str, Any]) -> None:
-    """Test-only: patch the module registry, as the accepted ACTUAL tests do. No production caller can pass one."""
+def synthetic_definition(value: dict[str, Any]) -> RelayApplicationDefinition:
+    """A definition for a test-approved synthetic record, with a distinct id for each platform."""
+    host = composition._host_platform()
+    other = "linux/amd64" if host == "linux/arm64" else "linux/arm64"
+    return RelayApplicationDefinition(
+        record=Path(value["release_record"]["path"]).read_bytes(),
+        record_sha256=value["release_record"]["sha256"], price_snapshot=b"{}", response_format=None,
+        images=((host, IMAGE_ID), (other, OTHER_ID)), channel_root="synthetic-channel",
+        global_cap_usd=Decimal("2.00"), owner_cap_usd=Decimal("2.00"))
+
+
+def approve(monkeypatch: pytest.MonkeyPatch, value: dict[str, Any]) -> RelayApplicationDefinition:
+    """Test-only: patch the module registry and definitions, as the accepted ACTUAL tests do. No production caller can."""
+    definition = synthetic_definition(value)
     monkeypatch.setattr(relay_admission, "APPROVED_ACTUAL_RELEASES", frozenset({value["release_record"]["sha256"]}))
+    monkeypatch.setattr(composition, "RELEASE_DEFINITIONS", (definition,))
+    return definition
 
 
 @pytest.mark.parametrize("mismatch", ["record_bytes", "ca_named_hash", "ca_file_bytes", "settings_given"])
@@ -403,6 +488,70 @@ def test_an_approved_actual_record_starts_the_e1_topology_with_no_stand_in_and_h
     assert handoff.kind == "ACTUAL" and handoff.release == loaded.release.settings()
     assert handoff.release_record == (Path(value["release_record"]["path"]), value["release_record"]["sha256"])
     assert handoff.ca_bundle_sha256 == value["ca_bundle"]["sha256"]
+
+
+def test_an_actual_configuration_with_the_releases_pinned_id_for_this_host_is_accepted(
+        tmp_path: Path, key: Path, fake: FakeDocker, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    value = actual_config(tmp_path, key)
+    definition = approve(monkeypatch, value)
+    assert value["image"]["id"] == composition.image_for_platform(definition, composition._host_platform())
+    assert main([str(write(tmp_path, value))]) == 0
+    assert "kind ACTUAL" in capsys.readouterr().out
+    assert fake.calls == []
+
+
+def test_an_actual_configuration_with_the_other_platforms_pinned_id_is_refused(
+        tmp_path: Path, key: Path, fake: FakeDocker, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    value = actual_config(tmp_path, key)
+    definition = approve(monkeypatch, value)
+    host = composition._host_platform()
+    other = "linux/amd64" if host == "linux/arm64" else "linux/arm64"
+    value["image"]["id"] = composition.image_for_platform(definition, other)
+    assert main([str(write(tmp_path, value)), "start"]) == 2
+    error = capsys.readouterr().err
+    assert "pinned id" in error and "host platform" in error
+    assert fake.calls == [] and not (tmp_path / "run").exists()
+
+
+def test_an_actual_configuration_with_the_lost_amd64_id_is_refused_for_the_vps(
+        tmp_path: Path, key: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ca = tmp_path / "ca-bundle.pem"
+    ca.write_text("synthetic CA bundle")
+    actual = dataclasses.replace(relay_admission.load_actual_release(REAL_RECORD.read_bytes(), REAL_RECORD_SHA256),
+                                 ca_bundle_sha256=hashlib.sha256(ca.read_bytes()).hexdigest())
+    monkeypatch.setattr(relay_operator, "load_actual_release", lambda _raw, _sha: actual)
+    monkeypatch.setattr(relay_operator, "_host_platform", lambda: "linux/amd64")
+    value = config(tmp_path, key, kind="ACTUAL", release=None,
+                   release_record={"path": str(REAL_RECORD), "sha256": REAL_RECORD_SHA256},
+                   ca_bundle={"path": str(ca), "sha256": actual.ca_bundle_sha256},
+                   image={"reference": "edge-os-hermes-relay-job:lost", "id": LOST_AMD64_IMAGE})
+    with pytest.raises(OperatorRefused, match="pinned id for this host platform"):
+        load_config(json.dumps(value).encode())
+
+
+def test_an_actual_configuration_with_an_unlisted_image_id_is_refused(
+        tmp_path: Path, key: Path, fake: FakeDocker, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    value = actual_config(tmp_path, key)
+    approve(monkeypatch, value)
+    value["image"]["id"] = "sha256:" + "9" * 64
+    assert main([str(write(tmp_path, value)), "start"]) == 2
+    error = capsys.readouterr().err
+    assert "pinned id" in error and "host platform" in error
+    assert fake.calls == [] and not (tmp_path / "run").exists()
+
+
+def test_an_actual_configuration_without_a_code_owned_definition_is_refused(
+        tmp_path: Path, key: Path, fake: FakeDocker, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    value = actual_config(tmp_path, key)
+    approve(monkeypatch, value)
+    monkeypatch.setattr(composition, "RELEASE_DEFINITIONS", ())
+    assert main([str(write(tmp_path, value)), "start"]) == 2
+    assert "no code-owned release definition" in capsys.readouterr().err
+    assert fake.calls == [] and not (tmp_path / "run").exists()
 
 
 def test_stop_needs_neither_the_key_file_nor_a_still_approved_record(
