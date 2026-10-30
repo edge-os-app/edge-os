@@ -94,10 +94,11 @@ def test_the_deployment_files_hold_no_secret_value():
             assert not re.search(pattern, text), f"{path.name} matches {pattern}"
 
 
-def test_the_hosted_deployment_registry_is_unchanged():
+def test_the_hosted_deployment_registry_pins_the_approved_record():
     text = (support.REPO / "apps" / "api" / "src" / "edge_os_api" / "core" / "hosted_deployment.py").read_text(
         encoding="utf-8")
-    assert "APPROVED_HOSTED_DEPLOYMENTS: Mapping[str, str] = {}" in text
+    assert ('APPROVED_HOSTED_DEPLOYMENTS: Mapping[str, str] = '
+            '{"edgeos-fun-vps1": "e7a483e5b0d9a213c4bd4a6cd8447d6bfb66cf3c23f87126b4fd68e0ceaa39d7"}') in text
 
 
 HOSTED_RECORD_V2 = support.REPO / "docs" / "qualification" / "hosted-gates" / "HOSTED_RECORD_V2_RUNBOOK.md"

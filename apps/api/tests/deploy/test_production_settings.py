@@ -82,7 +82,8 @@ def test_a_forbidden_name_is_refused_without_its_value():
     assert "do-not-print" not in str(caught.value)
 
 
-def test_the_approval_registry_stays_empty():
+def test_the_approval_registry_pins_the_approved_record():
     from edge_os_api.core import hosted_deployment
 
-    assert dict(hosted_deployment.APPROVED_HOSTED_DEPLOYMENTS) == {}
+    assert dict(hosted_deployment.APPROVED_HOSTED_DEPLOYMENTS) == {
+        "edgeos-fun-vps1": "e7a483e5b0d9a213c4bd4a6cd8447d6bfb66cf3c23f87126b4fd68e0ceaa39d7"}
