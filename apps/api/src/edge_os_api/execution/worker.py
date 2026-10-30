@@ -437,6 +437,16 @@ class ConnectedExecution:
                     self._terminate(job, "DENIED", basis.refusal)
                     return
                 runtime = self._ports.controlled[agent.agent_id]
+                with self._factory() as session:
+                    prior_binding = session.execute(select(DecisionRow.inputs).where(
+                        DecisionRow.owner_id == job.owner_id, DecisionRow.agent_id == agent.agent_id,
+                        DecisionRow.wallet_id == agent.wallet_id, DecisionRow.network_id == agent.network_id,
+                        DecisionRow.decision_basis == OWNER_TRIGGER,
+                    ).order_by(DecisionRow.created_at).limit(1)).scalar_one_or_none()
+                if prior_binding is not None and prior_binding.get("binding_sha256") != runtime.binding.sha256:
+                    # A new permission on the same wallet never inherits the earlier owner-triggered decision.
+                    self._terminate(job, "DENIED", "OWNER_TRIGGER_PERMISSION_CHANGED")
+                    return
                 release_id = runtime.binding.release.content()["release_id"]
                 view = self._services.execution.authorize_owner_trigger(
                     job.owner_id, agent.revision, agent_id=agent.agent_id, wallet_id=agent.wallet_id,

@@ -95,7 +95,8 @@ def owner_triggered_agent(client, headers, tmp_path, clock, monkeypatch):
         signer_access=credentials, market_source=None,
         synthetic_bindings={binding.sha256: release_sha256(binding.release)})
     return type("Case", (), {"client":client, "headers":headers, "agent":agent_id, "http":http,
-        "acquired":acquired, "factory":factory, "runtime":runtime, "terms":terms})()
+        "acquired":acquired, "factory":factory, "runtime":runtime, "terms":terms,
+        "owner_id":agent.owner_id})()
 
 
 class SpyRuntime:
@@ -231,3 +232,50 @@ def test_a_restart_after_enqueue_reuses_the_saved_intent(owner_triggered, monkey
     job = run_job(case.client, scheduled.json())
     assert job["state"] == "SUBMITTED", job
     assert len(case.acquired) == 1
+
+
+def _change_permission(case, new_hash="sha256:" + "f" * 64):
+    """Simulate a changed adopted permission. The consent service refuses a changed review for one revision."""
+    from edge_os_api.consent.records import ConsentAdoptionRow
+
+    with case.factory() as session:
+        row = session.execute(select(ConsentAdoptionRow).where(
+            ConsentAdoptionRow.owner_id == case.owner_id)).scalars().first()
+        assert row is not None
+        row.consent_hash = new_hash
+        session.commit()
+
+
+def test_a_changed_permission_denies_a_queued_owner_trigger(owner_triggered, monkeypatch):
+    from edge_os_api.execution.worker import ConnectedExecution
+
+    case = owner_triggered
+    real = ConnectedExecution._submit
+    stopped = {"done": False}
+
+    def stop_once(self, job, agent, consent):
+        if not stopped["done"]:
+            stopped["done"] = True
+            raise RuntimeError("fake stop after enqueue")
+        return real(self, job, agent, consent)
+
+    monkeypatch.setattr(ConnectedExecution, "_submit", stop_once)
+    scheduled = ff.schedule(case.client, case.headers, case.agent, "changed-permission")
+    with pytest.raises(RuntimeError):
+        run_job(case.client, scheduled.json())
+    _change_permission(case)
+    job = run_job(case.client, scheduled.json())
+    assert (job["state"], job["outcome"], job["reason"]) == ("COMPLETED", "DENIED", "CONSENT_CHANGED"), job
+    assert case.acquired == []
+
+
+def test_a_new_permission_cannot_trigger_a_second_signature(owner_triggered):
+    case = owner_triggered
+    first = submit(case)
+    assert first["state"] == "SUBMITTED", first
+    _change_permission(case)
+    case.offset[0] += dt.timedelta(minutes=5)
+    second = submit(case)
+    assert second["outcome"] != "SUBMITTED_CONFIRMED", second
+    assert len(case.acquired) == 1
+    assert case.market.observe_calls == 0
