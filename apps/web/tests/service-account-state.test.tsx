@@ -60,7 +60,7 @@ describe("saved connected state (F1)", () => {
     render(<ServiceAccountState agentId="agent-a" />);
     expect(await screen.findByText("No connected-service state is saved for this agent.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Refresh saved state" }));
-    expect(await screen.findByRole("list", { name: "Projected records" })).toHaveTextContent("Agent: confirmed");
+    expect(await screen.findByRole("list", { name: "Projected records" })).toHaveTextContent("Agent: Confirmed");
     expect(mocks.load).toHaveBeenCalledTimes(2);
   });
 });

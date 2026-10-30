@@ -214,7 +214,8 @@ describe("P13 spot replay", () => {
     await user.click(screen.getByRole("button", { name: "Load saved replay" }));
 
     expect(await screen.findByRole("heading", { name: "Saved replay: unavailable" })).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent(reasonCode);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(document.body).toHaveTextContent(reasonCode);
     expect(screen.getByTestId("spot-replay-saved-inputs")).toHaveTextContent(expectedText);
     expect(mocks.create).not.toHaveBeenCalled();
   });

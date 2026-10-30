@@ -10,20 +10,10 @@ import { ResearchNansenReport } from "./ResearchNansenReport";
 import { declarationRelease, describeRelease, releaseBounds, sourceRelease, transportRelease } from "../lib/research-release";
 import { Details } from "./Details";
 import { plural } from "../lib/plural";
-import { EVIDENCE_CLASS, VERDICT, plain } from "../lib/labels";
+import { CLAIM_STATUS, DIRECTION, EVIDENCE_CLASS, PARTITION_ROLE, PROVIDER_USE, REPORT_OUTCOME, STATISTICAL_STATUS, VERDICT, plain } from "../lib/labels";
 import { deriveHistoryPlan, historyUnknowns } from "../lib/history-declaration";
 import type { HistoryDirection, HistoryPlan } from "../lib/history-declaration";
 
-const PARTITION_ROLE: Record<string, string> = {
-  DESCRIPTIVE: "Descriptive", TRAINING: "Training", VALIDATION: "Validation", HOLDOUT: "Holdout",
-};
-const REPORT_OUTCOME: Record<string, string> = {
-  SUPPORTED: "Supported", LIMITED: "Limited", CONTRADICTORY: "Contradictory", UNRESOLVED: "Unresolved",
-  UNAVAILABLE: "Unavailable", FAILED: "Failed", UNKNOWN: "Unknown",
-};
-const DIRECTION: Record<string, string> = {
-  DESCRIPTIVE: "Describe only", OUTPERFORM: "Triggered decisions outperform", UNDERPERFORM: "Triggered decisions underperform",
-};
 const ADOPTED_FIELDS = ["edge_spec", "question", "pool_binding", "variants", "direction", "horizons", "sources",
   "candidate_limit", "parameter_limit", "compute_limit", "period", "partitions", "permitted_access",
   "stopping_rule", "evaluation_plan", "budget_version", "optional_tools"];
@@ -304,7 +294,6 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
             
             <dt>Outcome labels read when saved</dt><dd>{selected.declaration.content.outcome_labels_read ? "Yes" : "No"}</dd>
             <dt>Provider queries</dt><dd>{selected.access_history[0]?.provider_queries ?? 0}</dd>
-            <dt>Saved access event</dt><dd>{selected.access_history[0]?.event ?? "Unavailable"}</dd>
           </dl>
           <Details summary="Details">
             <dl className="kv">
@@ -594,7 +583,7 @@ function JobReport({ report }: { report: InvestigationReport }) {
         <dt>Reasons</dt><dd>{content.outcome_reasons.length ? plural(content.outcome_reasons.length, "reason") : "None recorded"}</dd>
         <dt>Saved data</dt><dd className="mono" data-testid="history-report-dataset">{content.dataset_id}</dd>
         <dt>Data</dt><dd>{plain(EVIDENCE_CLASS, content.evidence_class, "unknown data label")}; verdict {plain(VERDICT, content.dataset_verdict.overall, "Unknown verdict")}</dd>
-        <dt>Statistics</dt><dd>{content.statistical_status.replaceAll("_", " ").toLowerCase()}; significance {content.claims.significance ?? "Unknown"}; trading permission {content.claims.capital_authority ?? "Unknown"}</dd>
+        <dt>Statistics</dt><dd>{plain(STATISTICAL_STATUS, content.statistical_status, "Unknown")}; significance {plain(CLAIM_STATUS, content.claims.significance, "Unknown")}; trading permission {plain(CLAIM_STATUS, content.claims.capital_authority, "Unknown")}</dd>
       </dl>
       {content.variants.length ? (
         <table>
@@ -842,8 +831,9 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
       {researchUnavailable
         ? <p className="status stop" data-testid="research-unavailable" role="status">Research is not available here yet. This server composes no research release, so a new study cannot start. Saved studies still open below; nothing is read or sent.</p>
         : actualSource
-        ? <p className="status stop">{`This server composes the approved actual operating release ${sourceRelease(actualSource)!.release_id}: its history source calls the named providers within the fixed limits. Results are descriptive and grant no trading permission.`}</p>
-        : <p className="status stop">Recorded responses only: every source here is a SYNTHETIC recording replayed locally. No provider is called and nothing here is observed market history. Results are descriptive and grant no trading permission.</p>}
+        ? <><p className="status stop">This server uses the approved real-MOE setup. Its history source calls the named providers within fixed limits. Results are descriptive and grant no trading permission.</p>
+            <Details summary="Details"><p className="mono">Locked research setup {sourceRelease(actualSource)!.release_id}</p></Details></>
+        : <p className="status stop">Saved recordings only: every source here is example data replayed on this server. No provider is called and nothing here is observed market history. Results are descriptive and grant no trading permission.</p>}
       {loadError ? <div className="status err" role="alert"><p>{loadError}</p><button className="btn btn-secondary" type="button" onClick={() => void loadAll()}>Retry</button></div> : null}
       {budget ? (
         <p data-testid="research-budget">Research budget available: {plural(budget.available.provider_requests, "provider request")}, {plural(budget.available.compute_seconds, "compute second")}. Reserved {budget.reserved.provider_requests}; unknown liability {budget.unknown_liability.provider_requests}.</p>
@@ -896,7 +886,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
                 <p className="mono">{job.events.map((event) => event.kind).join(" → ") || "none"}</p></Details>
               <p className="muted">Provider requests: reserved {job.budget.reserved?.provider_requests ?? 0}, consumed {job.budget.consumed?.provider_requests ?? 0}, released {job.budget.released?.provider_requests ?? 0}, unknown liability {job.budget.unknown_liability?.provider_requests ?? 0}.</p>
               {job.dataset?.transport ? <TransportFacts transport={job.dataset.transport} /> : null}
-              {job.dataset ? <p>Saved data {job.dataset.dataset_id.slice(0, 8)}: {plain(VERDICT, job.dataset.summary.verdict.overall, "Unknown verdict")}. Provider use: {job.dataset.summary.provider_requests_state.replaceAll("_", " ").toLowerCase()}.</p> : null}
+              {job.dataset ? <p>Saved data {job.dataset.dataset_id.slice(0, 8)}: {plain(VERDICT, job.dataset.summary.verdict.overall, "Unknown verdict")}. Provider use: {plain(PROVIDER_USE, job.dataset.summary.provider_requests_state, "Unknown")}.</p> : null}
               {job.dataset ? <Details summary="Details"><p className="mono">Data {job.dataset.dataset_id} · status {job.dataset.summary.status} · verdict {job.dataset.summary.verdict.overall} · binding {job.dataset.summary.binding_state}{job.dataset.summary.unavailable_states.length ? ` · ${job.dataset.summary.unavailable_states.join(", ")}` : ""} · provider use {job.dataset.summary.provider_requests_state}</p>
                 <p className="mono">Data label {job.dataset.summary.evidence_class} · {job.dataset.summary.content_label}; source {job.dataset.summary.source_id}</p></Details> : null}
               {job.dataset?.payload_binding && job.dataset.payload_binding.status !== "NOT_REQUIRED"

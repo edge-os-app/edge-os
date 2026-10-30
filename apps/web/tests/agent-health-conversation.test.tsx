@@ -69,7 +69,7 @@ describe("direct agent health", () => {
       "2026-10-13T09:06:12Z (execution_local.execution_queue q-1 updated_at)");
     expect(facts.getByTestId("health-read-at")).toHaveTextContent("2026-10-13T09:07:30Z");
     expect(facts.getByTestId("health-next")).toHaveTextContent("2026-10-13T09:10:00Z");
-    expect(facts.getByTestId("health-last-evaluation")).toHaveTextContent("signal");
+    expect(facts.getByTestId("health-last-evaluation")).toHaveTextContent("Signal");
     expect(facts.getByTestId("health-last-evaluation")).toHaveTextContent("collected Unknown");
     expect(facts.getByTestId("health-last-attempt")).toHaveTextContent("act-1");
     expect(facts.getByTestId("health-pending")).toHaveTextContent("act-9");
@@ -77,7 +77,8 @@ describe("direct agent health", () => {
     expect(facts.getByTestId("health-controls")).toHaveTextContent("Stop new entries");
     expect(facts.getByTestId("health-inventory")).toHaveTextContent("50000000000000000000");
     expect(facts.getByTestId("health-inventory")).toHaveTextContent("last saved 2026-10-13T09:06:12Z");
-    expect(facts.getByTestId("health-unknowns")).toHaveTextContent("native_gas_aggregate");
+    expect(facts.getByTestId("health-unknowns")).toHaveTextContent("Unknown values are listed in Details.");
+    expect(document.body).toHaveTextContent("native_gas_aggregate");
     expect(document.body).toHaveTextContent("sha256:first");
     expect(mocks.read).toHaveBeenCalledWith("agent-a");
   });

@@ -48,7 +48,7 @@ describe("recurring operation", () => {
     const start = await screen.findByRole("button", { name: "Start recurring operation" });
     expect(start).toBeDisabled();
     expect(screen.getByTestId("recurring-activate")).toHaveTextContent(HASH);
-    await userEvent.click(screen.getByRole("checkbox", { name: /I authorize repeated evaluations/ }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /I authorize repeated checks/ }));
     await userEvent.click(start);
     const [agent, key, hash] = mocks.activate.mock.calls[0];
     expect([agent, hash]).toEqual(["agent-a", HASH]);
@@ -63,7 +63,7 @@ describe("recurring operation", () => {
     expect(await screen.findByTestId("recurring-wait")).toHaveTextContent("Active. Next slot 2026-10-13T09:10:00Z.");
     expect(screen.getByTestId("recurring-missed")).toHaveTextContent("3 · latest 2026-10-13T08:50:00Z to 2026-10-13T09:00:00Z, not replayed");
     const slots = within(screen.getByTestId("recurring-occurrences"));
-    expect(slots.getByText(/signal · submitted confirmed/)).toBeDefined();
+    expect(slots.getByText(/Signal · submitted confirmed/)).toBeDefined();
     expect(screen.getByTestId("recurring-occurrences")).toHaveTextContent(
       "Inputs observed 2026-10-13T09:05:00Z, collected 2026-10-13T09:05:00Z, evaluated 2026-10-13T09:06:10Z.");
     expect(screen.getByTestId("recurring-occurrences")).toHaveTextContent("Submission Finished CONFIRMED, started 2026-10-13T09:06:11Z, completed 2026-10-13T09:06:12Z.");
@@ -89,7 +89,7 @@ describe("recurring operation", () => {
     await userEvent.click(await screen.findByRole("button", { name: "End recurring operation" }));
     expect(mocks.end).toHaveBeenCalledWith("agent-a");
     expect(await screen.findByTestId("recurring-wait")).toHaveTextContent("Ended: You ended recurring operation.");
-    expect(screen.getByTestId("recurring-next")).toHaveTextContent("None (OWNER_ENDED)");
+    expect(screen.getByTestId("recurring-next")).toHaveTextContent("None");
     expect(screen.queryByRole("button", { name: "End recurring operation" })).toBeNull();
   });
 
@@ -99,8 +99,8 @@ describe("recurring operation", () => {
       occurrences: [{ ...occurrence, state: "COMPLETED", outcome: "DENIED", reason: "DEPLOYMENT_ENDED:OWNER_ENDED",
         action_id: null, evaluation: null, submission: null }] }));
     render(<AgentRecurring agentId="agent-a" />);
-    expect(await screen.findByTestId("recurring-next")).toHaveTextContent("None (PRODUCER_NOT_SEEN)");
-    expect(screen.getByTestId("recurring-occurrences")).toHaveTextContent("Ended without an evaluation · denied");
+    expect(await screen.findByTestId("recurring-next")).toHaveTextContent("None");
+    expect(screen.getByTestId("recurring-occurrences")).toHaveTextContent("Ended without an evaluation · Denied");
   });
 
   it("refuses to offer activation when the terms are not qualified", async () => {

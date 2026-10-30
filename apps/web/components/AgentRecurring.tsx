@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
 import { financial, heldKey, releaseKey, type ConsentState, type RecurringProjection } from "../lib/financial";
 import { Details } from "./Details";
-import { ACTION_JOB_STATE, plain } from "../lib/labels";
+import { EVALUATION_OUTCOME, SUBMISSION_STATE, plain } from "../lib/labels";
 
 const RUNNABLE = new Set(["QUEUED", "DECIDED", "ENQUEUED"]);
 
@@ -13,10 +13,6 @@ const WAIT_COPY: Record<string, string> = {
   PRODUCER_NOT_SEEN: "Waiting: no scheduler pass was recorded in the last two slots. Nothing runs until one is.",
 };
 
-const SUBMISSION_STATE: Record<string, string> = {
-  PENDING: "Pending", TERMINAL: "Finished", CONFIRMED: "Confirmed", REVERTED: "Reverted",
-  UNKNOWN: "Unknown", FAILED: "Failed", SUBMITTED_UNKNOWN: "Outcome unknown",
-};
 const END_COPY: Record<string, string> = {
   OWNER_ENDED: "You ended recurring operation.",
   CONSENT_EXPIRED: "The adopted terms expired.",
@@ -29,11 +25,11 @@ const END_COPY: Record<string, string> = {
 function waitText(reason: string): string {
   if (reason.startsWith("ENDED:")) {
     const why = reason.slice(6);
-    return `Ended: ${END_COPY[why] ?? why}`;
+    return `Ended: ${END_COPY[why] ?? "Unknown reason"}`;
   }
   if (reason.startsWith("STOPPED:")) return `Stopped: ${reason.slice(8).replaceAll("_", " ").toLowerCase()} blocks matching work.`;
   if (reason.startsWith("REMOVAL:")) return "Removal denies every new submission for this wallet.";
-  return WAIT_COPY[reason] ?? reason;
+  return WAIT_COPY[reason] ?? "Unknown reason";
 }
 
 /** Recurring operation for one agent: the explicit authorization and the durable scheduler record. */
@@ -110,10 +106,11 @@ export function AgentRecurring({ agentId }: { agentId: string }) {
           : !qualified ? <><p data-testid="recurring-unavailable">Recurring operation is unavailable: {(consent?.activation.reason ?? "no qualification").replaceAll("_", " ").toLowerCase()}.</p>
               <Details summary="Details"><p className="mono">Activation reason {consent?.activation.reason ?? "none"} · state {consent?.activation.state ?? "none"}</p></Details></>
           : <div data-testid="recurring-activate">
-              <p>Terms <span className="mono">{adoption.consent_hash}</span> (adopted <time dateTime={adoption.created_at}>{adoption.created_at}</time>).
+              <p>Terms recorded (adopted <time dateTime={adoption.created_at}>{adoption.created_at}</time>). The hash is in Details.
                 Their cumulative limits, expiry and stops apply to every slot; starting again never resets them.</p>
               <label className="choice"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />{" "}
-                <span>I authorize repeated evaluations and the permitted actions under these exact terms while I am away.</span></label>
+                <span>I authorize repeated checks and the permitted actions under these exact terms while I am away.</span></label>
+              <Details summary="Details"><p className="mono">permission hash {adoption.consent_hash}</p></Details>
               <div className="btn-row">
                 <button className="btn btn-primary" style={{ minHeight: 44 }} type="button" disabled={!confirmed || busy || uncertain}
                   onClick={() => void write(() => financial.activateDeployment(agentId, heldKey("deployment", agentId), adoption.consent_hash),
@@ -125,14 +122,15 @@ export function AgentRecurring({ agentId }: { agentId: string }) {
         {deployment && <div data-testid="recurring-deployment" data-state={deployment.state}>
           <p data-testid="recurring-wait" role="status">{view?.wait_reason ? waitText(view.wait_reason)
             : `Active. Next slot ${producer?.next_due_slot ?? "not scheduled"}.`}</p>
+          {view?.wait_reason ? <Details summary="Details"><p className="mono">wait reason {view.wait_reason}</p></Details> : null}
           <dl className="kv">
             <dt>State</dt><dd>{deployment.state === "ACTIVE" ? "Active" : deployment.state === "ENDED" ? "Ended" : "Unknown state"}</dd>
             <dt>Started</dt><dd><time dateTime={deployment.activated_at}>{deployment.activated_at}</time></dd>
-            <dt>Terms</dt><dd className="mono">{deployment.identity.consent_hash}</dd>
+            <dt>Terms</dt><dd>in Details</dd>
             <dt>Execution version</dt><dd className="mono">{deployment.identity.execution_revision_id}</dd>
             <dt>Last scheduled run</dt><dd data-testid="recurring-last-tick">{producer?.last_tick_at ?? "None yet"}</dd>
             <dt>Last saved slot</dt><dd>{producer?.cursor_slot ?? "None yet"}</dd>
-            <dt>Next due slot</dt><dd data-testid="recurring-next">{producer?.next_due_slot ?? `None${producer?.no_next_reason ? ` (${producer.no_next_reason})` : ""}`}</dd>
+            <dt>Next due slot</dt><dd data-testid="recurring-next">{producer?.next_due_slot ?? "None"}</dd>
             <dt>Missed slots</dt><dd data-testid="recurring-missed">{producer?.missed_slots ?? 0}{producer?.missed_intervals.length
               ? ` · latest ${producer.missed_intervals[producer.missed_intervals.length - 1].from} to ${producer.missed_intervals[producer.missed_intervals.length - 1].to}, not replayed` : ""}</dd>
             <dt>Pending reconciliation</dt><dd data-testid="recurring-pending">{view?.pending_reconciliation?.length ? view.pending_reconciliation.join(", ") : "None"}</dd>
@@ -140,9 +138,9 @@ export function AgentRecurring({ agentId }: { agentId: string }) {
           <h3>Saved slots</h3>
           {!view?.occurrences?.length && <p className="muted">No slot evaluated yet.</p>}
           <ul data-testid="recurring-occurrences">{(view?.occurrences ?? []).map((item) => <li key={item.job_id}>
-            <strong>{item.decision_slot}</strong> · {item.evaluation ? `${item.evaluation.outcome.replaceAll("_", " ").toLowerCase()}${item.evaluation.reason ? " (reason in Details)" : ""}`
+            <strong>{item.decision_slot}</strong> · {item.evaluation ? `${plain(EVALUATION_OUTCOME, item.evaluation.outcome, "Unknown state")}${item.evaluation.reason ? " (reason in Details)" : ""}`
               : RUNNABLE.has(item.state) ? "Not evaluated yet" : "Ended without an evaluation"}
-            {item.outcome ? ` · ${item.outcome.replaceAll("_", " ").toLowerCase()}` : ""}{item.reason ? " · reason in Details" : ""}
+            {item.outcome ? ` · ${plain(EVALUATION_OUTCOME, item.outcome, "Unknown state")}` : ""}{item.reason ? " · reason in Details" : ""}
             <p className="muted">
               {item.evaluation ? `Inputs observed ${item.evaluation.inputs_observed_at ?? "unknown"}, collected ${item.evaluation.inputs_collected_at ?? "unknown"}, evaluated ${item.evaluation.evaluated_at}. ` : ""}
               {item.submission ? `Submission ${plain(SUBMISSION_STATE, item.submission.state, item.submission.state.replaceAll("_", " ").toLowerCase())}${item.submission.outcome ? ` ${item.submission.outcome}` : ""}, started ${item.submission.started_at}${item.submission.completed_at ? `, completed ${item.submission.completed_at}` : ", not completed"}.` : "No submission."}
@@ -154,7 +152,7 @@ export function AgentRecurring({ agentId }: { agentId: string }) {
               {item.evaluation ? ` · evaluation ${item.evaluation.outcome}${item.evaluation.reason ? ` (${item.evaluation.reason})` : ""} · data label ${item.evaluation.evidence_class ?? "none"}` : ""}
               {item.submission ? ` · submission ${item.submission.state}/${item.submission.outcome ?? "none"}` : ""}
             </li>)}
-            {view?.deployment ? <li className="mono">end reason {view.deployment.end_reason ?? "none"} · wait {view.wait_reason ?? "none"}</li> : null}
+            {view?.deployment ? <li className="mono">permission hash {view.deployment.identity.consent_hash} · end reason {view.deployment.end_reason ?? "none"} · wait {view.wait_reason ?? "none"} · no next reason {view.producer?.no_next_reason ?? "none"}</li> : null}
           </ul></Details>
           {deployment.state === "ACTIVE" && <div className="btn-row">
             <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={busy || uncertain}

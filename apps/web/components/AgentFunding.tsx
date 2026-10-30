@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
 import { financial, formatRaw, heldKey, peekKey, releaseKey, type FundingView } from "../lib/financial";
 import { FLOW_STATE, plain } from "../lib/labels";
+import { Details } from "./Details";
 
 const MODE_COPY: Record<string, string> = {
   fixture: "Example data. Deposits and holdings here are not a wallet, a transfer or chain evidence.",
@@ -148,7 +149,8 @@ export function AgentFunding({ agentId }: { agentId: string }) {
 
         <h3>Current holdings</h3>
         {view.current_holdings.state === "UNAVAILABLE"
-          ? <p data-testid="funding-holdings">Current holdings are unavailable{view.current_holdings.reason && view.current_holdings.reason !== "HOLDINGS_UNAVAILABLE" ? ` (${view.current_holdings.reason})` : ""}. No balance is shown or assumed.</p>
+          ? <><p data-testid="funding-holdings">Current holdings are unavailable. No balance is shown or assumed.</p>
+              <Details summary="Details"><p className="mono">reason {view.current_holdings.reason ?? "none"}</p></Details></>
           : <>{view.current_holdings.observed_at && <p className="muted" data-testid="funding-holdings-observation">
               Observed <time dateTime={view.current_holdings.observed_at}>{view.current_holdings.observed_at}</time>
               {view.current_holdings.block_number != null && ` at block ${view.current_holdings.block_number}`}

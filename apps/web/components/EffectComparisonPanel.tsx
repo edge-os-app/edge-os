@@ -135,15 +135,16 @@ export function EffectComparisonPanel({ intakeId, saved }: { intakeId: string; s
         <div className="table-scroll">
           <table className="records">
             <caption>Exact planned tests and example rules</caption>
-            <thead><tr><th>Test</th><th>Trial</th><th>Variant</th><th>Price rule</th><th>Quote-volume rule</th><th>Required inputs</th></tr></thead>
+            <thead><tr><th>Variant</th><th>Price rule</th><th>Quote-volume rule</th><th>Required inputs</th></tr></thead>
             <tbody>{body.bindings.map((binding) => <tr key={binding.evaluation_id}>
-              <td className="mono">{binding.evaluation_id}</td><td className="mono">{binding.trial_id}</td><td>{binding.variant_id}</td>
+              <td>{binding.variant_id}</td>
               <td><code>price &gt; 99 PRICE</code></td>
               <td><code>quote_volume &gt; {(binding.volume_expression as { args?: { value?: string }[] }).args?.[1]?.value} QUOTE</code></td>
               <td>price, quote_volume</td>
             </tr>)}</tbody>
           </table>
         </div>
+        <Details summary="Details"><ul>{body.bindings.map((binding) => <li className="mono" key={binding.evaluation_id}>test {binding.evaluation_id} · trial {binding.trial_id} · variant {binding.variant_id}</li>)}</ul></Details>
         <Details summary="Details"><p className="mono">Earlier rule {saved.declaration.record_id}</p><pre className="records-json">{JSON.stringify(body, null, 2)}</pre></Details>
         <label className="choice"><input type="checkbox" checked={adopted} onChange={(event) => setAdopted(event.target.checked)} />
           <span>I reviewed these tests, rules, required inputs, example data and schedule. Adopt this comparison before any result is read.</span>

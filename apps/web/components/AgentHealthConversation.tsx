@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { agentHealth, ApiError, type AgentHealth, type HealthExplanation, type HealthField, type HealthSourceRef } from "../lib/api";
 import { Details } from "./Details";
-import { REMOVAL_STATE, plain } from "../lib/labels";
+import { EVALUATION_OUTCOME, REMOVAL_STATE, plain } from "../lib/labels";
 
 /** P31 LOCAL. The direct view and the conversation read one dated, read-only health snapshot of the newest deployment. */
 
@@ -39,7 +39,7 @@ function Facts({ health }: { health: AgentHealth }) {
       <dd>{health.deployment ? `${health.deployment.state === "ACTIVE" ? "Active" : health.deployment.state === "ENDED" ? "Ended" : "Unknown state"}${health.deployment.end_reason ? ` (reason in Details, ${health.deployment.ended_at})` : ""}` : "No recurring operation saved"}</dd>
       <dt>Last check</dt>
       <dd data-testid="health-last-evaluation">{evaluation.state === "KNOWN" && evaluation.value.evaluation
-        ? `Slot ${evaluation.value.decision_slot}: ${evaluation.value.evaluation.outcome.replaceAll("_", " ").toLowerCase()}${evaluation.value.evaluation.reason ? " (reason in Details)" : ""}; inputs observed ${show(evaluation.value.evaluation.inputs_observed_at)}, collected ${show(evaluation.value.evaluation.inputs_collected_at)}, evaluated ${show(evaluation.value.evaluation.evaluated_at)}. A check is not a trade.`
+        ? `Slot ${evaluation.value.decision_slot}: ${plain(EVALUATION_OUTCOME, evaluation.value.evaluation.outcome, "Unknown state")}${evaluation.value.evaluation.reason ? " (reason in Details)" : ""}; inputs observed ${show(evaluation.value.evaluation.inputs_observed_at)}, collected ${show(evaluation.value.evaluation.inputs_collected_at)}, evaluated ${show(evaluation.value.evaluation.evaluated_at)}. A check is not a trade.`
         : show(evaluation)}</dd>
       <dt>Last trade try</dt>
       <dd data-testid="health-last-attempt">{attempt.state === "KNOWN" && attempt.value.submission
@@ -49,7 +49,7 @@ function Facts({ health }: { health: AgentHealth }) {
       <dt>Last scheduled run</dt><dd>{show(health.producer.last_tick_at)}</dd>
       <dt>Wait reason</dt><dd data-testid="health-wait">{wait.state === "KNOWN" && wait.value === null ? "None" : show(wait)}</dd>
       <dt>Pending reconciliation</dt>
-      <dd data-testid="health-pending">{"action_ids" in canonical ? (canonical.action_ids.join(", ") || "None") + " (producer unsettled queue)" : `Unknown (${canonical.reason})`}</dd>
+      <dd data-testid="health-pending">{"action_ids" in canonical ? (canonical.action_ids.join(", ") || "None") + " (producer unsettled queue)" : "Unknown"}</dd>
       <dt>Separate warnings</dt>
       <dd data-testid="health-warnings">{`${recovery.kind}: ${recovery.action_ids.join(", ") || "none"}; ${monitoring.kind}: ${monitoring.pending ? "present" : "not present"}`}</dd>
       <dt>Stops and removal</dt>
@@ -59,13 +59,15 @@ function Facts({ health }: { health: AgentHealth }) {
       <dd data-testid="health-inventory">{health.residual_inventory.map((p) => `${p.position_id.slice(0, 8)} ${p.position_state === "OPEN" ? "open" : p.position_state === "CLOSED" ? "closed" : "unknown state"}: ${p.quantity.raw} raw ${p.quantity.asset_id}, last saved ${show(p.updated_at)}`).join("; ") || "No saved position"}</dd>
       <dt>Saved version changed</dt><dd>{show(health.identity.changed)}</dd>
       <dt>Unknown values</dt>
-      <dd data-testid="health-unknowns">{health.unknown_inputs.map((u) => `${u.field}: ${u.reason}`).join("; ")}</dd>
+      <dd data-testid="health-unknowns">Unknown values are listed in Details.</dd>
       <dt>Snapshot</dt><dd className="mono" data-testid="health-digest">in Details</dd>
     </dl>
     <Details summary="Details"><pre className="mono" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify({
       snapshot_digest: health.snapshot_digest, as_of: health.as_of, read_at: health.read_at,
-      deployment: health.deployment, last_evaluation: health.last_evaluation, last_trade_attempt: health.last_trade_attempt,
-      controls: health.controls, unknown_inputs: health.unknown_inputs, residual_inventory: health.residual_inventory,
+      deployment: health.deployment, identity: health.identity, producer: health.producer, wait_reason: health.wait_reason,
+      last_evaluation: health.last_evaluation, last_trade_attempt: health.last_trade_attempt,
+      controls: health.controls, pending_reconciliation: health.pending_reconciliation,
+      unknown_inputs: health.unknown_inputs, residual_inventory: health.residual_inventory,
     }, null, 2)}</pre></Details>
     </>
   );

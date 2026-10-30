@@ -152,7 +152,7 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
             <dt>Base asset</dt><dd className="mono">{String(binding.base_asset)} ({String(binding.base_decimals)} decimals)</dd>
             <dt>Quote asset</dt><dd className="mono">{String(binding.quote_asset)} ({String(binding.quote_decimals)} decimals)</dd>
             <dt>Market direction</dt><dd>{String(binding.orientation)}</dd>
-            <dt>Format versions</dt><dd>{String(binding.event_schema_version)}; {String(binding.amount_conversion_version)}; {String(binding.data_route)}</dd>
+            <dt>Format versions</dt><dd>{String(binding.event_schema_version)}; {String(binding.amount_conversion_version)}</dd>
             <dt>Evidence check</dt><dd>{plain(EVIDENCE_CLASS, String(binding.evidence_class), "unknown data label")}</dd>
             <dt>Delivery check</dt><dd data-testid="market-adoption-binding">The saved data {chosen.payload_binding?.status === "PASS" ? "matches the recorded delivery. It does not prove where the data came from." : "does not match the recorded delivery. Do not use it as a market."}</dd>
             <dt>Quote unit</dt><dd className="mono">{chosen.quote_unit}</dd>

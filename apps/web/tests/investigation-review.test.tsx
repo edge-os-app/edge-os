@@ -546,7 +546,7 @@ describe("recorded-history investigation", () => {
     mocks.jobs.mockResolvedValue({ jobs: [job("REPORTED", { report })] });
     await openSaved(user);
     expect(await screen.findByText("Saved report: Contradictory")).toBeInTheDocument();
-    expect(screen.getByText(/significance NOT_CLAIMED/)).toBeInTheDocument();
+    expect(screen.getByText(/significance not claimed/)).toBeInTheDocument();
     expect(screen.getByText(/Not read: Holdout period/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry as a new job" })).toBeNull();
   });
@@ -691,7 +691,7 @@ describe("an approved ACTUAL release on screen", () => {
     const select = screen.getByLabelText("Saved source");
     const options = Array.from(select.querySelectorAll("option")).map((item) => item.textContent);
     expect(options).toEqual(["Choose a saved source", MOE_SOURCE.title]);
-    expect(await screen.findByText(/This server composes the approved actual operating release actual-moe-history-nansen-20261022\/1/)).toBeInTheDocument();
+    expect(await screen.findByText(/This server uses the approved real-MOE setup/)).toBeInTheDocument();
     expect(screen.queryByText(/Every other source is a SYNTHETIC recording/)).not.toBeInTheDocument();
   });
 

@@ -131,8 +131,8 @@ export function deriveHistoryPlan(input: {
 /** The limits text the declaration declares. A synthetic recording measures no real pool; an actual source names it. */
 export function historyUnknowns(evidenceClass: string, releaseId: string | null): string[] {
   if (evidenceClass === "PROVIDER_ACTUAL") {
-    return [`Saved responses come from the named providers under the locked research setup`
-      + `${releaseId ? "" : ""}. Costs are not modelled; the window is short.`];
+    return ["Saved responses come from the named providers under the locked research setup. "
+      + "Costs are not modelled; the window is short."];
   }
   return ["Saved responses are example data; no real market behaviour is measured."];
 }

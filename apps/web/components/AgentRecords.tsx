@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { agentContextApi, formatAmount, type AccountViewRecord, type AgentContextRecord } from "../lib/account-views";
+import { PERMISSION_STATE, RECORD_STATUS, plain } from "../lib/labels";
 import { AgentContext } from "./AgentContext";
 import { WalletSetup } from "./WalletSetup";
 import { plural } from "../lib/plural";
@@ -42,7 +43,7 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
         <dl className="kv" style={{ gridTemplateColumns: "minmax(0, 1fr) minmax(0, 2fr)" }}>
           <dt>Owner, agent, wallet and network</dt><dd>{unmatchedSource.owner_id} · {unmatchedSource.content.agent_id} · {unmatchedSource.content.wallet_id} · {unmatchedSource.content.network_id}</dd>
           <dt>Saved version and permission</dt><dd>{unmatchedSource.content.strategy_revision ?? "Not recorded"} · {unmatchedSource.content.mandate_id ?? "Not recorded"}</dd>
-          <dt>Status / updated</dt><dd>{unmatchedSource.content.status} · {unmatchedSource.content.updated_at}</dd>
+          <dt>Status and updated</dt><dd>{plain(RECORD_STATUS, unmatchedSource.content.status, "Unknown")} · {unmatchedSource.content.updated_at}</dd>
           {unmatchedSource.content.record_kind === "MONITORING" && <>
             <dt>Health / evaluations</dt><dd>{unmatchedSource.content.health ?? "Unknown"} · {unmatchedSource.content.evaluation_attempts ?? "Unknown"} attempts / {unmatchedSource.content.evaluation_completions ?? "Unknown"} completions</dd>
             <dt>Inputs / next work</dt><dd>{unmatchedSource.content.input_updated_at ?? "Input time not recorded"} · {unmatchedSource.content.next_work ?? "Not recorded"}</dd>
@@ -78,13 +79,13 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
         return <section className="panel" id={`record-${record_id}`} key={record_id}>
           <h2>{content.agent_id}</h2>
           <p><strong>Wallet.</strong> {content.wallet_id} · {content.network_id}</p>
-          <p><strong>Agent state.</strong> {content.status === "RUNNING" ? "Running" : content.status === "STOPPED" ? "Stopped" : content.status === "BLOCKED" ? "Blocked" : "Unknown state"} · {content.health ? "health recorded" : "health unknown"} · example record</p>
+          <p><strong>Agent state.</strong> {plain(RECORD_STATUS, content.status, "Unknown")} · {content.health ? "health recorded" : "health unknown"} · example record</p>
           <p><strong>Wallet balance.</strong> {content.wallet_balance ? `${formatAmount(content.wallet_balance)} ${content.wallet_balance.asset_id}` : "Unknown"}</p>
           <p><strong>Available.</strong> {content.available_balance ? `${formatAmount(content.available_balance)} ${content.available_balance.asset_id}` : "Unknown"}</p>
           <p><strong>Reserved.</strong> {content.reserved_amount ? `${formatAmount(content.reserved_amount)} ${content.reserved_amount.asset_id}` : "Unknown"}</p>
           <p><strong>Remaining authority.</strong> {content.remaining_authority ? `${formatAmount(content.remaining_authority)} ${content.remaining_authority.asset_id}` : "Unknown"}</p>
           <p><strong>Network gas.</strong> {content.native_gas ? `${formatAmount(content.native_gas)} ${content.native_gas.asset_id}` : "Unknown"}</p>
-          <p><strong>Permission.</strong> {content.permission_state ?? "Unknown"}. Account summaries do not pool balances or permission.</p>
+          <p><strong>Permission.</strong> {plain(PERMISSION_STATE, content.permission_state, "Unknown")}. Account summaries do not pool balances or permission.</p>
           <p><strong>Updated.</strong> <time dateTime={content.updated_at}>{content.updated_at}</time></p>
           <div className="btn-row">
             <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={() => setSelected(content.agent_id)}>
@@ -133,7 +134,7 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
           {!monitoring.length && <p>No saved monitoring records.</p>}
           <ul>{monitoring.map((item) => (
             <li id={`record-${item.record_id}`} key={item.record_id}>
-              <strong>{item.content.status}</strong> · {item.content.health ?? "health unknown"}
+              <strong>{plain(RECORD_STATUS, item.content.status, "Unknown")}</strong> · {item.content.health ? "health recorded" : "health unknown"}
               {` · ${plural(item.content.evaluation_attempts ?? 0, "attempt")}, ${item.content.evaluation_completions ?? 0} completed`}
               {item.content.input_updated_at && <> · inputs updated <time dateTime={item.content.input_updated_at}>{item.content.input_updated_at}</time></>}
               {` · record updated ${item.content.updated_at}`}

@@ -66,7 +66,7 @@ describe("P09 effect comparison", () => {
     render(<EffectComparisonPanel intakeId="request-1" saved={saved} />);
     await user.click(await screen.findByRole("button", { name: "Load the example comparison" }));
     expect(document.body).toHaveTextContent(saved.declaration.record_id);
-    expect(screen.getByText("33333333-3333-4333-8333-333333333333")).toBeInTheDocument();
+    expect(document.body).toHaveTextContent("33333333-3333-4333-8333-333333333333");
     expect(screen.getByText(/This example was written/)).toBeInTheDocument();
     expect(screen.getByText(/one fixed rule across comparisons/)).toBeInTheDocument();
     expect(screen.getByText(/four opportunities per evaluation/)).toBeInTheDocument();

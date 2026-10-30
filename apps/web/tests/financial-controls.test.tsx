@@ -422,7 +422,7 @@ describe("original transaction and observed holdings (ORIGINAL-LOCAL)", () => {
       evidence_class: "AUTHORED_RECORDING", assets: [] } }));
     render(<AgentFunding agentId="agent-a" />);
     expect(await screen.findByTestId("funding-holdings")).toHaveTextContent(
-      "Current holdings are unavailable (HOLDINGS_STALE). No balance is shown or assumed.");
+      "Current holdings are unavailable. No balance is shown or assumed.");
   });
 });
 
@@ -495,7 +495,7 @@ describe("controlled action propagation", () => {
     expect(screen.getByText(/qualified-current-source/)).toBeInTheDocument();
     expect(screen.getByTestId("action-original")).not.toHaveTextContent(/authored recorded responses/i);
     expect(screen.getByTestId("action-receipt-evidence")).toHaveTextContent("0.0006");
-    expect(screen.getByTestId("action-receipt-evidence")).toHaveTextContent("finalized:block-a");
+    expect(document.body).toHaveTextContent("finalized:block-a");
   });
 
   it("keeps controlled holdings separate from unqualified deposit references", async () => {

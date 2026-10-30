@@ -4,7 +4,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
 import { financial, formatRaw, type ConsentReview, type ConsentState, type ReviewedTerms } from "../lib/financial";
 import { Details } from "./Details";
-import { EVIDENCE_CLASS, plain } from "../lib/labels";
+import { CLAIM_STATUS, EVIDENCE_CLASS, plain } from "../lib/labels";
 
 const ACTIVATION_COPY: Record<string, string> = {
   ACTIVATION_UNAVAILABLE: "No approved trade route exists in this build. The adopted permission stays inactive and no action can run.",
@@ -132,15 +132,16 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
             ? `Example qualification (${plain(EVIDENCE_CLASS, activation.evidence_class, "unknown data label")}). Example actions can run under these exact terms; this is not live authority.`
             : activation?.state === "CONTROLLED_QUALIFIED"
             ? `One controlled action is qualified (${plain(EVIDENCE_CLASS, activation.evidence_class, "unknown data label")}) under its exact setup. Exit and recurring execution are unavailable.`
-            : ACTIVATION_COPY[activation?.reason ?? ""] ?? (activation?.state === "UNAVAILABLE" ? ACTIVATION_COPY.ACTIVATION_UNAVAILABLE : `Unavailable: ${activation?.reason}`)}
+            : ACTIVATION_COPY[activation?.reason ?? ""] ?? (activation?.state === "UNAVAILABLE" ? ACTIVATION_COPY.ACTIVATION_UNAVAILABLE : "Unavailable. The reason is in Details.")}
         </p>
+        {activation ? <Details summary="Details"><p className="mono">state {activation.state} · reason {activation.reason ?? "none"} · data label {activation.evidence_class ?? "none"}</p></Details> : null}
         {controlledMode && !controlled && <p>No prepared trade is available. You cannot review terms yet.</p>}
         {controlled && <div data-testid="controlled-action-terms">
           <h3>One controlled entry</h3>
           <p>These are prepared permission terms. The activation status above decides whether they can run.</p>
           <dl className="kv">
-            <dt>Input, raw</dt><dd>{controlled.input.raw} <span className="mono">{controlled.input.asset_id}</span></dd>
-            <dt>Minimum output, raw</dt><dd>{controlled.minimum_output.raw} <span className="mono">{controlled.minimum_output.asset_id}</span></dd>
+            <dt>Input (base units)</dt><dd>{controlled.input.raw} <span className="mono">{controlled.input.asset_id}</span></dd>
+            <dt>Minimum output (base units)</dt><dd>{controlled.minimum_output.raw} <span className="mono">{controlled.minimum_output.asset_id}</span></dd>
             <dt>Recipient</dt><dd className="mono">{controlled.recipient}</dd>
             <dt>Route</dt><dd className="mono">{controlled.entrypoint} · {controlled.method}</dd>
             <dt>Allowance, raw</dt><dd>{controlled.allowance_raw}</dd>
@@ -149,8 +150,7 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
             <dt>Fee collector</dt><dd className="mono">{controlled.fees.fee_collector_address}</dd>
             <dt>Referrer</dt><dd className="mono">{controlled.fees.referrer_address}</dd>
             <dt>Expiry</dt><dd><time dateTime={controlled.expires_at}>{controlled.expires_at}</time></dd>
-            <dt>Signer and policy</dt><dd className="mono">{controlled.signer_id} · {controlled.policy_id} · {controlled.policy_content_sha256}</dd>
-            <dt>Locked research setup</dt><dd>in Details</dd>
+                        <dt>Locked research setup</dt><dd>in Details</dd>
           </dl>
           <Details summary="Details"><dl className="kv">
             <dt>Setup ID and hash</dt><dd className="mono">{controlled.release_id} · {controlled.release_sha256}</dd>
@@ -160,7 +160,7 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
             <dt>Fee collector and referrer</dt><dd className="mono">{controlled.fees.fee_collector_address} · {controlled.fees.referrer_address}</dd>
           </dl></Details>
           <div data-testid="release-limits">
-            <h4>Release limits</h4>
+            <h4>Setup limits</h4>
             <dl className="kv">
               <dt>Fixed input</dt><dd>{formatRaw(controlled.input.raw, controlled.input.decimals)} <span className="mono">{controlled.input.asset_id}</span></dd>
               <dt>Minimum output</dt><dd>{formatRaw(controlled.minimum_output.raw, controlled.minimum_output.decimals)} <span className="mono">{controlled.minimum_output.asset_id}</span></dd>
@@ -211,9 +211,10 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
             {busy ? "Adopting…" : "Adopt these exact terms (inactive)"}
           </button>
         </div>}
-        {state.adoptions.map((adoption) => <p key={adoption.adoption_id} data-testid="consent-adopted">
-          Adopted, status {adoption.status.toLowerCase()} · permission <span className="mono">{adoption.consent_hash}</span>
-        </p>)}
+        {state.adoptions.map((adoption) => <Fragment key={adoption.adoption_id}>
+          <p data-testid="consent-adopted">Adopted, status {adoption.status.toLowerCase()} · permission recorded. The hash is in Details.</p>
+          <Details summary="Details"><p className="mono">{adoption.consent_hash}</p></Details>
+        </Fragment>)}
       </>}
     </section>
   );
@@ -225,8 +226,7 @@ function ReviewSummary({ review }: { review: ConsentReview }) {
     <div data-testid="consent-review">
       <h3>Reviewed permission</h3>
       <dl className="kv">
-        <dt>Review hash</dt><dd className="mono">{review.review_hash}</dd>
-        <dt>Purpose</dt><dd>{terms.operating_purpose === "TRIAL" ? "Trial" : terms.operating_purpose === "ONGOING" ? "Ongoing" : "Unknown"}{terms.trial_objective ? ` — ${terms.trial_objective}` : ""}</dd>
+                <dt>Purpose</dt><dd>{terms.operating_purpose === "TRIAL" ? "Trial" : terms.operating_purpose === "ONGOING" ? "Ongoing" : "Unknown"}{terms.trial_objective ? ` — ${terms.trial_objective}` : ""}</dd>
         {terms.allocation.map((amount) => <Fragment key={`alloc-${amount.asset_id}`}><dt>Allocation</dt>
           <dd>{formatRaw(amount.raw, amount.decimals)} <span className="mono">{amount.asset_id}</span></dd></Fragment>)}
         {terms.allowances.map((term) => <Fragment key={term.name}><dt>{term.name}</dt>
@@ -236,11 +236,12 @@ function ReviewSummary({ review }: { review: ConsentReview }) {
         <dt>Expiry</dt><dd><time dateTime={terms.expiry}>{terms.expiry}</time></dd>
         <dt>Actions</dt><dd>{terms.supported_actions.join(", ")}</dd>
         <dt>Route</dt><dd>One fixed trade route (not approved)</dd>
-        <dt>Evidence</dt><dd>{terms.evidence.status === "HYPOTHESIS" ? "Hypothesis" : terms.evidence.status.replaceAll("_", " ").toLowerCase()}</dd>
+        <dt>Evidence</dt><dd>{terms.evidence.status === "HYPOTHESIS" ? "Hypothesis" : plain(CLAIM_STATUS, terms.evidence.status, "Unknown")}</dd>
         <dt>Stop effects</dt><dd>{terms.stop_effects.join("; ")}</dd>
       </dl>
       {review.content.unknowns && review.content.unknowns.length > 0 &&
         <p className="muted">Unknown at review: {review.content.unknowns.join(", ")}</p>}
+      <Details summary="Details"><p className="mono">review hash {review.review_hash} · route {terms.route.adapter} · evidence code {terms.evidence.status}</p></Details>
     </div>
   );
 }
