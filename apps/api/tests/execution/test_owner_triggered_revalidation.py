@@ -137,3 +137,11 @@ def test_a_rule_decision_without_inputs_is_refused(execution_service, fresh_owne
     assert result.admission_status == "ADMITTED"
     tick = _tick(execution_service, fresh_owner, revision, approval, context, result.intent.action_id)
     assert (tick.status, tick.reason) == ("REVALIDATION_DENIED", "INPUTS_MISSING")
+
+
+def test_a_stale_context_denies_the_owner_basis(execution_service, fresh_owner) -> None:
+    revision = frozen_entry_exit()
+    action_id, approval, _context = _owner_entry(execution_service, fresh_owner, revision)
+    stale = scoped_context(checked_at="2026-01-01T00:00:00Z")
+    tick = _tick(execution_service, fresh_owner, revision, approval, stale, action_id)
+    assert (tick.status, tick.reason) == ("REVALIDATION_DENIED", "STALE_CONTEXT")
