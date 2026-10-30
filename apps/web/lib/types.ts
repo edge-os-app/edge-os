@@ -81,6 +81,10 @@ export interface Question {
 }
 
 export type AttemptStatus = "STARTED" | "COMPLETED" | "TRUNCATED" | "PROVIDER_FAILED" | "TIMED_OUT" | "INTERRUPTED" | "UNKNOWN";
+/** One attempt's spend as the ledger recorded it. Only a SETTLED charge is a cost; any other charge is a held reservation. */
+export interface AttemptSpend { state: string | null; charge_usd: string | null }
+/** The request's model cost from the API: the exact sum of settled charges, and how many attempts have no known cost. */
+export interface ModelCost { settled_usd: string | null; settled_calls: number; unknown_calls: number }
 export interface AttemptUsage { source: "PROVIDER_REPORTED" | "UNKNOWN"; input_tokens: number | null; output_tokens: number | null; total_tokens: number | null }
 
 /** One recorded interpreter attempt. It holds structured values and hashes, never the generated text. */
@@ -100,6 +104,7 @@ export interface Attempt {
   parse_result: string | null;
   error_class: string | null;
   revision_id: string | null;
+  spend: AttemptSpend;
   identity: {
     prompt_version: string; system_prompt_sha256: string; task_sha256: string; response_shape_sha256: string;
     manifest_sha256: string; config_sha256: string; runtime_label: string; model: string | null; route: string | null;
@@ -139,6 +144,7 @@ export interface Bundle {
   clarifications: Envelope<Clarification>[];
   outcomes: { interpretation_revision_id: string | null; record: Envelope<Outcome> }[];
   attempts: Attempt[];
+  model_cost: ModelCost | null;
   late_results: LateResult[];
   drafts: Envelope<{ draft_id: string; strategy_id: string; source_syntax: Strategy; interpretation_revision_id: string }>[];
   publications: Envelope<Record<string, unknown>>[];

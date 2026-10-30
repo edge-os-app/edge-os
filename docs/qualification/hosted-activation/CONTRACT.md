@@ -65,7 +65,7 @@ link, of at most 64 KiB.
     "h8_provider_spend_cap": {"path": "docs/qualification/...", "sha256": "<64 hex>"},
     "h10_backup_restore": {"path": "docs/qualification/...", "sha256": "<64 hex>"}
   },
-  "image_digests": {"api": "sha256:<64 hex>", "worker": "sha256:<64 hex>"},
+  "image_digests": {"postgres": "sha256:<64 hex>"},
   "valid_from": "2026-10-21T00:00:00Z",
   "valid_until": "2026-11-21T00:00:00Z"
 }
@@ -73,7 +73,7 @@ link, of at most 64 KiB.
 
 | Field | Rule |
 |---|---|
-| `schema_version` | Exactly `edge-os.hosted-deployment/1`. |
+| `schema_version` | `edge-os.hosted-deployment/1`, or `edge-os.hosted-deployment/2` (the v1 fields plus `execution_release`). |
 | `deployment_id` | 1 to 64 characters: letters, digits, `.`, `_`, `:`, `-`; must equal the named id. |
 | `public_origins` | 1 to 20 unique `https` origins. No wildcard, path, query, fragment or user information. |
 | `cors_origins` | 1 to 20 unique `https` origins; each must also be a public origin. Must equal the running `cors_origins` exactly. |
@@ -82,15 +82,16 @@ link, of at most 64 KiB.
 | `hermes_relay.record_sha256` | The relay release record's SHA-256, 64 lower-case hex characters. |
 | `research_release.release_id` | A registered operating release id. |
 | `research_release.sha256` | The operating release SHA-256, 64 lower-case hex characters. |
+| `execution_release` | Version 2 only, and required there: exactly `release_id` and `sha256` (64 lower-case hex). Absent from version 1. |
 | `host_gates` | Exactly the four named gates. Each has exactly `path` and `sha256`. The path starts with `docs/qualification/`; the hash is 64 lower-case hex characters. |
-| `image_digests` | 1 to 20 entries. Each key is 1 to 64 lower-case characters; each value is a Docker image id `sha256:<64 hex>`, not a tag or a registry digest reference. |
+| `image_digests` | 1 to 20 entries. Each key is 1 to 64 lower-case characters; each value is a Docker image id `sha256:<64 hex>`, not a tag or a registry digest reference. Pin only an image that does not carry the registry hash: a source-built image, including the API image, receives the registry line, so its image id depends on the record hash and cannot appear in the record. The `api` and `execution-worker` images are therefore omitted; at least one independent image id is still required. |
 | `valid_from`, `valid_until` | UTC whole seconds, `YYYY-MM-DDTHH:MM:SSZ`. `valid_from < valid_until`; the start-up time must be inside the window. |
 
 A reference is a path plus SHA-256. A free-text claim is not a reference.
 
 ## 5. What a correct record admits
 
-One production deployment record admits exactly three parts.
+One production deployment record admits exactly three parts; a version 2 record can also admit controlled execution (§5.4).
 
 ### 5.1 The `hermes_local` interpreter
 
@@ -113,9 +114,37 @@ inherits this rule.
 `server_research_runtime` (`core/research/released_runtime_bootstrap.py`) composes the code-owned approved ACTUAL
 release for both entry points: the API (`create_app`) and the investigation worker (`investigation_jobs.main`). In
 production it requires an approved deployment record whose `research_release.release_id` and `research_release.sha256`
-equal the composed release's exact id and SHA-256. Without a record, no approved research release composes.
+equal the composed release's exact id and SHA-256.
+
+A production configuration that names no record (both `EDGE_OS_HOSTED_DEPLOYMENT_ID` and
+`EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH` are unset) composes no research release and starts. Research is then
+unavailable: the server logs one line that research is off because no hosted deployment is named, saved-result reads,
+sign-in and every other API route keep working, and a research job request is refused on the existing unavailable path
+(`operating_release_unavailable`, or `history_source_unavailable` for a recorded source). Nothing runs and no
+credential is read.
+
+A named record still refuses startup exactly as before when it is incomplete, unapproved, unreadable, invalid, bound to
+other origins or another TLS mode, outside its validity window, or does not name the exact research release. The
+Hermes relay application keeps its production refusal without a record.
 
 `local` and `test` keep the existing composition and read no deployment record.
+
+### 5.4 Controlled execution (record version 2 only)
+
+A version 1 record binds no execution release and grants no execution. In production, `Settings.validate_rules`
+admits `execution_mode=controlled` only when the named registered record is version 2 and its `execution_release`
+equals the code-owned `APPROVED_ACTUAL_RELEASES` entry (`execution/operating_release.py`) by exact id and SHA-256.
+Every other case is refused with a named reason. `EDGE_OS_PRIVY_APP_SECRET` stays refused in every process
+environment. See `docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md`.
+
+### 5.5 The loopback database route (any record version)
+
+Production refuses a loopback database host, except `127.0.0.1` when a registered record is named and the URL's
+`sslmode` equals the record's `database_tls_mode` (builder decision, option A, 2026-10-23). This route is for the
+host research worker. Only that literal host qualifies. Every unregistered case keeps the refusal, and so does every
+other loopback, unspecified or multi-host form, record or not: a host-less URL, a multi-host list, `localhost` or
+`*.localhost` in any case with or without a trailing dot, the rest of `127.0.0.0/8` in any IPv4 spelling, `[::1]`,
+IPv4-mapped loopback, `0.0.0.0` and `[::]`. The check uses no DNS lookup.
 
 ## 6. Refusal codes
 
@@ -143,7 +172,8 @@ Errors name a code, never a configured value.
 A matching record does not widen any of these:
 
 - `wallet_provider` must stay `unavailable`; the fixture provider is refused.
-- `execution_mode` must stay `unavailable`; fixture execution is refused.
+- `execution_mode` must stay `unavailable`, except `controlled` for a version 2 record that binds the exact approved
+  execution release (§5.4); fixture execution is refused.
 - `research_history_mode` must stay `unavailable`; recorded synthetic history is refused.
 - `research_source_clients` must stay `recorded`; the authored HTTP transport is refused.
 - `nansen_research_mode` must stay `unavailable`; the authored Nansen transport is refused.
@@ -183,11 +213,14 @@ Pure tests, no database, Docker or network:
 - `apps/api/tests/test_hosted_deployment.py`: empty registry, no record, incomplete pair, unregistered record,
   relative path, matching record, canonical hash, changed field, origin mismatch, TLS mismatch, expired window,
   malformed records, repeated keys, symbolic link, oversized file, part predicates, settings admission, retained
-  refusals, local behaviour, `create_app` refusal, worker refusal.
+  refusals, local behaviour, production `create_app` and worker startup with research off and one log line, and named
+  incomplete, unapproved, expired or non-admitting records still refused at composition.
 - `apps/api/tests/test_hosted_relay_admission.py`: production without a record, fixture interpreter, bound relay
   release admitted to the handoff, another release id refused, another record hash refused, local admission unchanged.
 - `apps/api/tests/test_approved_nansen_bootstrap.py`: the code-owned default stays registered; `local` composes it;
-  `production` refuses without a hosted record.
+  `production` composes nothing and logs one line when no hosted record is named.
+- `apps/api/tests/test_operating_release_research.py`: a saved release job with an absent runtime ends
+  `UNAVAILABLE` on `operating_release_unavailable` before any provider request.
 
 Mounted tests in the existing suite cover the relay composition and the settings routes. The full API suite is the
 submission check.

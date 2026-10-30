@@ -374,6 +374,24 @@ const SOURCE = {
   window: { start: "2026-09-25T10:00:00Z", end: "2026-09-25T12:00:00Z" }, history_provider: "ENVIO_HYPERSYNC",
   page_requests_recorded: 2, transport: null,
 };
+// The approved actual source from the live catalog: a twenty-minute MOE/WMON window on the five-minute grid.
+const MOE_SOURCE = {
+  source_id: "actual-moe-wmon-fwd20m/1", title: "MOE/WMON actual forward history (20 minutes, 2026-10-22)",
+  evidence_class: "PROVIDER_ACTUAL", content_label: "PROVIDER_HISTORY", profile_version: "p07.market_dataset_profile/1",
+  profile_sha256: "e".repeat(64),
+  market: { network: "MONAD", pool_address: "0x97199b34564911936bc850ac45ede785892b5aad",
+    base_asset: "0xd8e004acba279417c04c0633cb5a21ceca207777", quote_asset: "0x3bd359c1119da7da1d913d1c4d2b7c461115433a" },
+  window: { start: "2026-10-22T07:35:00Z", end: "2026-10-22T07:55:00Z" }, history_provider: "ENVIO_HYPERSYNC",
+  page_requests_recorded: 4, transport: null, available: true,
+  release: { release_id: "actual-moe-history-nansen-20261022/1", sha256: "d".repeat(64), kind: "ACTUAL",
+    evidence_class: "PROVIDER_ACTUAL", transport_kind: "OWNED_STDLIB",
+    history: { source_id: "actual-moe-wmon-fwd20m/1", source_version: "1",
+      limits: { provider_requests: 13, compute_seconds: 600, max_pages: 4, max_rows: 2000, max_bytes: 4194304,
+        deadline_seconds: 600 },
+      client_bounds: {}, endpoint_hosts: {}, time_basis: {}, required_coverage: "" } },
+};
+const MOE_UNKNOWNS = ["Recorded responses come from the named providers under the approved release "
+  + "actual-moe-history-nansen-20261022/1. Costs are not modelled; the window is short."];
 const DECLARATION = {
   declaration: { record_id: "hist-decl-1", schema_version: "p08.investigation-declaration/3", created_at: "2026-10-12T00:00:00Z",
     content: { schema_version: "p08.investigation-declaration/3", original_request: "test request",
@@ -428,6 +446,53 @@ describe("recorded-history investigation", () => {
         { op: "constant", value: "0.004", unit: "DIMENSIONLESS" }] } });
     expect(body.configuration.permitted_access).toEqual(["RECORDED_RESPONSE"]);
     expect(Object.values(body.field_origins).every((item) => (item as { adoption: string }).adoption === "ADOPTED")).toBe(true);
+  });
+
+  async function declareMoe(user: ReturnType<typeof userEvent.setup>, lookback: string,
+                            direction = "OUTPERFORM") {
+    mocks.historySources.mockResolvedValue({ label: "ACTUAL", mode: "recorded", sources: [MOE_SOURCE] });
+    mocks.historySave.mockResolvedValue(DECLARATION);
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await screen.findByRole("option", { name: MOE_SOURCE.title });
+    await user.selectOptions(screen.getByLabelText("Recorded source"), MOE_SOURCE.source_id);
+    await user.type(screen.getByLabelText("Your hypothesis in your own words"), "Rises continue");
+    await user.selectOptions(screen.getByLabelText("What you will check"), direction);
+    await user.type(screen.getByLabelText("Rule 1 lookback buckets"), lookback);
+    await user.type(screen.getByLabelText("Rule 1 return threshold"), "0.01");
+    await user.type(screen.getByLabelText("Rule 1 volume threshold"), "1");
+  }
+
+  it.each([1, 3])("refuses predictive MOE lookback %i before save and names DESCRIPTIVE", async (lookback) => {
+    const user = userEvent.setup();
+    await declareMoe(user, String(lookback));
+    expect(await screen.findByTestId("history-window-refusal")).toHaveTextContent("No lookback fits");
+    expect(screen.getByTestId("history-window-refusal")).toHaveTextContent("use DESCRIPTIVE");
+    await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
+    expect(screen.getByRole("button", { name: "Save history declaration" })).toBeDisabled();
+    expect(mocks.historySave).not.toHaveBeenCalled();
+  });
+
+  it("refuses more descriptive lookback than the MOE window can support", async () => {
+    const user = userEvent.setup();
+    await declareMoe(user, "2", "DESCRIPTIVE");
+    expect(await screen.findByTestId("history-window-refusal")).toHaveTextContent("at most 1 bucket");
+    await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
+    expect(screen.getByRole("button", { name: "Save history declaration" })).toBeDisabled();
+    expect(mocks.historySave).not.toHaveBeenCalled();
+  });
+
+  it("saves a descriptive MOE declaration with a schedule inside the readable partition", async () => {
+    const user = userEvent.setup();
+    await declareMoe(user, "1", "DESCRIPTIVE");
+    await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
+    await user.click(screen.getByRole("button", { name: "Save history declaration" }));
+    await screen.findByText(/Declaration saved before any collection/);
+    const body = mocks.historySave.mock.calls[0][1];
+    expect(body.configuration.partitions).toEqual([{ partition_id: "described", role: "DESCRIPTIVE",
+      start: "2026-10-22T07:35:00Z", end: "2026-10-22T07:55:00Z" }]);
+    expect(body.configuration.schedule).toEqual({ version: "p09.decision-clock/1",
+      start: "2026-10-22T07:45:00Z", end: "2026-10-22T07:50:00Z", interval_seconds: 300 });
+    expect(body.edge_spec.unknowns).toEqual(MOE_UNKNOWNS);
   });
 
   it("shows a waiting job and cancels it", async () => {
@@ -612,5 +677,31 @@ describe("recorded-history declaration lost reply", () => {
     await user.click(await screen.findByRole("button", { name: "Retry the same declaration" }));
     await screen.findByText(/Declaration saved before any collection/);
     expect(mocks.historySave.mock.calls[1][1]).toEqual(mocks.historySave.mock.calls[0][1]);
+  });
+});
+
+describe("an approved ACTUAL release on screen", () => {
+  it("offers only the real source and names it, with no test scenario in the picker", async () => {
+    mocks.historySources.mockResolvedValue({ label: "ACTUAL", mode: "recorded", sources: [MOE_SOURCE] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await screen.findByRole("option", { name: MOE_SOURCE.title });
+    const select = screen.getByLabelText("Recorded source");
+    const options = Array.from(select.querySelectorAll("option")).map((item) => item.textContent);
+    expect(options).toEqual(["Choose a recorded source", MOE_SOURCE.title]);
+    expect(await screen.findByText(/This server composes the approved actual operating release actual-moe-history-nansen-20261022\/1/)).toBeInTheDocument();
+    expect(screen.queryByText(/Every other source is a SYNTHETIC recording/)).not.toBeInTheDocument();
+  });
+
+  it("names the real-MOE study and market instead of presenting the example pool as the study market", async () => {
+    mocks.historySources.mockResolvedValue({ label: "ACTUAL", mode: "recorded", sources: [MOE_SOURCE] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    const note = await screen.findByRole("note");
+    await waitFor(() => expect(note).toHaveTextContent("actual-moe-history-nansen-20261022/1"));
+    expect(note).toHaveTextContent("The real-MOE study on this page is the history investigation below.");
+    expect(note).toHaveTextContent("0x97199b34564911936bc850ac45ede785892b5aad");
+    expect(note).toHaveTextContent("not the real-MOE study's market");
+    expect(screen.getByText("Example pool (not the real-MOE study market)")).toBeInTheDocument();
+    expect(screen.queryByText(/Synthetic fixture market/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/unqualified synthetic fixture/)).not.toBeInTheDocument();
   });
 });

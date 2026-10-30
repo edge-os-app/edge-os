@@ -40,8 +40,10 @@ from edge_os_api.execution.original_transaction import (
     OriginalTransactionTransport,
     ReplyLost,
     RpcError,
+    SignerPolicyDenied,
     is_signer_refusal,
 )
+from edge_os_api.execution.privy_policy_reply import is_policy_denial
 from edge_os_api.execution.privy_signer import PrivySignerClient
 from edge_os_api.execution.transport import PreparedSubmission
 from edge_os_api.research_history.http_clients.client_config import HttpProviderError
@@ -645,6 +647,56 @@ def test_a_provider_error_reply_is_signing_unknown_not_signer_refused(tmp_path):
 
     assert (outcome.outcome, outcome.detail) == ("SUBMISSION_POSSIBLE", "SIGNING_UNKNOWN")
     assert broadcasts(recordings) == 0
+
+
+POLICY_DENY_BODY = {"error": {"code": "policy_violation"}}
+
+
+def test_a_privy_policy_denial_keeps_no_liability(tmp_path):
+    # Live proof v3 recorded status 400 with application/json and code policy_violation for every deny.
+    http = FakeHttp(reply(POLICY_DENY_BODY, 400))
+    transport, recordings, stages = original(tmp_path, client(http))
+
+    outcome = submit(transport, stages)
+
+    assert (outcome.outcome, outcome.detail) == ("DEFINITELY_UNSENT", "WALLET_POLICY_REFUSED")
+    assert len(http.calls) == 1
+    assert broadcasts(recordings) == 0
+    assert [stage for stage, _ in stages] == ["PREPARED", "SIGN_REQUESTED", "REFUSED_UNSENT"]
+    assert dict(stages)["REFUSED_UNSENT"] == {"reason": "WALLET_POLICY_REFUSED"}
+
+
+def test_the_adapter_raises_the_typed_policy_denial_only_for_the_exact_reply():
+    with pytest.raises(SignerPolicyDenied):
+        client(FakeHttp(reply(POLICY_DENY_BODY, 400))).rpc(WALLET_ID, body())
+    assert is_policy_denial(400, POLICY_DENY_BODY)
+
+
+@pytest.mark.parametrize("response", [
+    reply(POLICY_DENY_BODY, 401), reply(POLICY_DENY_BODY, 403), reply(POLICY_DENY_BODY, 500),
+    reply({"error": {"code": "policy_violation_extra"}}, 400),
+    reply({"error": {"code": "request_expired"}}, 400),
+    reply({"message": "policy_violation"}, 400),
+    reply({"code": "other", "error": "policy_violation"}, 400),
+    reply({"code": "policy_violation", "method": "eth_signTransaction",
+           "data": {"signed_transaction": SHORT_SIGNED, "encoding": "rlp"}}, 400),
+    reply({"method": "eth_signTransaction",
+           "data": {"signed_transaction": SHORT_SIGNED, "encoding": "rlp"}, "extra": 1}, 200),
+    reply(b"<html><body>policy_violation</body></html>", 400, {"content-type": "text/html"}),
+    reply(b"", 400),
+    reply(b"{not-json", 400),
+    reply(b'{"code":"policy_violation","code":"policy_violation"}', 400),
+])
+def test_a_near_miss_policy_reply_stays_unknown_and_keeps_the_liability(tmp_path, response):
+    http = FakeHttp(response)
+    transport, recordings, stages = original(tmp_path, client(http))
+
+    outcome = submit(transport, stages)
+
+    assert (outcome.outcome, outcome.detail) == ("SUBMISSION_POSSIBLE", "SIGNING_UNKNOWN")
+    assert len(http.calls) == 1
+    assert broadcasts(recordings) == 0
+    assert [stage for stage, _ in stages] == ["PREPARED", "SIGN_REQUESTED", "SIGNING_UNKNOWN"]
 
 
 def test_a_local_refusal_reaches_the_caller_as_definitely_unsent(tmp_path):

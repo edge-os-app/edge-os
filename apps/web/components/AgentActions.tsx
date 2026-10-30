@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
-import { financial, formatRaw, heldKey, releaseKey, type ActionDetail, type AgentActions as AgentActionsView,
+import { financial, formatRaw, heldKey, MONAD_EXPLORER_BASE, releaseKey, type ActionDetail, type AgentActions as AgentActionsView,
   type OriginalTransaction, type Removal, type Stop } from "../lib/financial";
 
 const JOB_COPY: Record<string, string> = {
@@ -15,6 +15,14 @@ const JOB_COPY: Record<string, string> = {
 };
 
 const UNSETTLED = new Set(["SUBMITTED_UNKNOWN", "CLAIMED", "BREACHED", "RECONCILE_MISMATCH"]);
+const TRANSACTION_HASH = /^0x[0-9a-fA-F]{64}$/;
+
+/** A saved hash links only when it is the exact 32-byte hex shape. Anything else stays plain text. */
+function TransactionHash({ hash }: { hash: string }) {
+  return TRANSACTION_HASH.test(hash)
+    ? <a className="mono" href={`${MONAD_EXPLORER_BASE}/tx/${hash}`} target="_blank" rel="noopener noreferrer">{hash}</a>
+    : <span className="mono">{hash}</span>;
+}
 
 /** Bounded evaluations, the original action's lineage and recovery, and the owner's stop and removal controls. */
 export function AgentActions({ agentId }: { agentId: string }) {
@@ -165,6 +173,7 @@ function ActionLineage({ detail, busy, onReconcile }: { detail: ActionDetail; bu
   const references = detail.attempts[0]?.content.original_references;
   const original = detail.attempts[detail.attempts.length - 1]?.content.original_transaction ?? null;
   const unsettled = detail.queue ? UNSETTLED.has(detail.queue.state) : false;
+  const refused = detail.refusal?.reason === "WALLET_POLICY_REFUSED";
   return (
     <div data-testid="action-lineage">
       <h3>Action {detail.action_id}</h3>
@@ -180,8 +189,10 @@ function ActionLineage({ detail, busy, onReconcile }: { detail: ActionDetail; bu
         <dt>Queue</dt><dd data-testid="action-queue-state">{detail.queue ? `${detail.queue.state}${detail.queue.blocking_reason ? ` (${detail.queue.blocking_reason})` : ""}` : "None"}</dd>
         <dt>Receipts</dt><dd data-testid="action-receipts">{detail.receipts.length ? detail.receipts.map((r) => `${r.outcome}${r.breach ? " (breach)" : ""}`).join(" → ") : "None yet"}</dd>
         <dt>Recovery</dt><dd>{detail.recovery ? detail.recovery.state : "Not opened"}</dd>
-        {!original && <><dt>Transaction hash</dt><dd className="mono">{references?.transaction_hash ?? `None (${references?.absent_reason ?? "not recorded"})`}</dd></>}
+        {!original && <><dt>Transaction hash</dt><dd className="mono">{references?.transaction_hash
+          ? <TransactionHash hash={references.transaction_hash} /> : `None (${references?.absent_reason ?? "not recorded"})`}</dd></>}
       </dl>
+      {refused && <p className="status err" data-testid="action-refusal">Refused by the wallet policy. Nothing was sent.</p>}
       {detail.receipts.length > 0 && <ul data-testid="action-receipt-evidence">{detail.receipts.map((receipt, index) => <li key={index}>
         {receipt.outcome} · gas charge {receipt.content.actual_gas
           ? `${formatRaw(receipt.content.actual_gas.raw, receipt.content.actual_gas.decimals)} ${receipt.content.actual_gas.asset_id}`
@@ -219,7 +230,8 @@ function OriginalTransactionFacts({ original, settled }: { original: OriginalTra
         {!settled && " No replacement is ever created."}</p>
       <dl className="kv">
         <dt>Stage</dt><dd>{original.stage}{original.reason ? ` (${original.reason})` : ""}{original.reasons?.length ? ` · ${original.reasons.join(", ")}` : ""}</dd>
-        <dt>Transaction hash</dt><dd className="mono" data-testid="action-original-hash">{original.transaction_hash ?? "None saved"}</dd>
+        <dt>Transaction hash</dt><dd className="mono" data-testid="action-original-hash">{original.transaction_hash
+          ? <TransactionHash hash={original.transaction_hash} /> : "None saved"}</dd>
         <dt>Candidate identity</dt><dd className="mono">{original.candidate_hash ?? "None"}</dd>
         <dt>Nonce</dt><dd>{original.nonce ?? "None"}</dd>
         {original.fee_envelope && <><dt>Fee limit</dt><dd>{original.fee_envelope.gas_limit} gas at most {formatRaw(String(original.fee_envelope.max_fee_per_gas), 9)} gwei</dd></>}

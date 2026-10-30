@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,13 +13,16 @@ from sqlalchemy.exc import OperationalError
 
 from edge_os_api.core import worker_loop
 from edge_os_api.core.database import SchemaMismatch, make_engine
+from edge_os_api.core.research import released_runtime_bootstrap
 from edge_os_api.core.settings import load_settings
 from edge_os_api.main import create_app
 from research_flows import declare, start
 
 
 def app(env, **overrides):
-    return TestClient(create_app(load_settings({**env, "EDGE_OS_RESEARCH_HISTORY_MODE": "recorded", **overrides})))
+    values = load_settings({**env, "EDGE_OS_RESEARCH_HISTORY_MODE": "recorded", **overrides})
+    with mock.patch.dict(released_runtime_bootstrap.RELEASE_DEFINITIONS, {}, clear=True):
+        return TestClient(create_app(values))
 
 
 def test_writes_over_the_owner_window_get_429_and_reads_continue(env, migrated, owner_a, owner_b):

@@ -1,6 +1,6 @@
 # Local unfunded actual proof runner
 
-Task `ACTUAL-POLICY-PROOF-L3-20261018`, extended by `UNFUNDED-POLICY-PROOF-L3-20261022`. Status `LOCAL`. Provider proof `UNQUALIFIED`. Every result is `LOCAL_TESTED`.
+Task `ACTUAL-POLICY-PROOF-L3-20261018`, extended by `UNFUNDED-POLICY-PROOF-L3-20261022`, `POLICY-PROOF-V2-L3-20261022` and `POLICY-PROOF-V3-L3-20261022`. Status `LOCAL`. Provider proof `UNQUALIFIED`. Every result is `LOCAL_TESTED`.
 
 This document describes the successor of the accepted synthetic driver. Exactly one policy-layer packet and one raw profile are registered. It does not approve any trade, funding, route, policy change or provider request. The live proof is run only by the controller as operator.
 
@@ -10,7 +10,7 @@ This document describes the successor of the accepted synthetic driver. Exactly 
 | --- | --- |
 | `scripts/privy_unfunded_proof/actual_packet.py` | The frozen exact actual packet, the twelve P21 controls, the position-inventory obligation, the type-4 authority gate and the code-owned approval registry. |
 | `scripts/privy_unfunded_proof/actual_profile.py` | The qualified reply/decoder profile and its code-owned registry. |
-| `scripts/privy_unfunded_proof/actual_transport.py` | One-shot bounded sign-only transport to the exact approved destination. |
+| `scripts/privy_unfunded_proof/actual_transport.py` | One-shot bounded sign-only transport to the exact approved destination, with a separate connect bound and per-request deadline bound. |
 | `scripts/privy_unfunded_proof/actual_runner.py` | `run_actual_specimen`: admission, one-use intent, bounded capture, classification and stop. |
 | `scripts/privy_unfunded_proof/actual_run.py` | The operator command: dry run, unfunded confirmation, one ordered live run, stop on mismatch. |
 | `tests/privy_unfunded_proof/test_actual_proof_runner.py` | Offline regression evidence. |
@@ -21,7 +21,7 @@ This document describes the successor of the accepted synthetic driver. Exactly 
 
 ## Default refusal
 
-The code-owned registries hold exactly one frozen policy-layer packet, one raw profile and one actual table manifest. Every other packet, profile or table refuses before any credential read, socket or file effect. An unknown packet refuses with `ACTUAL_PACKET_NOT_APPROVED`.
+The code-owned registries hold two sealed packets (the v3 policy-layer packet and the control-proof packet of `docs/qualification/inapp-trade/CONTROL_PROOFS_PLAN.md`), one raw profile and their two actual table manifests. Every other packet, profile or table refuses before any credential read, socket or file effect. An unknown packet refuses with `ACTUAL_PACKET_NOT_APPROVED`.
 
 A caller cannot approve a packet with a Boolean, function argument, flag or environment setting. `run_actual_specimen` takes no approval, profile or authority mapping. Resolution reads only `CODE_OWNED_PACKET_APPROVALS`, `QUALIFIED_ACTUAL_PROFILES`, `CODE_OWNED_TYPE4_AUTHORITIES` and `CODE_OWNED_ACTUAL_MANIFESTS`. The same rule applies to every entry.
 
@@ -45,7 +45,7 @@ The synthetic driver keeps its boundary. `run_specimen` still accepts only `SYNT
 
 ## Capture and classification
 
-The runner writes `<id>.capture.json` before any JSON parse. The capture holds only fixed metadata: status, media type, content-type SHA-256, byte count, raw-body SHA-256, metadata validity and the capture time. It never holds reply text, credentials, the authorization signature or signed bytes.
+The runner writes `<id>.capture.json` before it classifies the reply. The capture holds fixed metadata: status, media type, content-type SHA-256, byte count, raw-body SHA-256, metadata validity and the capture time. For an error reply (status 400 or above, bounded JSON) it also holds `error_code` and `error_type`, each only when it is letter words joined by underscores (at most 64 characters), else null; a reply below 400 is never parsed for the capture. It never holds reply text, headers, credentials, the authorization signature or signed bytes. On the control-proof expiry row, a 401 whose code says the request or its authorization signature expired is `UNKNOWN` / `EXPIRY_REFUSAL`; any other 401 is `UNRECOGNIZED_REPLY`. See `docs/qualification/inapp-trade/CONTROL_PROOFS_PLAN.md` (Finding 2) for the rule and the one-row expiry re-run.
 
 The transport sends only `eth_signTransaction`, only to the exact approved wallet RPC URL, and uses a frozen `privy-request-expiry` header when the specimen carries one. A refusal before dispatch is `OPERATION_NOT_APPROVED`, `DESTINATION_NOT_APPROVED` or `TRANSPORT_REFUSED`. Every transport failure is raised outside its handler, so no provider or authorizer text remains in `__cause__` or `__context__`.
 
@@ -71,9 +71,9 @@ The accepted Phase B `original_transaction.validate_signed` helper now requires 
 
 ## Frozen policy-layer packet
 
-`UNFUNDED_POLICY_PACKET.md` freezes the one registered packet for the real policy `c30racyru6duaipj815cvjce`. It holds 18 ordered `eth_signTransaction` rows: four allows and fourteen policy-owned negatives. The first row is the positive control. The first negative is a chain-143 request and is the reply-shape bootstrap. The packet uses one profile (`raw`) and one policy, because the real setup has one policy and the proof uses raw-byte binding only. The four swap rows use the five-field selector `0xce1e7030`.
+`UNFUNDED_POLICY_PACKET.md` freezes the one registered packet for the real policy `c30racyru6duaipj815cvjce`. It holds 19 ordered `eth_signTransaction` rows: four allows and fifteen policy-owned negatives. The first row is the positive control. The first negative is a chain-143 request and is the reply-shape bootstrap. The packet uses one profile (`raw`) and one policy, because the real setup has one policy and the proof uses raw-byte binding only. The four `executeSwap` rows use the five-field selector `0xce1e7030`; the receiver refusal row uses `0x31343b21`.
 
-The packet and its table are sealed to reviewed SHA-256 literals. The registry admits the built packet only when its recomputed hash equals the literal; a source edit leaves the registry empty and every actual run refuses. The same rule binds the table manifest. The packet hash is `5835579cc1a0f1935d3e9b0c29bf7521d651e30d47e40c79f9cc32f34ebf0edf`; the table manifest is `62107fc64cc96387f835093962a032b88f8169d106afdce17b584cd762ba2a01`.
+The packet and its table are sealed to reviewed SHA-256 literals. The registry admits the built packet only when its recomputed hash equals the literal; a source edit leaves the registry empty and every actual run refuses. The same rule binds the table manifest. Exactly one packet is approved. Packet v3 binds the tightened live R3 policy (function `executeSwap` only) and keeps the v2 rows. The packet hash is `8255d003097fd1a0216a6b64c48637f2ef745c7ebbe73035d0b8929403500528`; the table manifest is `f485816e431aae37e30d062df038a3e1d62b8cdadac8e510ebb5d0181c827b63`; the policy body hash is `61860d201ecd9ce6d92bff5e7c2122b40164ecb69d1fa375738cb67b17b0892b`. Packets v1 and v2 are refused. Packet v3 runs `raw.deny_plain_mon_transfer` before the slow `raw.deny_swap_with_mon`.
 
 The packet scope is `POLICY_LAYER`. Controls enforced by the host, the Kuru contract or a later stage stay at their true states and do not block this narrow proof. A successful swap signature is not a trade approval.
 
@@ -84,6 +84,14 @@ Five deposit rows carry a value above `2**53 - 1` wei. The accepted signer and t
 `python -m scripts.privy_unfunded_proof.actual_run --dry-run` validates and lists the packet without a credential, socket or file effect.
 
 The live command needs `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_AGENT_KEY_FILE`, a new `--store` directory and `--confirm-unfunded` after an independent zero-balance read. It runs the frozen order one specimen at a time, stops on the first `BREACH`, `UNKNOWN` or mismatch, and never retries or broadcasts.
+
+## Per-request time bounds
+
+Each specimen gets one absolute 60 s request deadline. The TCP connect is bounded by the 15 s connect timeout, and it never exceeds the remaining request deadline. The TLS handshake, the request write and every response read use the remaining per-request deadline as their socket timeout. The accepted shared transport watchdog still shuts the socket at the absolute deadline, so a paced peer cannot extend the call.
+
+A reply that starts after the connect timeout but inside the request deadline is accepted. A reply after the deadline stays `UNKNOWN` with reason `SEND_LOST`. There is no retry, resend, redirect, renewed idempotency key or deadline change.
+
+The suite reproduces the v2 fault with a local fake Privy server that replies after the connect timeout. It also asserts the deadline still cuts a later reply and that the TCP connect never takes longer than its own bound.
 
 ## Limits
 

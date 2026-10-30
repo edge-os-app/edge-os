@@ -48,6 +48,24 @@ def auth_error(status: int, code: str, detail: str, www: bool = True) -> AppErro
     return AppError(status, "AUTHENTICATION", outcome, code, [finding(code, "/", detail)], retry, headers)
 
 
+def interpreter_unavailable(detail: str = "The live interpretation service is unavailable. "
+                            "The saved request is unchanged. Reload before repeating a change.") -> AppError:
+    return AppError(503, "READ", "UNAVAILABLE", "interpreter_unavailable",
+                    [finding("interpreter_unavailable", "/", detail)], "RECONCILE")
+
+
+def interpreter_timeout(detail: str = "The interpretation service did not answer in time. "
+                        "The request may be saved. Check Saved requests before repeating it.") -> AppError:
+    return AppError(504, "READ", "UNAVAILABLE", "interpreter_timeout",
+                    [finding("interpreter_timeout", "/", detail)], "RECONCILE")
+
+
+def interpreter_route_failed(detail: str = "The live interpretation service failed to answer. "
+                             "The saved request is unchanged.") -> AppError:
+    return AppError(502, "READ", "UNAVAILABLE", "interpreter_route_failed",
+                    [finding("interpreter_route_failed", "/", detail)], "RECONCILE")
+
+
 def service_unavailable(retry: str = "SAFE_SAME_KEY") -> AppError:
     return AppError(503, "READ", "UNAVAILABLE", "service_unavailable",
                     [finding("service_unavailable", "/", "A required service is unavailable. Retry later.")], retry)

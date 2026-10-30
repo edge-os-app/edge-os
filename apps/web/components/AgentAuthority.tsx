@@ -150,6 +150,15 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
             <dt>Signer and policy</dt><dd className="mono">{controlled.signer_id} · {controlled.policy_id} · {controlled.policy_content_sha256}</dd>
             <dt>Release and evidence</dt><dd className="mono">{controlled.release_id} · {controlled.release_sha256} · {controlled.evidence_class}</dd>
           </dl>
+          <div data-testid="release-limits">
+            <h4>Release limits</h4>
+            <dl className="kv">
+              <dt>Fixed input</dt><dd>{formatRaw(controlled.input.raw, controlled.input.decimals)} <span className="mono">{controlled.input.asset_id}</span></dd>
+              <dt>Minimum output</dt><dd>{formatRaw(controlled.minimum_output.raw, controlled.minimum_output.decimals)} <span className="mono">{controlled.minimum_output.asset_id}</span></dd>
+              <dt>USD ceiling including gas</dt><dd>Not available</dd>
+            </dl>
+            <p className="muted">The server does not report a USD ceiling, so none is shown. No value is calculated in the browser.</p>
+          </div>
           <p>Exit and recurring execution are unavailable. The exit gas and attempt reservations remain as protection for held inventory.</p>
         </div>}
         {error ? <p role="alert" className="status err">{error}</p> : null}

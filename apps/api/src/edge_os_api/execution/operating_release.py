@@ -23,6 +23,12 @@ _FIELDS = frozenset({"release_id", "kind", "evidence_class", "purpose", "chain_i
     "signer_id", "policy_id", "policy_owner_id", "policy_content_sha256", "independent_proof_sha256", "deployment",
     "route", "quote", "broadcast", "observer", "gas", "transaction", "limits", "valid_until", "finality", "controls"})
 
+_SINGLE_ACTION_LIMITS = frozenset({"actions", "attempts", "broadcasts", "quote_requests", "signer_requests",
+    "observer_requests", "max_request_bytes", "max_response_bytes", "deadline_seconds"})
+# A step release names its steps in this order; each carries its own `signer_requests` 1 and `broadcasts` 1.
+RELEASE_STEPS = ("approve", "swap", "revoke")
+_STEP_LIMITS = (_SINGLE_ACTION_LIMITS - {"broadcasts", "signer_requests"}) | {"steps"}
+
 
 class ReleaseRefused(ValueError):
     """A stable pre-I/O admission refusal."""
@@ -55,6 +61,25 @@ def _json_domain(value: Any, depth: int = 0) -> None:
     else:
         _require(value is None or type(value) is bool or (type(value) is int and 0 <= value < 2**256)
                  or (type(value) is str and len(value) <= 32768))
+
+
+def validate_limits(limits: Any) -> None:
+    """Either the single-action limits, or the ordered steps, each with its own single signer request and broadcast."""
+    _require(type(limits) is dict)
+    if "steps" not in limits:
+        _require(set(limits) == _SINGLE_ACTION_LIMITS)
+        _require(all(type(x) is int and x > 0 for x in limits.values()))
+        _require(all(limits[x] == 1 for x in ("actions", "attempts", "broadcasts", "quote_requests", "signer_requests")))
+        return
+    _require(set(limits) == _STEP_LIMITS)
+    _require(all(type(limits[x]) is int and limits[x] > 0 for x in _STEP_LIMITS - {"steps"}))
+    _require(all(limits[x] == 1 for x in ("actions", "attempts", "quote_requests")))
+    steps = limits["steps"]
+    _require(type(steps) is list and len(steps) == len(RELEASE_STEPS))
+    for step, name in zip(steps, RELEASE_STEPS):
+        _require(type(step) is dict and set(step) == {"step", "signer_requests", "broadcasts"} and step["step"] == name
+                 and type(step["signer_requests"]) is int and step["signer_requests"] == 1
+                 and type(step["broadcasts"]) is int and step["broadcasts"] == 1)
 
 
 def _validate(value: dict[str, Any]) -> None:
@@ -97,8 +122,13 @@ def _validate(value: dict[str, Any]) -> None:
         _require(_text(quote["credential_slot"]))
         _require(urlsplit(quote["endpoint"]).path == "/api/quote")
     else:
-        _require(set(quote) == {"source", "endpoint", "slippage_bps", "pool_address", "token0_address",
-                                "token1_address", "direction", "program_fee_ppm"})
+        fields = {"source", "endpoint", "slippage_bps", "pool_address", "token0_address",
+                  "token1_address", "direction", "program_fee_ppm"}
+        _require(set(quote) == fields or set(quote) == fields | {"pre_sign_tolerance_bps"})
+        if "pre_sign_tolerance_bps" in quote:
+            from edge_os_api.execution.direct_route_quote_client import MAX_PRE_SIGN_TOLERANCE_BPS
+            _require(type(quote["pre_sign_tolerance_bps"]) is int
+                     and 0 <= quote["pre_sign_tolerance_bps"] <= MAX_PRE_SIGN_TOLERANCE_BPS)
         _require(all(type(quote[x]) is str and re.fullmatch(r"0x[0-9a-fA-F]{40}", quote[x])
                      for x in ("pool_address", "token0_address", "token1_address")))
         _require(type(quote["direction"]) is int and quote["direction"] in (0, 1))
@@ -122,11 +152,7 @@ def _validate(value: dict[str, Any]) -> None:
                  and destination["role"] == role and _text(destination["destination_id"]) and _text(destination["credential_slot"]))
     _require(value["broadcast"]["endpoint"] != value["observer"]["endpoint"]
              and value["broadcast"]["destination_id"] != value["observer"]["destination_id"])
-    limits = value["limits"]
-    _require(set(limits) == {"actions", "attempts", "broadcasts", "quote_requests", "signer_requests", "observer_requests",
-        "max_request_bytes", "max_response_bytes", "deadline_seconds"})
-    _require(all(type(x) is int and x > 0 for x in limits.values()))
-    _require(all(limits[x] == 1 for x in ("actions", "attempts", "broadcasts", "quote_requests", "signer_requests")))
+    validate_limits(value["limits"])
     for endpoint in (quote["endpoint"], value["broadcast"]["endpoint"], value["observer"]["endpoint"]):
         validate_endpoint(endpoint)
         parts = urlsplit(endpoint)
@@ -144,11 +170,7 @@ def _validate(value: dict[str, Any]) -> None:
     _require(type(gas["budget_raw"]) is str and canonical_raw(gas["budget_raw"])
              and gas["gas_limit"] * gas["max_fee_per_gas"] <= int(gas["budget_raw"]))
     _require(value["finality"] == "finalized" and set(value["controls"]) == CONTROLS)
-    for control in value["controls"].values():
-        _require(type(control) is dict and set(control) == {"state", "evidence_class", "proof_sha256"})
-        _require(control["state"] in ("ENFORCED", "UNKNOWN", "UNSUPPORTED", "UNSET"))
-        _require(control["evidence_class"] in ("SYNTHETIC_FIXTURE", "DOCUMENTED", "SOURCE_INSPECTED", "LOCAL_TESTED", "PROVIDER_ACTUAL", "NOT_RUN"))
-        _require(control["proof_sha256"] is None or _hash(control["proof_sha256"]))
+    _validate_controls(value["controls"], value["kind"])
 
 
 @dataclass(frozen=True, init=False)
@@ -178,6 +200,16 @@ def release_sha256(release: OperatingRelease) -> str:
     return hashlib.sha256(release._bytes).hexdigest()
 
 
+def release_steps(release: OperatingRelease) -> tuple[str, ...] | None:
+    """The ordered steps a release names, or None for a single-action release."""
+    steps = release.content()["limits"].get("steps")
+    return None if steps is None else tuple(step["step"] for step in steps)
+
+
+# Admission needs the code-owned release registry before any control, then one qualification rule per control.
+# A decision is admitted only by its exact (control, reason, proof hash) triple in APPROVED_CONTROL_DECISIONS.
+# The registry constants and the shared helper are defined at the end of this module; Python resolves them at
+# call time, after import.
 def check_release(release: OperatingRelease, *, expected_sha256: str, now: dt.datetime,
                   synthetic_approvals: Mapping[str, str] | None = None) -> str:
     """Admit only exact test-owned synthetic authority; ACTUAL has no override seam."""
@@ -194,10 +226,10 @@ def check_release(release: OperatingRelease, *, expected_sha256: str, now: dt.da
             or now >= parse_utc(content["valid_until"])
             or now >= parse_utc(content["transaction"]["request_expires_at"])):
         raise ReleaseRefused("EXECUTION_RELEASE_EXPIRED")
-    for control in content["controls"].values():
-        if (control["state"] != "ENFORCED" or control["evidence_class"] != content["evidence_class"]
-                or control["proof_sha256"] is None):
+    for name, control in content["controls"].items():
+        if not control_is_qualified(name, control, content):
             raise ReleaseRefused("EXECUTION_CONTROL_UNQUALIFIED")
+    # One rule for admission and for the reporting helper.
     return digest
 
 
@@ -310,3 +342,63 @@ class BoundRelease:
         if candidate_identity(candidate) != original["candidate_hash"]:
             raise ReleaseRefused("ORIGINAL_CANDIDATE_MISMATCH")
         return content["evidence_class"]
+
+
+# Reviewed builder decisions. An entry is (control, fixed reason, proof artifact SHA-256). A release names the
+# triple; only an entry here admits it. A release file is data and can never write this code-owned registry.
+APPROVED_CONTROL_DECISIONS: frozenset[tuple[str, str, str]] = frozenset({
+    ("expiry_freshness", "PRIVY_REFUSAL_REASON_NOT_READABLE",
+     "c638035f9f5d42651b53da6d7082ea0e3ec6b1f70db5e76781ce347c1d92b5e7"),
+    ("fees", "FEE_VALUES_NOT_PROVIDER_BOUND",
+     "6232e2a96d9623fa7a442dc36bdb8f467085805ee685adf9b8ada314bcbf1675"),
+    ("input_output_assets", "OUTPUT_TOKEN_NOT_PROVIDER_BOUND",
+     "b7c303f625ff3a094c79f81f004fb5a65bdb81599a5a495faafc919292164c33"),
+    ("opaque_program", "PROGRAM_BOUND_BY_HOST_AND_TRACE_ONLY",
+     "c172e1d574c168d72b4dad9e7a7f3c6d8112be4f7d99c7a28ef3210536380997"),
+    ("recipient", "FEE_RECIPIENTS_OBSERVED_NOT_SOURCE_BOUND",
+     "4eaa956243fd0d92d767f73620e89b5685538b34bd4c7bab77259f0d17efc8bb"),
+})
+
+
+def _decision_reason(value: Any) -> bool:
+    """A fixed, code-shaped reason such as FEE_VALUES_NOT_PROVIDER_BOUND."""
+    return type(value) is str and re.fullmatch(r"[A-Z][A-Z0-9_]{2,63}", value) is not None
+
+
+def _validate_controls(controls: Any, kind: Any) -> None:
+    _require(type(controls) is dict and len(controls) == len(CONTROLS))
+    for control in controls.values():
+        _require(type(control) is dict)
+        state = control.get("state")
+        if state == "DECISION_ACCEPTED":
+            _require(set(control) == {"state", "evidence_class", "proof_sha256", "decision_reason"}
+                     and kind == "ACTUAL" and control["evidence_class"] == "BUILDER_DECISION"
+                     and _decision_reason(control["decision_reason"]) and _hash(control["proof_sha256"]))
+        else:
+            _require(set(control) == {"state", "evidence_class", "proof_sha256"}
+                     and state in ("ENFORCED", "UNKNOWN", "UNSUPPORTED", "UNSET")
+                     and control["evidence_class"] != "BUILDER_DECISION"
+                     and control["evidence_class"] in ("SYNTHETIC_FIXTURE", "DOCUMENTED", "SOURCE_INSPECTED",
+                                                       "LOCAL_TESTED", "PROVIDER_ACTUAL", "NOT_RUN")
+                     and (control["proof_sha256"] is None or _hash(control["proof_sha256"])))
+
+
+def _registered_decision_proof(proof: str) -> bool:
+    """A registered decision artifact can never pass as an ENFORCED provider proof under any control."""
+    return any(entry[2] == proof for entry in APPROVED_CONTROL_DECISIONS)
+
+
+def control_is_qualified(name: str, control: Mapping[str, Any], release: Mapping[str, Any]) -> bool:
+    """The one admission rule for one control; admission and reporting share it.
+
+    An ENFORCED control needs the release's own evidence class and a proof. A DECISION_ACCEPTED control needs
+    the builder evidence class and the exact (control, reason, proof hash) triple in the code-owned registry.
+    """
+    proof = control.get("proof_sha256")
+    if control.get("state") == "DECISION_ACCEPTED":
+        reason = control.get("decision_reason")
+        return (release.get("kind") == "ACTUAL" and control.get("evidence_class") == "BUILDER_DECISION"
+                and type(reason) is str and _hash(proof)
+                and (name, reason, proof) in APPROVED_CONTROL_DECISIONS)
+    return (control.get("state") == "ENFORCED" and control.get("evidence_class") == release.get("evidence_class")
+            and _hash(proof) and not _registered_decision_proof(proof))

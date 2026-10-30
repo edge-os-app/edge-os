@@ -4,8 +4,9 @@ import copy
 import datetime as dt
 import socket
 import pytest
+from edge_os_api.execution import operating_release
 from edge_os_api.execution.operating_release import OperatingRelease, check_release, release_sha256
-from edge_os_api.execution.operating_release import CONTROLS, ReleaseRefused
+from edge_os_api.execution.operating_release import CONTROLS, ReleaseRefused, release_steps
 
 
 
@@ -185,3 +186,217 @@ def test_bound_release_requires_independent_inventory_market_and_finality_proofs
     with pytest.raises(ReleaseRefused):
         BoundRelease(OperatingRelease(definition()), {}, position_inventory_proof_sha256=None,
                      market_proof_sha256="7" * 64, finality_proof_sha256="8" * 64)
+
+
+# ------------------------------------------------------------------------------------------- step limits (CLOUD-A6B)
+
+# The canonical hash of `definition()` before step limits existed (base c0d59cae). A single-action release keeps it.
+SINGLE_ACTION_SHA256 = "7fee779da86b253cb67370b1f13d77c27e1f9abc6025cd809cacd74de0063b30"
+STEPS = ["approve", "swap", "revoke"]
+
+
+def step_definition():
+    """A release that names its three steps, each with its own single signer request and broadcast."""
+    source = definition()
+    limits = source["limits"]
+    del limits["signer_requests"], limits["broadcasts"]
+    limits["steps"] = [{"step": name, "signer_requests": 1, "broadcasts": 1} for name in STEPS]
+    return source
+
+
+def test_a_single_action_release_is_admitted_byte_identically():
+    release = OperatingRelease(definition())
+    assert release_sha256(release) == SINGLE_ACTION_SHA256
+    assert release.content()["limits"] == definition()["limits"]
+    assert release_steps(release) is None
+    assert check_release(release, expected_sha256=SINGLE_ACTION_SHA256, now=NOW,
+                         synthetic_approvals={"synthetic-release-a": SINGLE_ACTION_SHA256}) == SINGLE_ACTION_SHA256
+
+
+def test_a_release_naming_approve_swap_revoke_with_per_step_limits_is_admitted():
+    release = OperatingRelease(step_definition())
+    digest = release_sha256(release)
+    assert digest != SINGLE_ACTION_SHA256
+    assert release_steps(release) == ("approve", "swap", "revoke")
+    assert release.content()["limits"]["steps"] == [
+        {"step": "approve", "signer_requests": 1, "broadcasts": 1},
+        {"step": "swap", "signer_requests": 1, "broadcasts": 1},
+        {"step": "revoke", "signer_requests": 1, "broadcasts": 1}]
+    assert check_release(release, expected_sha256=digest, now=NOW,
+                         synthetic_approvals={"synthetic-release-a": digest}) == digest
+
+
+def _step(index: int, **changes):
+    def change(d):
+        d["limits"]["steps"][index].update(changes)
+    return change
+
+
+@pytest.mark.parametrize("change", [
+    lambda d: d["limits"].update(steps=[]),
+    lambda d: d["limits"].update(steps=d["limits"]["steps"][::-1]),
+    lambda d: d["limits"].update(steps=d["limits"]["steps"][:2]),
+    lambda d: d["limits"].update(steps=d["limits"]["steps"][1:]),
+    lambda d: d["limits"].update(steps=[d["limits"]["steps"][1]]),
+    lambda d: d["limits"]["steps"].append({"step": "revoke", "signer_requests": 1, "broadcasts": 1}),
+    lambda d: d["limits"]["steps"].insert(0, {"step": "wrap", "signer_requests": 1, "broadcasts": 1}),
+    lambda d: d["limits"]["steps"].__setitem__(1, {"step": "approve", "signer_requests": 1, "broadcasts": 1}),
+    lambda d: d["limits"].update(steps={"approve": 1, "swap": 1, "revoke": 1}),
+    lambda d: d["limits"].update(steps=STEPS),
+    lambda d: d["limits"].update(steps=None),
+    _step(0, signer_requests=2), _step(1, broadcasts=2), _step(2, signer_requests=0), _step(2, broadcasts=0),
+    _step(0, signer_requests=True), _step(1, broadcasts=1.0), _step(1, broadcasts="1"), _step(0, step="APPROVE"),
+    _step(1, gas_limit=700000), _step(2, step=None),
+    lambda d: d["limits"]["steps"][0].pop("broadcasts"), lambda d: d["limits"]["steps"][2].pop("signer_requests"),
+    lambda d: d["limits"]["steps"][1].pop("step"),
+    lambda d: d["limits"].update(signer_requests=1), lambda d: d["limits"].update(broadcasts=1),
+    lambda d: d["limits"].update(signer_requests=3, broadcasts=3),
+    lambda d: d["limits"].update(attempts=3), lambda d: d["limits"].update(quote_requests=2),
+    lambda d: d["limits"].update(actions=0), lambda d: d["limits"].pop("observer_requests"),
+    lambda d: d["limits"].update(deadline_seconds=True),
+])
+def test_any_other_step_limit_shape_is_refused(change):
+    source = step_definition()
+    change(source)
+    with pytest.raises(ReleaseRefused, match="EXECUTION_RELEASE_INVALID"):
+        OperatingRelease(source)
+
+
+@pytest.mark.parametrize("change", [
+    lambda d: d["limits"].update(signer_requests=3), lambda d: d["limits"].update(broadcasts=3),
+    lambda d: d["limits"].pop("signer_requests"), lambda d: d["limits"].pop("broadcasts"),
+    lambda d: d["limits"].update(steps=None),
+    lambda d: d["limits"].update(steps=[{"step": n, "signer_requests": 1, "broadcasts": 1} for n in STEPS]),
+])
+def test_a_single_action_release_keeps_its_exact_limits(change):
+    source = definition()
+    change(source)
+    with pytest.raises(ReleaseRefused, match="EXECUTION_RELEASE_INVALID"):
+        OperatingRelease(source)
+
+
+# ------------------------------------------------- builder-accepted control decisions (CONTROL-ADOPT-L1)
+
+DECISION = ("fees", "FEE_VALUES_NOT_PROVIDER_BOUND", "a" * 64)
+
+
+def actual_definition():
+    """The synthetic shape, made ACTUAL. The endpoints and evidence class are test inputs only."""
+    source = definition()
+    source.update(kind="ACTUAL", evidence_class="PROVIDER_ACTUAL")
+    source["quote"]["endpoint"] = "https://ws.kuru.io/api/quote"
+    source["broadcast"]["endpoint"] = "https://broadcast.example/rpc"
+    source["observer"]["endpoint"] = "https://observer.example/rpc"
+    for control in source["controls"].values():
+        control.update(state="ENFORCED", evidence_class="PROVIDER_ACTUAL", proof_sha256="b" * 64)
+    return source
+
+
+def decision_definition():
+    source = actual_definition()
+    name, reason, proof = DECISION
+    source["controls"][name] = {"state": "DECISION_ACCEPTED", "evidence_class": "BUILDER_DECISION",
+                                "proof_sha256": proof, "decision_reason": reason}
+    return source
+
+
+def admit(monkeypatch, release, *, decisions=frozenset({DECISION}), registered=True):
+    digest = release_sha256(release)
+    monkeypatch.setattr(operating_release, "APPROVED_CONTROL_DECISIONS", decisions)
+    monkeypatch.setattr(operating_release, "APPROVED_ACTUAL_RELEASES",
+                        {release.content()["release_id"]: digest} if registered else {})
+    return check_release(release, expected_sha256=digest, now=NOW)
+
+
+def test_a_registered_decision_admits_only_its_exact_triple(monkeypatch):
+    release = OperatingRelease(decision_definition())
+    control = release.content()["controls"]["fees"]
+    assert control == {"state": "DECISION_ACCEPTED", "evidence_class": "BUILDER_DECISION",
+                       "proof_sha256": "a" * 64, "decision_reason": "FEE_VALUES_NOT_PROVIDER_BOUND"}
+    assert admit(monkeypatch, release) == release_sha256(release)
+
+
+@pytest.mark.parametrize("change", [
+    {"decision_reason": "FEE_VALUES_PROVIDER_BOUND"}, {"proof_sha256": "c" * 64},
+])
+def test_a_changed_decision_reason_or_hash_refuses(monkeypatch, change):
+    source = decision_definition()
+    source["controls"]["fees"].update(change)
+    release = OperatingRelease(source)
+    with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
+        admit(monkeypatch, release)
+
+
+def test_a_changed_decision_control_name_refuses(monkeypatch):
+    source = decision_definition()
+    source["controls"]["fees"], source["controls"]["recipient"] = (
+        source["controls"]["recipient"], source["controls"]["fees"])
+    release = OperatingRelease(source)
+    with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
+        admit(monkeypatch, release)
+
+
+def test_an_unregistered_decision_refuses_the_control_check(monkeypatch):
+    release = OperatingRelease(decision_definition())
+    with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
+        admit(monkeypatch, release, decisions=frozenset())
+
+
+def test_a_decision_needs_an_actual_release_and_the_builder_evidence_class():
+    source = decision_definition()
+    source["controls"]["fees"]["evidence_class"] = "PROVIDER_ACTUAL"
+    with pytest.raises(ReleaseRefused, match="EXECUTION_RELEASE_INVALID"):
+        OperatingRelease(source)
+    source = decision_definition()
+    source["controls"]["fees"]["decision_reason"] = "has a space"
+    with pytest.raises(ReleaseRefused, match="EXECUTION_RELEASE_INVALID"):
+        OperatingRelease(source)
+
+
+def test_a_decision_under_a_synthetic_release_refuses_at_construction():
+    source = definition()
+    source["controls"]["fees"] = {"state": "DECISION_ACCEPTED", "evidence_class": "BUILDER_DECISION",
+                                  "proof_sha256": "a" * 64, "decision_reason": "FEE_VALUES_NOT_PROVIDER_BOUND"}
+    with pytest.raises(ReleaseRefused, match="EXECUTION_RELEASE_INVALID"):
+        OperatingRelease(source)
+
+
+def test_a_decision_labelled_enforced_refuses(monkeypatch):
+    source = decision_definition()
+    source["controls"]["fees"] = {"state": "ENFORCED", "evidence_class": "PROVIDER_ACTUAL",
+                                  "proof_sha256": "a" * 64}
+    release = OperatingRelease(source)
+    with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
+        admit(monkeypatch, release)
+
+
+def test_a_decision_proof_relabelled_on_an_enforced_control_refuses(monkeypatch):
+    source = actual_definition()
+    source["controls"]["fees"]["proof_sha256"] = DECISION[2]
+    release = OperatingRelease(source)
+    with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
+        admit(monkeypatch, release)
+
+
+def test_a_registered_decision_proof_on_a_different_enforced_control_refuses(monkeypatch):
+    source = actual_definition()
+    source["controls"]["gas_action_capacity"]["proof_sha256"] = DECISION[2]
+    release = OperatingRelease(source)
+    with pytest.raises(ReleaseRefused, match="EXECUTION_CONTROL_UNQUALIFIED"):
+        admit(monkeypatch, release)
+
+
+def test_a_copied_decision_triple_in_an_unregistered_release_refuses(monkeypatch):
+    release = OperatingRelease(decision_definition())
+    with pytest.raises(ReleaseRefused, match="ACTUAL_EXECUTION_RELEASE_NOT_APPROVED"):
+        admit(monkeypatch, release, registered=False)
+
+
+def test_control_is_qualified_is_the_shared_rule(monkeypatch):
+    release = OperatingRelease(decision_definition())
+    content = release.content()
+    monkeypatch.setattr(operating_release, "APPROVED_CONTROL_DECISIONS", frozenset({DECISION}))
+    assert operating_release.control_is_qualified("fees", content["controls"]["fees"], content) is True
+    assert operating_release.control_is_qualified("recipient", content["controls"]["recipient"], content) is True
+    changed = dict(content["controls"]["fees"], decision_reason="FEE_VALUES_PROVIDER_BOUND")
+    assert operating_release.control_is_qualified("fees", changed, content) is False

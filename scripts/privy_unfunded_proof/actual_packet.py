@@ -7,8 +7,9 @@ credential and holds no transport.
 
 A packet is admitted only when the *code* registers it in
 ``CODE_OWNED_PACKET_APPROVALS``; no caller argument, flag, environment value or
-Boolean can approve one. The registry holds exactly one frozen policy-layer
-packet, so every other packet refuses with ``ACTUAL_PACKET_NOT_APPROVED``. The packet binds the app, the
+Boolean can approve one. The registry holds two sealed packets, the v3
+policy-layer packet and the control-proof packet, so every other packet
+refuses with ``ACTUAL_PACKET_NOT_APPROVED``. The packet binds the app, the
 owner, a policy-resource owner outside executor control, the wallet, the
 network, the signing route, the per-profile policy identities and content
 hashes, the source and deployed code identities, expiry, the auth-header
@@ -30,7 +31,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from scripts.privy_unfunded_proof import specimens
+from edge_os_api.execution.privy_policy_reply import reply_code
+from scripts.privy_unfunded_proof import chain_proof, specimens
 from scripts.privy_unfunded_proof.actual_transport import MAX_SAFE_INTEGER, QUANTITY_FIELDS, wire_quantity
 from scripts.privy_unfunded_proof.specimens import (
     DESTINATION,
@@ -243,8 +245,8 @@ class OwnerBoundType4Authority:
     owner_id: str
 
 
-# Code-owned approval registry. The frozen policy-layer packet is registered at
-# the end of this module; no other packet is approved.
+# Code-owned approval registry. The v3 policy-layer packet and the control-proof
+# packet are registered at the end of this module; no other packet is approved.
 CODE_OWNED_PACKET_APPROVALS: Mapping[str, ActualProofPacket] = {}
 
 # Code-owned type-4 authority registry. It is empty: no authority exists here.
@@ -375,7 +377,9 @@ def resolve_approved_packet(
 
 UNFUNDED_POLICY_PROFILE_ID = "privy.raw.v1"
 POLICY_ID = "c30racyru6duaipj815cvjce"
-POLICY_BODY_SHA256 = "cd543346a75ab342e04282f4fd5764ff0f19e1d7a354d5f09d208e53ad0d7477"
+# Version 2 binds the rules-only PATCH body: the live rules returned by Privy,
+# normalized (rule ids removed, address values lower-cased), in canonical JSON.
+POLICY_BODY_SHA256 = "61860d201ecd9ce6d92bff5e7c2122b40164ecb69d1fa375738cb67b17b0892b"
 APP_ID = "cmuyj4smt00tw0dla2j19tlu7"
 POLICY_OWNER_ID = "a5gwmgrsn6903ac09lphyv9a"
 EXECUTOR_ID = "zu1qjdfqlbcq1ct7sdxendgg"
@@ -396,19 +400,47 @@ MAX_FEE_PER_GAS = 100_000_000_000
 MAX_PRIORITY_FEE_PER_GAS = 2_000_000_000
 PACKET_EXPIRES_AT_EPOCH = 1_793_836_800
 PACKET_AUTH_HEADER_EXPIRY = "1793836800000"
-PACKET_ATTEMPT_IDENTITY = "unfunded-policy-proof-1"
+PACKET_ATTEMPT_IDENTITY = "unfunded-policy-proof-3"
 
 # The reviewed identities. The registry admits the packet and the table only when
 # their recomputed hashes equal these literals. A source edit cannot approve a
 # new packet or table without a new reviewed literal.
-SEALED_PACKET_SHA256 = "5835579cc1a0f1935d3e9b0c29bf7521d651e30d47e40c79f9cc32f34ebf0edf"
-SEALED_ACTUAL_MANIFEST_SHA256 = "62107fc64cc96387f835093962a032b88f8169d106afdce17b584cd762ba2a01"
+SEALED_PACKET_SHA256 = "8255d003097fd1a0216a6b64c48637f2ef745c7ebbe73035d0b8929403500528"
+SEALED_ACTUAL_MANIFEST_SHA256 = "f485816e431aae37e30d062df038a3e1d62b8cdadac8e510ebb5d0181c827b63"
 
 DEPOSIT_CALLDATA = "0xd0e30db0"
 APPROVE_SELECTOR = "0x095ea7b3"
 TRANSFER_SELECTOR = "0xa9059cbb"
 EXECUTE_SWAP_SELECTOR = "0xce1e7030"
+EXECUTE_SWAP_WITH_RECEIVER_SIGNATURE = (
+    "executeSwapWithReceiver((address,uint256,address,uint256),"
+    "(address,uint256,address,uint256,bool),bytes,address)"
+)
+EXECUTE_SWAP_WITH_RECEIVER_SELECTOR = "0x31343b21"
 SWAP_PROGRAM = "01"
+
+_ADDRESS_VALUE = re.compile(r"0x[0-9a-fA-F]{40}")
+
+
+def normalize_live_policy_rules(rules: Any) -> Any:
+    """Normalize live Privy rules to the reviewed write body.
+
+    Privy returns rule ids and checksum-cased address values. The reviewed PATCH
+    body has neither. Remove every ``id`` key and lower-case every address value,
+    and change no other field, so the canonical hash is stable across reads.
+    """
+    if isinstance(rules, Mapping):
+        return {name: normalize_live_policy_rules(value) for name, value in rules.items() if name != "id"}
+    if isinstance(rules, list):
+        return [normalize_live_policy_rules(value) for value in rules]
+    if isinstance(rules, str) and _ADDRESS_VALUE.fullmatch(rules) is not None:
+        return rules.lower()
+    return rules
+
+
+def policy_body_sha256(live_rules: Any) -> str:
+    """The content hash of one policy rules body, derived as the packet binds it."""
+    return hashlib.sha256(canonical_json({"rules": normalize_live_policy_rules(live_rules)})).hexdigest()
 
 
 def _word(value: int) -> str:
@@ -443,11 +475,25 @@ def _execute_swap_calldata() -> str:
     return EXECUTE_SWAP_SELECTOR + head + _word(len(SWAP_PROGRAM) // 2) + padded_program
 
 
-def _transaction(*, to: str, value: int, data: str, chain_id: int = 143, gas_limit: int) -> dict[str, Any]:
+def _execute_swap_with_receiver_calldata(receiver: str) -> str:
+    """The exact receiver variant layout: the same tuples, then bytes offset 352 and one receiver word."""
+    head = (
+        _address_word(WMON) + _word(MON) + _address_word(WMON) + _word(2 * MON)
+        + _address_word(ZERO_ADDRESS) + _word(0)
+        + _address_word(ZERO_ADDRESS) + _word(0) + _word(0)
+        + _word(352) + _address_word(receiver)
+    )
+    padded_program = SWAP_PROGRAM + "0" * (64 - len(SWAP_PROGRAM))
+    return (EXECUTE_SWAP_WITH_RECEIVER_SELECTOR + head
+            + _word(len(SWAP_PROGRAM) // 2) + padded_program)
+
+
+def _transaction(*, to: str, value: int, data: str, chain_id: int = 143, gas_limit: int,
+                 nonce: int = 0) -> dict[str, Any]:
     return {
         "type": 2,
         "chain_id": chain_id,
-        "nonce": 0,
+        "nonce": nonce,
         "to": to,
         "value": value,
         "data": data,
@@ -457,7 +503,8 @@ def _transaction(*, to: str, value: int, data: str, chain_id: int = 143, gas_lim
     }
 
 
-def _policy_request(transaction: Mapping[str, Any]) -> FrozenRequest:
+def _policy_request(transaction: Mapping[str, Any],
+                    headers: tuple[tuple[str, str], ...] = ()) -> FrozenRequest:
     wire = dict(transaction)
     for name in QUANTITY_FIELDS:
         if name == "chain_id":
@@ -471,15 +518,16 @@ def _policy_request(transaction: Mapping[str, Any]) -> FrozenRequest:
     body_bytes = canonical_json(body)
     if len(body_bytes) > MAX_REQUEST_BODY_BYTES:
         raise ValueError("policy request exceeds the frozen request byte bound")
-    headers: tuple[tuple[str, str], ...] = ()
+    if not specimens.headers_are_canonical(headers):
+        raise ValueError("policy request headers are not canonical")
     return FrozenRequest(SIGNING_URL, "POST", headers, body_bytes,
                          envelope_sha256(SIGNING_URL, "POST", headers, body_bytes))
 
 
 def _policy_row(name: str, category: Category, expected: Expected,
-                transaction: Mapping[str, Any]) -> Specimen:
+                transaction: Mapping[str, Any], headers: tuple[tuple[str, str], ...] = ()) -> Specimen:
     return Specimen(f"raw.{name}", "raw", category, expected, WALLET_ID,
-                    _policy_request(transaction), dict(transaction))
+                    _policy_request(transaction, headers), dict(transaction))
 
 
 def _policy_rows() -> list[Specimen]:
@@ -517,6 +565,9 @@ def _policy_rows() -> list[Specimen]:
                                  gas_limit=GAS_TRANSFER)),
         _policy_row("deny_entrypoint_wrong_function", field, deny,
                     _transaction(to=ENTRYPOINT, value=0, data=DEPOSIT_CALLDATA, gas_limit=GAS_DEPOSIT)),
+        _policy_row("deny_execute_swap_with_receiver", field, deny,
+                    _transaction(to=ENTRYPOINT, value=0,
+                                 data=_execute_swap_with_receiver_calldata(SINK), gas_limit=GAS_SWAP)),
         _policy_row("deny_approve_other_spender", field, deny,
                     _transaction(to=WMON, value=0, data=_approve_calldata(SINK, CAP),
                                  gas_limit=GAS_APPROVE)),
@@ -548,12 +599,13 @@ UNFUNDED_POLICY_ORDER: tuple[str, ...] = (
     "raw.deny_swap_wrong_to",
     "raw.deny_wmon_wrong_function",
     "raw.deny_entrypoint_wrong_function",
+    "raw.deny_execute_swap_with_receiver",
     "raw.deny_approve_other_spender",
     "raw.deny_approve_above_cap",
     "raw.deny_approve_with_value",
     "raw.deny_deposit_above_cap",
-    "raw.deny_swap_with_mon",
     "raw.deny_plain_mon_transfer",
+    "raw.deny_swap_with_mon",
 )
 
 UNFUNDED_POLICY_TABLE = build_table(_policy_rows())
@@ -618,29 +670,90 @@ def _sealed_packet_registry(packet: ActualProofPacket, sealed_sha256: str) -> di
 
 
 UNFUNDED_POLICY_PACKET = _build_unfunded_policy_packet()
-CODE_OWNED_PACKET_APPROVALS = _sealed_packet_registry(UNFUNDED_POLICY_PACKET, SEALED_PACKET_SHA256)
 
 
-def reply_code(body: Any) -> str | None:
-    """Return the Privy error code from a flat or nested error body, or None.
+# ---------------------------------------------------------------- frozen control-proof packet
+#
+# New rows only, for the in-app trade control proofs (docs/qualification/inapp-trade/CONTROL_PROOFS_PLAN.md).
+# The v3 packet above and its 19 rows are unchanged. Every row uses a nonce far above the wallet's, so even a
+# signature that leaked could not be included before the wallet sent a million transactions; the runner never
+# saves signed bytes and has no broadcast path. The only expected signature is a revoke to zero.
 
-    Privy documents ``policy_violation`` but not one body shape. The accepted
-    runner reads ``code``, ``error.code`` and the string ``error``; it never keeps
-    any other reply text.
-    """
-    if not isinstance(body, Mapping):
-        return None
-    code = body.get("code")
-    if isinstance(code, str):
-        return code
-    error = body.get("error")
-    if isinstance(error, str):
-        return error
-    if isinstance(error, Mapping):
-        nested = error.get("code")
-        if isinstance(nested, str):
-            return nested
-    return None
+CONTROL_PROOF_NONCE = 1_000_000
+CONTROL_PROOF_ATTEMPT_IDENTITY = "control-proofs-1"
+CONTROL_PROOF_EXPIRES_AT_EPOCH = 1_796_083_200  # 2026-11-30T00:00:00Z
+CONTROL_PROOF_AUTH_HEADER_EXPIRY = "1796083200000"
+# 2026-10-14T23:06:40Z: a request expiry already past, sent only on the in-policy expiry row.
+CONTROL_PROOF_EXPIRED_HEADER = "1792000000000"
+CONTROL_GAS_APPROVE = 70_000
+SEALED_CONTROL_PROOF_PACKET_SHA256 = "501942ec92178a5621f25acb7395b44884a0d9770cbb23f44bc0c459656ae775"
+SEALED_CONTROL_PROOF_MANIFEST_SHA256 = "556fdeb5fb8101cc35b3f2b119cc7c86680544155a731b81680b920f4f5fff1d"
+
+
+def _execute_swap_with_receiver_release_calldata(receiver: str) -> str:
+    """The release swap (WMON -> MOE, the approved program, minimum 1) as the receiver variant."""
+    swap = chain_proof.swap_calldata(min_output_raw=1)
+    head, tail = swap[10:10 + 64 * 9], swap[10 + 64 * 10:]
+    return EXECUTE_SWAP_WITH_RECEIVER_SELECTOR + head + _word(352) + _address_word(receiver) + tail
+
+
+def _control_rows() -> list[Specimen]:
+    allow, deny = Expected.ALLOW, Expected.POLICY_DENY
+    nonce = CONTROL_PROOF_NONCE
+    moe, entry = chain_proof.MOE, ENTRYPOINT
+    return [
+        _policy_row("ctl_allow_revoke_zero", Category.POSITIVE_CONTROL, allow,
+                    _transaction(to=WMON, value=0, data=_approve_calldata(entry, 0),
+                                 gas_limit=CONTROL_GAS_APPROVE, nonce=nonce)),
+        _policy_row("ctl_deny_approve_moe_entrypoint", Category.FIELD_MUTATION, deny,
+                    _transaction(to=moe, value=0, data=_approve_calldata(entry, chain_proof.INPUT_RAW),
+                                 gas_limit=CONTROL_GAS_APPROVE, nonce=nonce)),
+        _policy_row("ctl_deny_swap_receiver_wallet", Category.FIELD_MUTATION, deny,
+                    _transaction(to=entry, value=0,
+                                 data=_execute_swap_with_receiver_release_calldata(WALLET_ADDRESS),
+                                 gas_limit=chain_proof.SWAP_GAS_LIMIT, nonce=nonce)),
+        _policy_row("ctl_deny_moe_transfer_sink", Category.OPERATION, deny,
+                    _transaction(to=moe, value=0, data=_transfer_calldata(SINK, 1),
+                                 gas_limit=GAS_TRANSFER, nonce=nonce)),
+        _policy_row("ctl_deny_expired_request", Category.TIMING, Expected.EXPIRY_REFUSAL,
+                    _transaction(to=entry, value=0, data=chain_proof.swap_calldata(min_output_raw=1),
+                                 gas_limit=chain_proof.SWAP_GAS_LIMIT, nonce=nonce),
+                    headers=(("privy-request-expiry", CONTROL_PROOF_EXPIRED_HEADER),)),
+    ]
+
+
+CONTROL_PROOF_ORDER: tuple[str, ...] = (
+    "raw.ctl_allow_revoke_zero",
+    "raw.ctl_deny_approve_moe_entrypoint",
+    "raw.ctl_deny_swap_receiver_wallet",
+    "raw.ctl_deny_moe_transfer_sink",
+    "raw.ctl_deny_expired_request",
+)
+CONTROL_PROOF_TABLE = build_table(_control_rows())
+
+
+def _build_control_proof_packet() -> ActualProofPacket:
+    base = UNFUNDED_POLICY_PACKET
+    rows = CONTROL_PROOF_TABLE.all()
+    return build_packet(**{
+        **{field.name: getattr(base, field.name) for field in dataclasses.fields(base)
+           if field.name not in ("packet_id", "requests", "specimen_expected", "attempt_identity",
+                                 "expires_at_epoch", "auth_header_expiry")},
+        "requests": {row.specimen_id: row.request for row in rows if row.request is not None},
+        "specimen_expected": {row.specimen_id: str(row.expected) for row in rows},
+        "attempt_identity": CONTROL_PROOF_ATTEMPT_IDENTITY,
+        "expires_at_epoch": CONTROL_PROOF_EXPIRES_AT_EPOCH,
+        "auth_header_expiry": CONTROL_PROOF_AUTH_HEADER_EXPIRY,
+    })
+
+
+CONTROL_PROOF_PACKET = _build_control_proof_packet()
+specimens.CODE_OWNED_ACTUAL_MANIFESTS = frozenset({SEALED_ACTUAL_MANIFEST_SHA256,
+                                                   SEALED_CONTROL_PROOF_MANIFEST_SHA256})
+CODE_OWNED_PACKET_APPROVALS = {
+    **_sealed_packet_registry(UNFUNDED_POLICY_PACKET, SEALED_PACKET_SHA256),
+    **_sealed_packet_registry(CONTROL_PROOF_PACKET, SEALED_CONTROL_PROOF_PACKET_SHA256),
+}
 
 
 if __name__ == "__main__":

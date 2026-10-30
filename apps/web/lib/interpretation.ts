@@ -1,5 +1,5 @@
 import { OUTCOME_COPY } from "./describe";
-import type { Attempt, AttemptStatus, AttemptUsage, Bundle, Finding, ReplyState, RequestSummary } from "./types";
+import type { Attempt, AttemptSpend, AttemptStatus, AttemptUsage, Bundle, Finding, ModelCost, ReplyState, RequestSummary } from "./types";
 
 /** The three ways the interpreter can fail to give a usable answer. None is a verdict on the user's idea. */
 export type FailureKind = "MALFORMED_OUTPUT" | "UNAVAILABLE" | "OUTCOME_UNKNOWN";
@@ -50,6 +50,39 @@ export function describeUsage(usage: AttemptUsage): string {
   return usage.source === "PROVIDER_REPORTED"
     ? `${usage.input_tokens?.toLocaleString("en-US")} in, ${usage.output_tokens?.toLocaleString("en-US")} out`
     : "Unknown";
+}
+
+const DECIMAL_USD = /^(\d+)(?:\.(\d+))?(?:E([+-]?\d{1,2}))?$/i;
+
+/**
+ * A USD amount from the stored decimal string, never parsed into a float. A plain decimal is shown as stored; the
+ * runner writes very small and round amounts with an exponent ("5E-7", "1E+1"), and those digits are moved, not
+ * rounded, into a plain decimal. Anything else is not a known amount.
+ */
+function usd(amount: string | null): string | null {
+  const match = amount === null ? null : DECIMAL_USD.exec(amount);
+  if (match === null) return null;
+  const [plain, whole, fraction = "", exponent] = match;
+  if (exponent === undefined) return `$${plain}`;
+  const digits = whole + fraction;
+  const point = whole.length + Number(exponent);
+  const integer = point <= 0 ? "0" : digits.slice(0, point).padEnd(point, "0");
+  const decimals = point <= 0 ? "0".repeat(-point) + digits : digits.slice(point);
+  const trimmed = decimals.replace(/0+$/, "");
+  return `$${integer.replace(/^0+(?=\d)/, "")}${trimmed ? `.${trimmed}` : ""}`;
+}
+
+/** An attempt's model cost: its charge only when the ledger settled it. Unknown, released or missing spend is Unknown. */
+export function describeAttemptCost(spend: AttemptSpend): string {
+  return (spend.state === "SETTLED" ? usd(spend.charge_usd) : null) ?? "Unknown";
+}
+
+/** The request's total model cost. With any unknown call it is a lower bound, and with no settled call it is unknown. */
+export function describeModelCost(cost: ModelCost): string {
+  const total = cost.settled_calls > 0 ? usd(cost.settled_usd) : null;
+  if (cost.unknown_calls === 0 && total !== null) return total;
+  const unknown = `${cost.unknown_calls} call${cost.unknown_calls === 1 ? "" : "s"} unknown`;
+  return total === null ? `unknown, ${unknown}` : `at least ${total}, ${unknown}`;
 }
 
 export function describeLatency(ms: number | null): string {

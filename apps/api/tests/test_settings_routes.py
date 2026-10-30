@@ -146,14 +146,43 @@ def test_t4_docs_are_enabled_only_locally(env, migrated):
 
 def test_t4_source_has_no_override_or_bypass():
     forbidden = ("dependency_overrides", "AUTH_DISABLED", "BYPASS", "PRIVY_APP_SECRET")
+    worker_only = SRC / "execution" / "released_execution_bootstrap.py"  # worker process only (INAPP_TRADE_RELEASE.md)
     for path in SRC.rglob("*.py"):
         text = path.read_text()
         for word in forbidden:
             if path.name == "settings.py" and word in {"AUTH_DISABLED", "BYPASS", "PRIVY_APP_SECRET"}:
                 continue  # settings.py only lists them to refuse them
+            if path == worker_only and word == "PRIVY_APP_SECRET":
+                continue  # the worker-only value; the API role is refused before any read
             assert word not in text, f"{word} in {path.name}"
         tree = ast.parse(text)
         assert not any(isinstance(n, ast.Attribute) and n.attr == "dependency_overrides" for n in ast.walk(tree))
+
+
+def test_the_api_process_never_loads_the_worker_secret_module(env, migrated):
+    """The API process builds the app and enters startup without the worker-only bootstrap.
+
+    A subprocess hides any import another test made. It also calls create_app and enters the ASGI lifespan, so a
+    lazy import added to the factory or to startup is caught, not only one reached by importing main. The migrated
+    fixture puts the schema at head, as create_app requires.
+    """
+    module = "edge_os_api.execution.released_execution_bootstrap"
+    code = (
+        "import asyncio, sys\n"
+        "from edge_os_api.core.settings import load_settings\n"
+        "from edge_os_api.main import create_app\n"
+        f"assert {module!r} not in sys.modules\n"
+        "app = create_app(load_settings())\n"
+        f"assert {module!r} not in sys.modules, 'create_app loaded the worker-only bootstrap'\n"
+        "async def startup():\n"
+        "    async with app.router.lifespan_context(app):\n"
+        "        pass\n"
+        "asyncio.run(startup())\n"
+        f"assert {module!r} not in sys.modules, 'startup loaded the worker-only bootstrap'\n"
+    )
+    child = {**env, "PYTHONPATH": str(SRC.parent)}
+    run = subprocess.run([sys.executable, "-c", code], env=child, capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
 
 
 def test_t9_cors_allow_list(client):
@@ -194,3 +223,44 @@ def test_an_empty_required_value_stops_startup_with_the_field_name(env, name):
     with pytest.raises(ConfigError) as caught:
         load_settings({**env, name: ""})
     assert name.removeprefix("EDGE_OS_").lower() in str(caught.value)
+
+
+# --- the public Hermes forward upstream (HERMES-ROUTE-L4) ---------------------------------------------------------
+
+@pytest.mark.parametrize("url", [
+    "http://127.0.0.1:8011", "http://10.0.1.1:8011", "http://172.16.0.1:8011", "http://192.168.1.5:9000",
+])
+def test_hermes_app_url_accepts_a_loopback_or_rfc1918_http_literal(env, url):
+    assert load_settings({**env, "EDGE_OS_HERMES_APP_URL": url}).hermes_app_url == url
+
+
+def test_an_empty_hermes_app_url_means_none(env):
+    assert load_settings({**env, "EDGE_OS_HERMES_APP_URL": ""}).hermes_app_url is None
+    assert load_settings({**env, "EDGE_OS_HERMES_APP_URL": "   "}).hermes_app_url is None
+
+
+@pytest.mark.parametrize("url", [
+    "https://10.0.1.1:8011", "http://example.com:8011", "http://10.0.1.1", "http://10.0.1.1:8011/path",
+    "http://10.0.1.1:8011?query=1", "http://10.0.1.1:8011#fragment", "http://user:pw@10.0.1.1:8011",
+    "http://0.0.0.0:8011", "http://[::1]:8011", "http://[fd1a:b4ba:f96b::1]:8011", "http://8.8.8.8:8011",
+    "http://169.254.1.1:8011", "http://10.0.1.1:0", "http://10.0.1.1:65536", "http://10.0.1.1:http",
+])
+def test_hermes_app_url_refuses_anything_else(env, url):
+    with pytest.raises(ConfigError, match="hermes_app_url"):
+        load_settings({**env, "EDGE_OS_HERMES_APP_URL": url})
+
+
+def test_a_host_application_cannot_forward_to_another_host_application(env):
+    with pytest.raises(ConfigError, match="hermes_app_url"):
+        load_settings({**env, "EDGE_OS_INTERPRETER": "hermes_local",
+                       "EDGE_OS_HERMES_APP_URL": "http://10.0.1.1:8011"})
+
+
+def test_production_refuses_a_loopback_forward_upstream(env):
+    prod = {**env, "EDGE_OS_ENV": "production", "EDGE_OS_CORS_ALLOWED_ORIGINS": "https://app.example.com",
+            "EDGE_OS_PRIVY_APP_ID": "real-app", "EDGE_OS_BUILD_SHA": "0123456789abcdef",
+            "EDGE_OS_DATABASE_URL": "postgresql+psycopg://app@db.internal.example:5432/edge_os?sslmode=require"}
+    with pytest.raises(ConfigError, match="hermes_app_url"):
+        load_settings({**prod, "EDGE_OS_HERMES_APP_URL": "http://127.0.0.1:8011"})
+    assert load_settings({**prod, "EDGE_OS_HERMES_APP_URL": "http://10.0.1.1:8011"}).hermes_app_url == \
+        "http://10.0.1.1:8011"

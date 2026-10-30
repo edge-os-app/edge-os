@@ -28,11 +28,13 @@ as a qualified decoder.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from edge_os_api.execution.original_transaction import validate_signed
+from edge_os_api.execution.privy_policy_reply import POLICY_DENIAL_CODE, POLICY_DENIAL_STATUS, reply_code
 from scripts.privy_unfunded_proof.evidence import Outcome
 from scripts.privy_unfunded_proof.specimens import PROFILES, SpecimenRefused
 
@@ -120,12 +122,64 @@ def accepted_signed_decoder(unsigned: Mapping[str, Any], wallet: str) -> Callabl
 # for a denied signing request; the first negative in the frozen packet confirms
 # the observed status and body path before any later specimen runs.
 PRIVY_POLICY_CODES: Mapping[str, tuple[int, str, str]] = {
-    "policy_violation": (400, Outcome.POLICY_DENY.value, "PRIVY_POLICY_VIOLATION"),
+    POLICY_DENIAL_CODE: (POLICY_DENIAL_STATUS, Outcome.POLICY_DENY.value, "PRIVY_POLICY_VIOLATION"),
     "request_expired": (400, Outcome.UNKNOWN.value, "EXPIRY_REFUSAL"),
     "zero_correct_authorization_signatures": (
         401, Outcome.AUTHORIZATION_DENY.value, "PRIVY_AUTHORIZATION_DENIED",
     ),
 }
+
+# A 401 is an expiry refusal only when its error code says that the request or its authorization signature
+# expired. The live control-proof run of 2026-10-23 got a 401 (113-byte JSON body) on the past
+# privy-request-expiry row; its code was not saved then. Any other 401 stays UNKNOWN.
+EXPIRY_REFUSAL_STATUS = 401
+_EXPIRY_WORDS = frozenset({"expire", "expired", "expires", "expiry", "expiration"})
+_EXPIRY_SUBJECTS = frozenset({"request", "signature", "signatures", "authorization"})
+_OTHER_SUBJECTS = frozenset({"token", "jwt", "session", "key", "secret", "access", "refresh", "credential",
+                             "credentials", "user", "wallet", "policy", "app"})
+# Words that make an expiry code about a malformed or out-of-range expiry, not a past one.
+_NOT_PAST = frozenset({"invalid", "malformed", "missing", "bad", "unsupported", "not", "too", "far", "future",
+                       "max", "maximum", "exceeds", "format"})
+# A saved code or type is letter words joined by single underscores, at most 64 characters and 24 per word. Free
+# text (spaces, digits, punctuation) is never saved, so a message, key, hash or signature cannot be.
+_FIELD_WORD = "[A-Za-z]{1,24}"
+_SAFE_FIELD = re.compile(f"{_FIELD_WORD}(?:_{_FIELD_WORD})*")
+
+
+def safe_reply_field(value: object) -> str | None:
+    """The value if it is a short identifier-shaped string, else None."""
+    if type(value) is not str or len(value) > 64 or _SAFE_FIELD.fullmatch(value) is None:
+        return None
+    return value
+
+
+def error_fields(body: object) -> dict[str, str | None]:
+    """The error code and type of a parsed error reply, each kept only when identifier-shaped.
+
+    The code is read as ``reply_code`` reads it (``code``, the string ``error``, ``error.code``); the type from
+    ``type`` or ``error.type``. Nothing else of the reply is returned.
+    """
+    if not isinstance(body, Mapping):
+        return {"error_code": None, "error_type": None}
+    error = body.get("error")
+    kind = body.get("type")
+    if kind is None and isinstance(error, Mapping):
+        kind = error.get("type")
+    return {"error_code": safe_reply_field(reply_code(body)), "error_type": safe_reply_field(kind)}
+
+
+def is_expiry_refusal(status: object, body: object) -> bool:
+    """A 401 error reply whose identifier-shaped code says the request or its authorization signature expired."""
+    if type(status) is not int or status != EXPIRY_REFUSAL_STATUS:
+        return False
+    if not isinstance(body, Mapping) or "data" in body or "method" in body:
+        return False
+    code = error_fields(body)["error_code"]
+    if code is None:
+        return False
+    words = set(code.lower().split("_"))
+    return bool(words & _EXPIRY_WORDS and words & _EXPIRY_SUBJECTS and not words & (_OTHER_SUBJECTS | _NOT_PAST))
+
 
 PRIVY_RAW_V1 = QualifiedActualProfile(
     profile="raw",

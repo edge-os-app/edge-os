@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../lib/auth";
+import { financial } from "../lib/financial";
 import type { Bundle } from "../lib/types";
 import { Conversation, type ConversationContext } from "./Conversation";
 import { ResearchHome } from "./ResearchHome";
@@ -30,6 +31,7 @@ export function Shell() {
   const auth = useAuth();
   const [route, setRoute] = useState<Route>({ name: "research" });
   const [context, setContext] = useState<ConversationContext | null>(null);
+  const [agentMode, setAgentMode] = useState<string | null>(null);
   const sheet = useRef<HTMLDialogElement>(null);
   const sheetTrigger = useRef<HTMLElement | null>(null);
   const returnTo = useRef<string | null>(null);
@@ -40,6 +42,17 @@ export function Shell() {
     window.addEventListener("hashchange", sync);
     return () => window.removeEventListener("hashchange", sync);
   }, []);
+
+  const agentId = route.name === "account" ? route.agentId : undefined;
+  useEffect(() => {
+    let live = true;
+    setAgentMode(null);
+    if (!agentId) return () => { live = false; };
+    financial.consent(agentId)
+      .then((saved) => { if (live) setAgentMode(saved.provider_mode ?? null); })
+      .catch(() => { if (live) setAgentMode(null); });
+    return () => { live = false; };
+  }, [agentId]);
 
   const go = useCallback((hash: string, from?: string) => {
     returnTo.current = from ?? null;
@@ -65,6 +78,9 @@ export function Shell() {
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
   const current = route.name === "later" || route.name === "account" ? route.area : "Research";
+  // The build-scope notice describes the account views only; research pages must not carry it.
+  const showsBuildScope = route.name === "later" || route.name === "account";
+  const controlledMode = showsBuildScope && Boolean(agentId) && agentMode === "controlled";
   // An opened agent's account view gets the read-only agent health conversation; Research keeps its own.
   const conversationAgent = route.name === "account" ? route.agentId : undefined;
 
@@ -81,10 +97,12 @@ export function Shell() {
           ))}
         </nav>
         <div className="side-foot">
-          <div className="notice">
-            <strong>Build scope.</strong> Account views show authored synthetic records only, not live wallet data. Saving a
-            Research rule grants no trading permission. This build does not connect a wallet or move funds.
-          </div>
+          {controlledMode ? <div className="notice" data-testid="controlled-scope-notice">
+            <strong>Trading mode.</strong> Trades run from your agent wallet within the limits you signed. Every trade needs its release.
+          </div> : showsBuildScope ? <div className="notice" data-testid="build-scope-notice">
+            <strong>Build scope.</strong> Account views show authored synthetic records only, not live wallet data.
+            Saving a Research rule grants no trading permission. This build does not connect a wallet or move funds.
+          </div> : null}
           <button className="btn btn-ghost" type="button" onClick={auth.logout}>Sign out</button>
         </div>
       </aside>

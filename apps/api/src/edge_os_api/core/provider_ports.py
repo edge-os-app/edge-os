@@ -35,7 +35,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from edge_os_api.execution.current_holdings import HoldingsObservation, HoldingsUnavailable, read_rpc_holdings
 from edge_os_api.execution.original_recordings import OriginalRecordings, RecordedObservationRpc
 from edge_os_api.execution.original_transaction import (EVIDENCE_CLASS, OriginalClients, RouteProfile,
-                                                        OriginalContext, RpcError, validate_signed, wallet_address)
+                                                        OriginalContext, RpcError, TradeSteps, validate_signed,
+                                                        wallet_address)
 from edge_os_api.execution.operating_release import BoundRelease, ReleaseRefused
 from edge_os_api.execution.transport import FixtureAcknowledgementLost, PreparedSubmission, TransportOutcome
 from edge_os_api.execution.types import AssetAmount, EvaluationInputs, InputObservation
@@ -143,6 +144,10 @@ class QuoteRequest:
     quote_input_raw: str | None
     base_input_raw: str | None
     observed_at: dt.datetime
+    # The saved owner, agent and consent the quote is for. A controlled quote answers only from their own binding.
+    owner_id: str | None = None
+    agent_id: str | None = None
+    consent_adoption_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -474,6 +479,7 @@ class ControlledRuntime:
     monotonic: Callable[[], float] = time.monotonic
     synthetic_bindings: Mapping[str, str] | None = field(default=None, repr=False)
     market_source: MarketObservationPort | None = field(default=None, repr=False)
+    steps: TradeSteps | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.synthetic_bindings is not None:
@@ -574,8 +580,13 @@ class ControlledRuntime:
         return Observer()
 
     def clients(self, factory: sessionmaker[Session], context: OriginalContext,
-                controls: Callable[[], list[str]], *, role: str) -> OriginalClients:
-        """Mount the accepted clients; load credentials only after the saved ownership checks."""
+                controls: Callable[[], list[str]], *, role: str,
+                steps: TradeSteps | None = None) -> OriginalClients:
+        """Mount the accepted clients; load credentials only after the saved ownership checks.
+
+        With a release step plan every client reads the record of the step that is signing or broadcasting now.
+        The plan must match the bound release's own steps, start asset and swap gas before any client exists.
+        """
         direct_source = self.binding.release.content()["quote"].get("source") == "DIRECT_V2_PROGRAM"
         if role != "worker" or self.signer_access is None or (self.quote_token is None and not direct_source):
             raise ProviderUnavailable("transport")
@@ -595,11 +606,26 @@ class ControlledRuntime:
 
         release = self.binding.release.content()
         limits = release["limits"]
+        plan = self.steps if steps is None else steps
+        if plan is not None:
+            from edge_os_api.execution.operating_release import release_steps
+
+            if (release_steps(self.binding.release) != plan.order
+                    or plan.input_asset_id != release["route"]["input_asset"]["asset_id"]
+                    or plan.gas_limits["swap"] != release["gas"]["gas_limit"]):
+                raise ProviderUnavailable("release")
         deadline = self.monotonic() + limits["deadline_seconds"]
         stopped = lambda: bool(controls())
         holder: dict[str, Any] = {}
 
-        def saved(stage: str | None) -> dict[str, Any]:
+        def step_of(prepared: PreparedSubmission | None) -> str | None:
+            """The step a prefixed signer request names; the swap keeps the plain attempt id."""
+            if plan is None or prepared is None or not prepared.attempt_id:
+                return None
+            suffix = prepared.attempt_id.rsplit(":", 1)[-1]
+            return suffix if suffix in ("approve", "revoke") else "swap"
+
+        def saved(stage: str | None, prepared: PreparedSubmission | None = None) -> dict[str, Any]:
             original = None
             try:
                 with factory() as session:
@@ -622,8 +648,17 @@ class ControlledRuntime:
                         AdmissionDecisionRow.agent_id == context.agent_id, AdmissionDecisionRow.wallet_id == context.wallet_id,
                         AdmissionDecisionRow.network_id == context.network_id)).scalar_one_or_none()
                     value = attempt.content.get("original_transaction") or {}
+                    step = step_of(prepared)
+                    record = value if step in (None, "swap") else (value.get(step) or {})
                     if (claim is None or claim.state != "ACTIVE" or admission is None
-                            or admission.status != "SUBMISSION_UNKNOWN" or value.get("stage") != stage):
+                            or admission.status != "SUBMISSION_UNKNOWN"):
+                        raise ValueError("ownership mismatch")
+                    if step in ("approve", "revoke"):
+                        request = record.get("signing_request") or {}
+                        if (record.get("stage") != stage
+                                or request.get("request_id") != prepared.attempt_id):
+                            raise ValueError("step ownership mismatch")
+                    elif stage is not None and value.get("stage") != stage:
                         raise ValueError("ownership mismatch")
                     if stage is not None:
                         self.binding.qualify_original(value, synthetic_bindings=self.synthetic_bindings)
@@ -691,7 +726,7 @@ class ControlledRuntime:
                 return holder["quote"].quote(request)
 
         def signer(prepared: PreparedSubmission) -> Any:
-            saved("SIGN_REQUESTED")
+            saved("SIGN_REQUESTED", prepared)
             self.binding.admit(identity, now=self.clock(), synthetic_bindings=self.synthetic_bindings)
             if stopped():
                 raise RpcError("SIGNER_STOPPED")
@@ -703,11 +738,31 @@ class ControlledRuntime:
                 wall_clock_ms=lambda: int(self.clock().timestamp()*1000), monotonic=self.monotonic)
 
         def original_bytes() -> str:
-            value = saved("BROADCAST_REQUESTED")
-            tx_hash, reasons = validate_signed(value.get("signed_bytes"), value["unsigned"], context.wallet_address)
-            if reasons or tx_hash != value.get("transaction_hash"):
+            value = saved(None)
+            current = {"APPROVE_BROADCAST_REQUESTED": "approve", "BROADCAST_REQUESTED": "swap",
+                       "REVOKE_BROADCAST_REQUESTED": "revoke"}.get(value.get("stage"))
+            if plan is not None and current is None:
+                raise RpcError("SAVED_ATTEMPT_UNAVAILABLE")
+            record = value if current in (None, "swap") else (value.get(current) or {})
+            if (value.get("attempt_id") != holder["attempt_id"]
+                    or (plan is not None and record.get("stage") != "BROADCAST_REQUESTED")):
+                raise RpcError("SAVED_ATTEMPT_UNAVAILABLE")
+            try:
+                self.binding.qualify_original(value, synthetic_bindings=self.synthetic_bindings)
+            except Exception:
+                raise RpcError("SAVED_ATTEMPT_UNAVAILABLE") from None
+            if current in ("approve", "revoke"):
+                expected = str(context.sell.raw) if current == "approve" else "0"
+                if (str(record.get("token", "")).lower() != context.sell.token.lower()
+                        or str(record.get("amount_raw")) != expected
+                        or str(record.get("spender", "")).lower() != release["route"]["entrypoint_address"].lower()
+                        or str((record.get("unsigned") or {}).get("to", "")).lower() != context.sell.token.lower()):
+                    raise RpcError("SAVED_BYTES_MISMATCH")
+            tx_hash, reasons = validate_signed(record.get("signed_bytes"), record.get("unsigned"),
+                                               context.wallet_address)
+            if reasons or tx_hash != record.get("transaction_hash"):
                 raise RpcError("SAVED_BYTES_MISMATCH")
-            return value["signed_bytes"]
+            return record["signed_bytes"]
 
         destination = release["broadcast"]
         broadcast = TransactionRpcClient(role="broadcast", destination_id=destination["destination_id"], endpoint=destination["endpoint"],
@@ -746,17 +801,18 @@ class _ControlledQuotes:
         self._runtimes = runtimes
 
     def quote(self, request: QuoteRequest) -> QuoteResult:
-        matches = []
-        for runtime in self._runtimes.values():
-            route = runtime.binding.release.content()["route"]
-            if (request.operation == "ENTRY" and request.base_input_raw is None
-                    and (request.quote_asset_id, request.quote_decimals, request.base_asset_id, request.base_decimals,
-                         request.quote_input_raw) == (route["input_asset"]["asset_id"], route["input_asset"]["decimals"],
-                         route["output_asset"]["asset_id"], route["output_asset"]["decimals"], route["approved_input_raw"])):
-                matches.append(runtime)
-        if len(matches) != 1:
+        # Only the requesting agent's own runtime, and only when its binding names the same owner, agent and consent.
+        runtime = None if request.agent_id is None else self._runtimes.get(request.agent_id)
+        identity = None if runtime is None else runtime.binding.identity()
+        route = None if runtime is None else runtime.binding.release.content()["route"]
+        if (identity is None or request.owner_id is None or request.consent_adoption_id is None
+                or (str(request.owner_id), request.agent_id, str(request.consent_adoption_id)) != (
+                    identity["owner_id"], identity["agent_id"], identity["consent_adoption_id"])
+                or request.operation != "ENTRY" or request.base_input_raw is not None
+                or (request.quote_asset_id, request.quote_decimals, request.base_asset_id, request.base_decimals,
+                    request.quote_input_raw) != (route["input_asset"]["asset_id"], route["input_asset"]["decimals"],
+                    route["output_asset"]["asset_id"], route["output_asset"]["decimals"], route["approved_input_raw"])):
             raise ProviderUnavailable("approved_minimum")
-        runtime = matches[0]
         try:
             runtime.binding.admit(runtime.binding.identity(), now=runtime.clock(), synthetic_bindings=runtime.synthetic_bindings)
         except ReleaseRefused:
@@ -812,10 +868,13 @@ class ProviderPorts:
     clock: Callable[[], dt.datetime] = utc_now  # the recorded original clients' replay clock
     role: str = "api"
     controlled: Mapping[str, ControlledRuntime] = field(default_factory=dict)
+    # The unreduced runtimes `controlled` was built from, so another role is never built from a read-only copy.
+    controlled_source: Mapping[str, ControlledRuntime] | None = field(default=None, repr=False)
 
     def for_role(self, role: str) -> "ProviderPorts":
         if self.mode == "controlled":
-            return build_provider_ports("controlled", None, role=role, controlled=self.controlled)
+            source = self.controlled if self.controlled_source is None else self.controlled_source
+            return build_provider_ports("controlled", None, role=role, controlled=source)
         ports = replace(self, role=role)
         if self.original is not None and isinstance(self.holdings, RecordedOriginalHoldings):
             ports.holdings = RecordedOriginalHoldings(self.holdings._factory, self.original, self.holdings._fallback,
@@ -862,14 +921,15 @@ def build_provider_ports(mode: str, factory: sessionmaker[Session], effects_path
         if original is not None:  # the recorded holdings follow the ports' replay clock
             ports.holdings = RecordedOriginalHoldings(factory, original, holdings, lambda: ports.clock())
         return ports
+    source = MappingProxyType(dict(CONTROLLED_RUNTIMES if controlled is None else controlled))
     runtimes = MappingProxyType({key: runtime if role == "worker" else runtime.read_only()
-        for key, runtime in (CONTROLLED_RUNTIMES if controlled is None else controlled).items()}) if mode == "controlled" else {}
+        for key, runtime in source.items()}) if mode == "controlled" else {}
     if mode == "controlled":
         from edge_os_api.execution.provider_observations import UnqualifiedDepositObserver, UnqualifiedRemovalObserver
 
         return ProviderPorts(mode="controlled", market=_ControlledMarkets(runtimes), quotes=_ControlledQuotes(runtimes),
             holdings=_ControlledHoldings(runtimes), receipts=_Unavailable("receipt"), deposits=UnqualifiedDepositObserver(),
-            removals=UnqualifiedRemovalObserver(), role=role, controlled=runtimes)
+            removals=UnqualifiedRemovalObserver(), role=role, controlled=runtimes, controlled_source=source)
     return ProviderPorts(mode="controlled" if mode == "controlled" else UNAVAILABLE_MODE,
                          market=_Unavailable("observations"), quotes=_Unavailable("quote"),
                          holdings=_Unavailable("holdings"), receipts=_Unavailable("receipt"),

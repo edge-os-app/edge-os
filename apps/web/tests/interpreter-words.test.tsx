@@ -14,6 +14,7 @@ vi.mock("../lib/api", () => ({
     get: (...a: unknown[]) => mocks.get(...a), retryInterpretation: (...a: unknown[]) => mocks.retry(...a),
     answer: (...a: unknown[]) => mocks.answer(...a), revision: (...a: unknown[]) => mocks.revision(...a),
     investigations: (...a: unknown[]) => mocks.investigations(...a), investigationProposal: (...a: unknown[]) => mocks.investigationProposal(...a),
+    historySources: async () => ({ label: "", mode: "recorded", sources: [] }),
   },
 }));
 
@@ -72,6 +73,7 @@ const attempt = (over: Partial<Attempt>): Attempt => ({
   started_at: "2026-10-10T08:00:00Z", finished_at: "2026-10-10T08:00:02Z", latency_ms: 2500,
   usage: { source: "PROVIDER_REPORTED", input_tokens: 1423, output_tokens: 611, total_tokens: 2034 }, request_count: 1,
   response_sha256: "a".repeat(64), parse_result: "ACCEPTED", error_class: null, revision_id: "r1",
+  spend: { state: "SETTLED", charge_usd: "0.0074285" },
   identity: { prompt_version: "p05-interpretation/4", system_prompt_sha256: "b".repeat(64), task_sha256: "c".repeat(64),
     response_shape_sha256: "d".repeat(64), manifest_sha256: "e".repeat(64), config_sha256: "f".repeat(64),
     runtime_label: "LOCAL_FAKE_PROVIDER", model: "local-fake/p05-interpretation", route: "local-fake-provider",
@@ -81,13 +83,14 @@ const attempt = (over: Partial<Attempt>): Attempt => ({
 describe("interpreter attempts", () => {
   it("lists every attempt, keeps unknown usage unknown, and names a retry's parent", () => {
     const failed = attempt({ attempt_id: "a1", status: "PROVIDER_FAILED", completion: "NONE", parse_result: "NOT_PARSED", revision_id: null,
-      usage: { source: "UNKNOWN", input_tokens: null, output_tokens: null, total_tokens: null }, error_class: "ProviderHTTPError", latency_ms: null });
+      usage: { source: "UNKNOWN", input_tokens: null, output_tokens: null, total_tokens: null }, error_class: "ProviderHTTPError", latency_ms: null,
+      spend: { state: "UNKNOWN", charge_usd: "0.054848" } });
     const retry = attempt({ attempt_id: "a2", sequence: 2, retry_of: "a1" });
     render(<InterpretationAttempts attempts={[failed, retry]} lateResults={[]} open currentRevisionId="r1" />);
     const [first, second] = screen.getAllByRole("listitem");
     expect(within(first).getByRole("heading", { name: "Attempt #1: First reading" })).toBeInTheDocument();
     expect(within(first).getByText("Provider failed (ProviderHTTPError)")).toBeInTheDocument();
-    expect(within(first).getAllByText("Unknown")).toHaveLength(2); // tokens and time
+    expect(within(first).getAllByText("Unknown")).toHaveLength(3); // tokens, time and model cost
     expect(within(second).getByRole("heading", { name: "Attempt #2: First reading, retry of #1" })).toBeInTheDocument();
     expect(within(second).getByText("1,423 in, 611 out")).toBeInTheDocument();
     expect(within(second).getByText("2.5 s")).toBeInTheDocument();

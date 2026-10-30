@@ -781,7 +781,7 @@ def thesis_variants() -> list[tuple[str, str]]:
     return chosen[:140]
 
 
-def test_every_hostile_planting_ends_published_or_rejected_and_never_stuck(make_client, owner_a) -> None:
+def test_every_hostile_planting_ends_published_or_rejected_and_never_stuck(make_client, signer) -> None:
     """The independent oracle: an answer that settles ACCEPTED must be published for real, and a rejected one retryable."""
     from edge_os_api.research.interpretation_attempts import Usage
     stuck, accepted, rejected = [], 0, 0
@@ -790,14 +790,15 @@ def test_every_hostile_planting_ends_published_or_rejected_and_never_stuck(make_
     base = case("concrete-thesis")["provider"]["model_response"]
     client = make_client(CaseRunner(*[reply(base, usage=Usage(900, 120, 1020, "PROVIDER_REPORTED"), text=text)
                                       for _, text in variants]))  # one application, so connections are not exhausted
-    for label, _ in variants:
-        created = create(client, owner_a, "concrete-thesis")
+    for index, (label, _) in enumerate(variants):
+        headers = {"Authorization": f"Bearer {signer.token(f'did:privy:fuzz-{index}-{uuid.uuid4().hex[:8]}')}"}
+        created = create(client, headers, "concrete-thesis")
         if created.status_code != 201:
             stuck.append((label, created.status_code))
             continue
         bundle = created.json()
         [attempt] = bundle["attempts"]
-        opened = client.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=owner_a)
+        opened = client.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=headers)
         if opened.status_code != 200 or attempt["status"] != "COMPLETED":
             stuck.append((label, opened.status_code, attempt["status"]))
         elif attempt["parse_result"] == "ACCEPTED":

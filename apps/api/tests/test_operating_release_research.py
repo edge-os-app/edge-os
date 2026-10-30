@@ -42,11 +42,11 @@ from test_actual_binding_admission import authored_actual_history
 
 SOURCE = stand_in.SOURCE_ID
 QUESTION = "Which holder records does MOE return, and what do basic flow records show?"
-REGISTERED_RELEASE_ID = "actual-moe-nansen-demo-20261018/1"
-REGISTERED_RELEASE_SHA256 = "dce1e05ffdecf72eedaf340e55fad0e2a4271c1ea7860d15aed17fd2c1b1d743"
+REGISTERED_RELEASE_ID = "actual-moe-history2h-nansen-20261022/1"
+REGISTERED_RELEASE_SHA256 = "45c8cfbf5d61eb519ee3140e02e50b2b7091669dc28cbef224bdc6a0e77ca877"
 REGISTERED_NANSEN_REQUEST: dict[str, Any] = {
     "token_address": "0xd8e004acba279417c04c0633cb5a21ceca207777", "token_symbol": "MOE",
-    "window": {"start_utc": "2026-10-17T12:00:00Z", "end_utc": "2026-10-18T12:00:00Z"},
+    "window": {"start_utc": "2026-10-21T23:40:00Z", "end_utc": "2026-10-22T23:40:00Z"},
     "operations": ["holders", "flows"],
     "holder_query": {"label_type": "all_holders", "aggregate_by_entity": False, "order_field": "token_amount",
                      "value_usd_min": None},
@@ -136,7 +136,7 @@ def test_the_default_composes_only_the_registered_release_and_provider_keys_chan
         sources = client.get("/v1/research/history-sources", headers=owner_a).json()
         assert SOURCE not in {item["source_id"] for item in sources["sources"]}  # no stand-in source is served
         runtime = client.app.state.research_runtime  # the server bootstrap composes the registered release
-        assert runtime is not None and runtime.release.history is None and runtime.release.nansen is not None
+        assert runtime is not None and runtime.release.history is not None and runtime.release.nansen is not None
         assert (runtime.release.release_id, runtime.release_sha256) == (REGISTERED_RELEASE_ID,
                                                                        REGISTERED_RELEASE_SHA256)
         assert sources["operating_release"]["sha256"] == REGISTERED_RELEASE_SHA256
@@ -270,11 +270,12 @@ def test_a_declaration_must_use_the_release_limits_and_its_served_class(composed
 
 
 def test_without_the_release_a_saved_declaration_cannot_start_and_a_saved_job_ends_before_effect(
-        settings, composed, owner_a):
+        settings, composed, owner_a, monkeypatch):
     client, runtime = composed["client"], composed["runtime"]
     intake_id, declaration_id = declare_release(client, owner_a, runtime)
     queued = started_job(client, owner_a, runtime)
     before = budget(client, owner_a)
+    monkeypatch.setattr(released_runtime_bootstrap, "RELEASE_DEFINITIONS", {})  # truly no composed release
     with app(settings) as plain:
         refused = start(plain, owner_a, intake_id, declaration_id)
         assert (refused.status_code, refused.json()["code"]) == (409, "operating_release_unavailable")
@@ -879,7 +880,7 @@ def test_the_registered_actual_default_admits_a_job_and_refuses_before_any_provi
     monkeypatch.delenv("NANSEN_API_KEY", raising=False)  # the one selected slot is explicitly missing
     with app(settings) as client:  # no injected runtime: the default bootstrap composes the release
         runtime = client.app.state.research_runtime
-        assert runtime is not None and runtime.release.history is None and runtime.release.nansen is not None
+        assert runtime is not None and runtime.release.history is not None and runtime.release.nansen is not None
         assert (runtime.release.release_id, runtime.release.kind, runtime.release_sha256) == (
             REGISTERED_RELEASE_ID, "ACTUAL", REGISTERED_RELEASE_SHA256)
         # The fixed request is frozen before the worker and equals the registered release exactly.

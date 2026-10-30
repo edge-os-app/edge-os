@@ -18,9 +18,11 @@ provider bodies or secrets.
 from __future__ import annotations
 
 import base64
+import hashlib
 import http.client
 import json
 import os
+import re
 import socket
 import ssl
 import stat
@@ -29,6 +31,7 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -38,14 +41,23 @@ from edge_os_api.wallet_setup.lookup_matching import (linked_wallet, match_claim
 
 API_BASE = "https://api.privy.io/v1/users/"
 WALLET_BY_ADDRESS = "https://api.privy.io/v1/wallets/address"
+WALLET_BY_ID = "https://api.privy.io/v1/wallets/"
 _PRIVY_HOST = urllib.parse.urlsplit(API_BASE).hostname or "api.privy.io"
 _USERS_PATH = urllib.parse.urlsplit(API_BASE).path
 _WALLETS_BY_ADDRESS_PATH = urllib.parse.urlsplit(WALLET_BY_ADDRESS).path
+_WALLETS_BY_ID_PATH = urllib.parse.urlsplit(WALLET_BY_ID).path
 DEADLINE_SECONDS = 10.0
 MAX_RESPONSE = 256 * 1024
 _CHUNK_BYTES = 65_536
 CONNECTION_TIMEOUT = 20.0
 OPERATION = "lookup_embedded_wallet"
+SERVER_WALLET_OPERATION = "bind_server_wallet"
+AUTHORED_SCHEMA = "edge-os.inapp-trade-authoring/1"
+_MONAD_MAINNET = 143
+_BOUND_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
+_RECORD_REQUIRED = frozenset({"id", "address", "chain_type", "policy_ids", "owner_id", "additional_signers"})
+_RECORD_OPTIONAL = frozenset({"created_at", "entity", "external_id", "display_name", "exported_at",
+                              "imported_at"})
 
 FetchUser = Callable[[str], object]
 FetchWallet = Callable[[str], object]
@@ -160,6 +172,12 @@ class PrivyUserReader:
         return self._fetch("POST", _WALLETS_BY_ADDRESS_PATH, json.dumps({"address": address}).encode("ascii"),
                            {"Content-Type": "application/json"})
 
+    def wallet_by_id(self, wallet_id: str) -> object:
+        """Read-only fixed lookup: GET /v1/wallets/{id}. No create, update, signer or policy call."""
+        if not valid_wallet_id(wallet_id):
+            return None
+        return self._fetch("GET", _WALLETS_BY_ID_PATH + urllib.parse.quote(wallet_id, safe=""), None)
+
     def _fetch(self, method: str, path: str, body: bytes | None,
                extra_headers: dict[str, str] | None = None) -> object:
         """One fixed read under one absolute deadline. Connect, request, header and body share it."""
@@ -244,6 +262,112 @@ class PrivyUserReader:
                     pass
 
 
+@dataclass(frozen=True)
+class ServerWalletRelease:
+    """The exact bound wallet identity from one authored A2 release."""
+
+    release_id: str
+    chain_id: int
+    wallet_id: str
+    address: str
+    signer_id: str
+    policy_id: str
+    policy_owner_id: str
+    binding_sha256: str
+
+
+def server_wallet_binding_sha256(release: ServerWalletRelease) -> str:
+    """Stable SHA-256 over the release identity and the wallet, signer and policy that bind it."""
+    canonical = json.dumps({"release_id": release.release_id, "chain_id": release.chain_id,
+                            "wallet_id": release.wallet_id, "wallet_address": release.address.lower(),
+                            "chain_type": "ethereum", "signer_id": release.signer_id,
+                            "policy_id": release.policy_id, "policy_owner_id": release.policy_owner_id},
+                           sort_keys=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def load_server_wallet_release(document: object) -> ServerWalletRelease:
+    """Read the A2 bound wallet fields. A missing, extra-typed or non-mainnet release is refused."""
+    if not isinstance(document, dict) or document.get("schema") != AUTHORED_SCHEMA:
+        raise ValueError("server wallet release document")
+    release = document.get("release")
+    if not isinstance(release, dict) or release.get("kind") != "ACTUAL" or release.get("chain_id") != _MONAD_MAINNET:
+        raise ValueError("server wallet release identity")
+    release_id = release.get("release_id")
+    if not (isinstance(release_id, str) and 0 < len(release_id) <= 128 and "\x00" not in release_id):
+        raise ValueError("server wallet release id")
+    wallet_id, address = release.get("wallet_id"), release.get("wallet_address")
+    signer_id, policy_id = release.get("signer_id"), release.get("policy_id")
+    policy_owner_id = release.get("policy_owner_id")
+    if not (isinstance(wallet_id, str) and _BOUND_ID.fullmatch(wallet_id) is not None
+            and isinstance(address, str) and valid_address(address)
+            and isinstance(signer_id, str) and _BOUND_ID.fullmatch(signer_id) is not None
+            and isinstance(policy_id, str) and _BOUND_ID.fullmatch(policy_id) is not None
+            and isinstance(policy_owner_id, str) and _BOUND_ID.fullmatch(policy_owner_id) is not None):
+        raise ValueError("server wallet release fields")
+    release_fields = ServerWalletRelease(release_id=release_id, chain_id=_MONAD_MAINNET, wallet_id=wallet_id,
+                                         address=address, signer_id=signer_id, policy_id=policy_id,
+                                         policy_owner_id=policy_owner_id, binding_sha256="")
+    return ServerWalletRelease(release_id=release_id, chain_id=_MONAD_MAINNET, wallet_id=wallet_id,
+                               address=address, signer_id=signer_id, policy_id=policy_id,
+                               policy_owner_id=policy_owner_id,
+                               binding_sha256=server_wallet_binding_sha256(release_fields))
+
+
+def _valid_optional_record_fields(record: dict[str, Any]) -> bool:
+    created_at = record.get("created_at")
+    if "created_at" in record and (type(created_at) is not int or created_at <= 0):
+        return False
+    if "entity" in record:
+        entity = record["entity"]
+        if entity is not None and not (isinstance(entity, dict) and set(entity) == {"id", "type"}
+                                       and isinstance(entity.get("id"), str) and entity["id"]
+                                       and entity.get("type") in {"user", "organization"}):
+            return False
+    for key in ("external_id", "display_name"):
+        if key in record and record[key] is not None and not isinstance(record[key], str):
+            return False
+    for key in ("exported_at", "imported_at"):
+        if key in record and record[key] is not None:
+            return False
+    return True
+
+
+def match_server_wallet(record: object, release: ServerWalletRelease) -> dict[str, str] | None:
+    """Return the matched identity only for one exact wallet object; any other shape is `None`."""
+    if not isinstance(record, dict) or not (_RECORD_REQUIRED <= set(record)
+                                            <= _RECORD_REQUIRED | _RECORD_OPTIONAL):
+        return None
+    address = record.get("address")
+    if not (record.get("id") == release.wallet_id and isinstance(address, str)
+            and address.lower() == release.address.lower() and record.get("chain_type") == "ethereum"
+            and record.get("policy_ids") == [release.policy_id]
+            and record.get("owner_id") == release.policy_owner_id
+            and record.get("additional_signers") == [{"signer_id": release.signer_id,
+                                                       "override_policy_ids": [release.policy_id]}]
+            and _valid_optional_record_fields(record)):
+        return None
+    return {"wallet_id": release.wallet_id, "address": release.address, "chain_type": "ethereum",
+            "release_binding_sha256": release.binding_sha256}
+
+
+def answer_server_wallet(message: dict[str, Any], fetch_wallet: FetchWallet,
+                         release: ServerWalletRelease | None) -> dict[str, Any]:
+    """The only server-wallet operation. The caller names no wallet, field, URL or release."""
+    if release is None or message != {"op": SERVER_WALLET_OPERATION}:
+        return {"status": "unknown", "reason": "UNSUPPORTED_REQUEST"}
+    try:
+        record = fetch_wallet(release.wallet_id)
+    except Exception:  # noqa: BLE001 - one failed read stays UNKNOWN; no provider text escapes
+        return {"status": "unknown", "reason": "LOOKUP_FAILED"}
+    if record is None:
+        return {"status": "unknown", "reason": "LOOKUP_UNAVAILABLE"}
+    matched = match_server_wallet(record, release)
+    if matched is None:
+        return {"status": "unknown", "reason": "NO_EXACT_MATCH"}
+    return {"status": "matched", **matched}
+
+
 def answer(message: dict[str, Any], fetch_user: FetchUser, fetch_wallet: FetchWallet | None = None) -> dict[str, Any]:
     """The only supported operation. Any other shape is refused with a code."""
     if set(message) != {"op", "did", "address", "wallet_id"} or message.get("op") != OPERATION:
@@ -286,7 +410,9 @@ def same_user_peer(conn: socket.socket) -> bool:
     return False
 
 
-def handle(conn: socket.socket, fetch_user: FetchUser, fetch_wallet: FetchWallet | None = None) -> None:
+def handle(conn: socket.socket, fetch_user: FetchUser, fetch_wallet: FetchWallet | None = None,
+           server_wallet: ServerWalletRelease | None = None,
+           fetch_wallet_by_id: FetchWallet | None = None) -> None:
     conn.settimeout(CONNECTION_TIMEOUT)
     try:
         if not same_user_peer(conn):
@@ -297,7 +423,12 @@ def handle(conn: socket.socket, fetch_user: FetchUser, fetch_wallet: FetchWallet
             conn.sendall(encode_frame({"status": "unknown", "reason": "MALFORMED_FRAME"}))
             return
         try:
-            reply = answer(message, fetch_user, fetch_wallet)
+            if message.get("op") == SERVER_WALLET_OPERATION:
+                reply = (answer_server_wallet(message, fetch_wallet_by_id, server_wallet)
+                         if fetch_wallet_by_id is not None
+                         else {"status": "unknown", "reason": "UNSUPPORTED_REQUEST"})
+            else:
+                reply = answer(message, fetch_user, fetch_wallet)
         except Exception:  # noqa: BLE001 - one failed lookup must not stop the process; the caller stays UNKNOWN
             reply = {"status": "unknown", "reason": "LOOKUP_FAILED"}
         conn.sendall(encode_frame(reply))
@@ -320,6 +451,7 @@ def prepare_socket_path(path: str) -> Path:
 
 
 def serve(path: str, fetch_user: FetchUser, fetch_wallet: FetchWallet | None = None,
+          server_wallet: ServerWalletRelease | None = None, fetch_wallet_by_id: FetchWallet | None = None,
           ready: threading.Event | None = None) -> None:
     target = prepare_socket_path(path)
     previous = os.umask(0o177)
@@ -336,18 +468,33 @@ def serve(path: str, fetch_user: FetchUser, fetch_wallet: FetchWallet | None = N
         while True:
             conn, _ = server.accept()
             with conn:
-                handle(conn, fetch_user, fetch_wallet)
+                handle(conn, fetch_user, fetch_wallet, server_wallet, fetch_wallet_by_id)
     finally:
         server.close()
         target.unlink(missing_ok=True)
 
 
+def _release_from_file(path: str) -> ServerWalletRelease:
+    try:
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise SystemExit("lookup: server wallet release unreadable") from None
+    try:
+        return load_server_wallet_release(document)
+    except ValueError:
+        raise SystemExit("lookup: server wallet release invalid") from None
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: lookup_server.py <socket_path>", file=sys.stderr)
+    if len(argv) == 2:
+        release = None
+    elif len(argv) == 4 and argv[2] == "--server-wallet-release":
+        release = _release_from_file(argv[3])
+    else:
+        print("usage: lookup_server.py <socket_path> [--server-wallet-release <release.json>]", file=sys.stderr)
         return 2
     reader = PrivyUserReader(os.environ.get("PRIVY_APP_ID", ""), os.environ.get("PRIVY_APP_SECRET", ""))
-    serve(argv[1], reader, reader.wallet_by_address)
+    serve(argv[1], reader, reader.wallet_by_address, release, reader.wallet_by_id)
     return 0
 
 

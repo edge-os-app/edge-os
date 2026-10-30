@@ -30,7 +30,8 @@ Foreign and unknown objects are never killed, removed, mounted or adopted, and a
 id just inspected (a volume by its name) and is then checked; only a stop that ends clean writes `stopped.json`.
 
 ACTUAL is accepted only through `relay_admission.load_actual_release` with its default registry, which names only the
-adopted release record: every other ACTUAL configuration is refused. The operator never reads the provider key; it only
+adopted release record: every other ACTUAL configuration is refused, and the configured image id must equal the release
+definition's pinned id for this host platform. The operator never reads the provider key; it only
 checks the file is outside the repository and readable by its owner only. No key, key path or environment value is written to the handoff or printed.
 `read_handoff` is the operator's strict reader of its own handoff (format `edge-os.relay-operator-handoff/1`).
 """
@@ -60,6 +61,9 @@ for folder in (REPO / "apps" / "api" / "src", HERE.parent / "hermes_job_support"
     if str(folder) not in sys.path:
         sys.path.insert(0, str(folder))
 
+# One host-platform source and one pinned pair: the operator must agree with the application that binds this handoff.
+from edge_os_api.research import hermes_relay_composition  # noqa: E402
+from edge_os_api.research.hermes_relay_composition import _host_platform, image_for_platform  # noqa: E402
 import relay_supervisor  # noqa: E402
 from relay_admission import ActualRelease, RelayRelease, load_actual_release  # noqa: E402
 from relay_supervisor import LABEL, RelaySupervisor  # noqa: E402
@@ -83,6 +87,12 @@ SHA256 = re.compile(r"[0-9a-f]{64}")
 MAX_FILE_BYTES = 1024 * 1024
 VOLUME_CLAIM_LABEL = "edge-os.relay-operator.claim"  # a fresh random value per start, on the egress volume only
 CONFIG_FILES = {"relay": "relay-config.json", "gateway": "gateway-config.json", "provider": "provider-config.json"}
+# The application user joins the relay's shared group. The run root stays readable and traversable for it, and the
+# channel is group-writable for the job runner, the job and the relay. Both are re-chmodded after `mkdir` because the
+# units set `UMask=0077`. The relay unit keeps `RestrictSUIDSGID=yes`, which denies a mode argument with S_ISGID:
+# every writer already has primary gid `edge-os-relay-share`, so no mode here requests the setgid bit.
+RUN_ROOT_MODE = 0o750
+CHANNEL_MODE = 0o770
 
 
 class OperatorRefused(ValueError):
@@ -223,6 +233,20 @@ def _image(value: Any) -> tuple[str, str]:
     return value["reference"], value["id"]
 
 
+def _pinned_release_image(actual: ActualRelease) -> str:
+    """The id this ACTUAL release's code-owned definition pins for this host platform, or OperatorRefused."""
+    matches = [item for item in hermes_relay_composition.RELEASE_DEFINITIONS
+               if item.record_sha256 == actual.record_sha256]
+    if not matches:
+        raise OperatorRefused("the ACTUAL release record has no code-owned release definition")
+    if len(matches) > 1:
+        raise OperatorRefused("more than one code-owned release definition names this ACTUAL release record")
+    try:
+        return image_for_platform(matches[0], _host_platform())
+    except hermes_relay_composition.MountRefused as error:
+        raise OperatorRefused(f"the release definition pins no image for this host platform: {error}") from error
+
+
 def _key_file(value: Any) -> Path:
     """Checked, never read: outside the repository, a regular file (no link) readable by its owner only."""
     path = _absolute(value, "provider_key_file")
@@ -294,6 +318,8 @@ def load_config(raw: bytes) -> OperatorConfig:
         release = actual.release
     else:
         raise OperatorRefused("kind must be AUTHORED or ACTUAL")
+    if actual is not None and image_id != _pinned_release_image(actual):
+        raise OperatorRefused("the configured image id is not the release's pinned id for this host platform")
     return OperatorConfig(target, release, actual, record, ca, reference, image_id, channel["name"], channel_path, key)
 
 
@@ -515,6 +541,11 @@ def start(config: OperatorConfig) -> tuple[Path, str]:
         config.run_root.mkdir(mode=0o700)  # the exclusive claim: a competing start of this configuration fails here
     except FileExistsError as error:
         raise OperatorRefused("another start claimed this run root first") from error
+    try:
+        os.chmod(config.run_root, RUN_ROOT_MODE)  # the application user traverses it to read the handoff
+    except BaseException:
+        config.run_root.rmdir()  # still empty and created by this call
+        raise
     claim = secrets.token_hex(16)
     try:
         _write_once(config.run_root / "owner.json", {"operation_id": target.operation_id, "run_id": target.run_id,
@@ -525,6 +556,7 @@ def start(config: OperatorConfig) -> tuple[Path, str]:
         raise
     try:
         config.channel_path.mkdir(mode=0o700)
+        os.chmod(config.channel_path, CHANNEL_MODE)  # the job runner, the job and the relay share one group
         _claim_volume(target, claim)
         supervisor.start()
         network = _inspect("network", target.names()["egress"])

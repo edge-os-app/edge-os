@@ -521,6 +521,106 @@ class BindingCompatibility(unittest.TestCase):
         self.assertEqual(b0["token_order"], [FIXTURES["addresses"]["token0"], FIXTURES["addresses"]["token1"]])
 
 
+class ObservedTokenMechanics(unittest.TestCase):
+    """Observed behavior is one bounded state: it needs its exact evidence hash and shows its basis."""
+
+    EVIDENCE = "5ad3a7c3e11f48e6f32fe2ab9f1edf7bf968962e4854c98d16e70327cfc9e73b"
+
+    def observations(self, **event_meaning: object) -> dict:
+        observations = copy.deepcopy(FIXTURES["qualification_base"]["observations"])
+        observations["event_meaning"].update(event_meaning)
+        return observations
+
+    def record(self, **changes: object) -> dict:
+        record = {"state": "QUALIFIED_BY_OBSERVATION", "basis": "OBSERVED_BEHAVIOR",
+                  "window_seconds": 12 * 60 * 60, "evidence_sha256": self.EVIDENCE, "source_proof": False}
+        record.update(changes)
+        return record
+
+    def test_bound_observation_satisfies_the_claim_and_names_its_basis(self) -> None:
+        got = qualify(base_profile(), self.observations(
+            fee_transfer_semantics="QUALIFIED_BY_OBSERVATION", token_mechanics=self.record()))
+        claim = got["claims"]["EVENT_AND_AMOUNT_MEANING"]
+        self.assertEqual(claim["verdict"], "QUALIFIED")
+        self.assertEqual(got["overall"], "QUALIFIED")
+        basis = [r for r in claim["reasons"] if r["code"] == "TOKEN_MECHANICS_QUALIFIED_BY_OBSERVATION"]
+        self.assertEqual(len(basis), 1)
+        self.assertEqual(basis[0]["kind"], "BASIS")
+        for text in ("QUALIFIED_BY_OBSERVATION", "OBSERVED_BEHAVIOR", "43200", self.EVIDENCE, "not source proof"):
+            self.assertIn(text, basis[0]["detail"])
+
+    def test_the_state_never_reuses_the_plain_qualified_value(self) -> None:
+        got = qualify(base_profile(), self.observations(
+            fee_transfer_semantics="QUALIFIED_BY_OBSERVATION", token_mechanics=self.record()))
+        detail = next(r["detail"] for r in got["claims"]["EVENT_AND_AMOUNT_MEANING"]["reasons"]
+                      if r["code"] == "TOKEN_MECHANICS_QUALIFIED_BY_OBSERVATION")
+        self.assertIn("state QUALIFIED_BY_OBSERVATION", detail)
+        self.assertNotIn("state QUALIFIED;", detail)
+
+    def test_state_without_the_evidence_hash_is_refused(self) -> None:
+        for name, record in (("absent", None),
+                             ("no hash", {key: value for key, value in self.record().items()
+                                          if key != "evidence_sha256"}),
+                             ("wrong hash", self.record(evidence_sha256="0" * 64)),
+                             ("wrong basis", self.record(basis="INFERENCE")),
+                             ("wrong window", self.record(window_seconds=3600)),
+                             ("claims source proof", self.record(source_proof=True)),
+                             ("extra key", {**self.record(), "detail": "unbounded"})):
+            with self.subTest(name):
+                event_meaning = {"fee_transfer_semantics": "QUALIFIED_BY_OBSERVATION"}
+                if record is not None:
+                    event_meaning["token_mechanics"] = record
+                got = qualify(base_profile(), self.observations(**event_meaning))
+                claim = got["claims"]["EVENT_AND_AMOUNT_MEANING"]
+                self.assertEqual(claim["verdict"], "UNRESOLVED")
+                self.assertIn("TOKEN_MECHANICS_OBSERVATION_UNBOUND", {r["code"] for r in claim["reasons"]})
+                self.assertNotEqual(got["overall"], "QUALIFIED")
+
+    def test_plain_qualified_stays_the_source_proof_path(self) -> None:
+        got = qualify(base_profile(), self.observations())
+        claim = got["claims"]["EVENT_AND_AMOUNT_MEANING"]
+        self.assertEqual(claim["verdict"], "QUALIFIED")
+        self.assertFalse([r for r in claim["reasons"] if r["code"].startswith("TOKEN_MECHANICS_")])
+
+
+class DeclaredFeasibilityFloors(unittest.TestCase):
+    """A declared floor is shown beside the verdict with its counted slots; no floor adds no reason."""
+
+    def observations(self, status: str, partitions: list) -> dict:
+        observations = copy.deepcopy(FIXTURES["qualification_base"]["observations"])
+        observations["feasibility"] = {"status": status, "partitions": partitions}
+        return observations
+
+    def test_a_feasible_partition_shows_its_floors_and_counted_slots(self) -> None:
+        rows = [{"name": "moe-window", "schedule_slots": 4, "usable": 2, "required_triggered": 1,
+                 "required_control": 1, "required_total": 2, "shortfall": 0,
+                 "excluded_outcome_window": 2, "excluded_outcome_coverage": 0, "excluded_availability": 0,
+                 "excluded_warmup": 0}]
+        got = qualify(base_profile(), self.observations("FEASIBLE", rows))
+        claim = got["claims"]["SCHEDULE_FEASIBILITY"]
+        self.assertEqual(claim["verdict"], "QUALIFIED")
+        basis = [r for r in claim["reasons"] if r["code"] == "DECLARED_FLOORS"]
+        self.assertEqual(len(basis), 1)
+        self.assertEqual(basis[0]["kind"], "BASIS")
+        for text in ("moe-window", "triggered 1", "control 1", "demo floors, not statistical evidence",
+                     "usable 2 of 4"):
+            self.assertIn(text, basis[0]["detail"])
+
+    def test_a_row_without_the_slot_count_adds_no_reason_and_never_crashes(self) -> None:
+        rows = [{"name": "moe-window", "usable": 2, "required_triggered": 1, "required_control": 1,
+                 "required_total": 2, "shortfall": 0}]
+        got = qualify(base_profile(), self.observations("FEASIBLE", rows))
+        claim = got["claims"]["SCHEDULE_FEASIBILITY"]
+        self.assertEqual(claim["verdict"], "QUALIFIED")
+        self.assertNotIn("DECLARED_FLOORS", {r["code"] for r in claim["reasons"]})
+
+    def test_undeclared_floors_stay_unresolved_and_add_no_reason(self) -> None:
+        got = qualify(base_profile(), self.observations("UNDECLARED", []))
+        claim = got["claims"]["SCHEDULE_FEASIBILITY"]
+        self.assertEqual(claim["verdict"], "UNRESOLVED")
+        self.assertNotIn("DECLARED_FLOORS", {r["code"] for r in claim["reasons"]})
+
+
 class PerClaimQualification(unittest.TestCase):
     def run_case(self, case: dict) -> dict:
         profile = real_pages_profile() if case.get("profile") == "SYN_Q0_PAGES" else base_profile()

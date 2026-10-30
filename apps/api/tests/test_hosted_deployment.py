@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,8 +27,8 @@ from edge_os_api.main import create_app
 
 RELAY_ID = "hermes-first-call-1"
 RELAY_SHA = "3fa94dd73e53a72ca8af6cda9c8633770de89c262fa5303756c1965bb92fed8f"
-RESEARCH_ID = "actual-moe-nansen-demo-20261018/1"
-RESEARCH_SHA = "dce1e05ffdecf72eedaf340e55fad0e2a4271c1ea7860d15aed17fd2c1b1d743"
+RESEARCH_ID = "actual-moe-history2h-nansen-20261022/1"
+RESEARCH_SHA = "45c8cfbf5d61eb519ee3140e02e50b2b7091669dc28cbef224bdc6a0e77ca877"
 IMAGE = "sha256:" + "1" * 64
 GATE_SHA = "2" * 64
 DEPLOYMENT = "hosted-demo-1"
@@ -354,12 +355,76 @@ def test_a_record_with_another_research_hash_is_refused_at_composition(
         server_research_runtime(settings)
 
 
-# --- Both research entry points refuse without a matching record -------------------------------------------------------
+# --- A production server with no named record starts with research off -----------------------------------------------
 
 
-def test_create_app_refuses_the_approved_research_release_without_a_record() -> None:
-    with pytest.raises(ConfigError, match="research_runtime: hosted_deployment"):
-        create_app(load_settings(production_env()))
+def test_no_record_in_production_composes_nothing_and_logs(caplog: pytest.LogCaptureFixture) -> None:
+    from edge_os_api.core.research.released_runtime_bootstrap import server_research_runtime
+
+    settings = running(deployment_id=None)
+    settings.env = "production"
+    with caplog.at_level(logging.INFO, logger="edge_os"):
+        assert server_research_runtime(settings) is None
+    assert "research is off: no hosted deployment is named" in caplog.text
+
+
+def test_create_app_starts_with_research_off_when_no_record_is_named(
+        monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    from edge_os_api import main as main_module
+
+    monkeypatch.setattr(main_module, "make_engine", lambda *_a, **_k: SimpleNamespace(dispose=lambda: None))
+    monkeypatch.setattr(main_module, "require_head", lambda _engine: None)
+    monkeypatch.setattr(main_module, "make_session_factory", lambda _engine: (lambda: SimpleNamespace()))
+    with caplog.at_level(logging.INFO, logger="edge_os"):
+        app = create_app(load_settings(production_env()))
+    assert app.state.research_runtime is None
+    assert "research is off: no hosted deployment is named" in caplog.text
+
+
+def test_the_worker_main_starts_without_research_when_no_record_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    from edge_os_api.core import database, settings as settings_module, worker_loop
+    from edge_os_api.research import investigation_jobs
+
+    configured = load_settings(production_env())
+    monkeypatch.setattr(settings_module, "load_settings", lambda: configured)
+    monkeypatch.setattr(database, "make_engine", lambda *_a, **_k: object())
+    monkeypatch.setattr(database, "make_session_factory", lambda _engine: object())
+    captured: dict[str, Any] = {}
+
+    class RecordingWorker:
+        def __init__(self, _factory: Any, _settings: Any, *, research_runtime: Any = None, **_kwargs: Any) -> None:
+            captured["runtime"] = research_runtime
+
+        def run_pending(self, limit: int = 20) -> list[Any]:
+            return []
+
+    monkeypatch.setattr(investigation_jobs, "InvestigationWorker", RecordingWorker)
+    monkeypatch.setattr(worker_loop, "run", lambda *_a, **_k: 0)
+    monkeypatch.setattr(worker_loop, "exit_with", lambda _code: None)
+    monkeypatch.setattr("sys.argv", ["worker", "--once"])
+    investigation_jobs.main()
+    assert captured.get("runtime") is None
+
+
+@pytest.mark.parametrize("case", ["incomplete", "unapproved", "expired"])
+def test_a_named_record_that_cannot_be_used_is_still_refused_at_composition(
+        case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from edge_os_api.core.research.operating_release import ReleaseRefused
+    from edge_os_api.core.research.released_runtime_bootstrap import server_research_runtime
+
+    if case == "incomplete":
+        settings = running(deployment_id=DEPLOYMENT)
+    elif case == "unapproved":
+        path, _sha = write_record(tmp_path, record())
+        settings = running(record_path=path)
+    else:
+        value = record(valid_from="2020-01-01T00:00:00Z", valid_until="2020-01-02T00:00:00Z")
+        path, sha = write_record(tmp_path, value)
+        approve(monkeypatch, value, sha)
+        settings = running(record_path=path)
+    settings.env = "production"
+    with pytest.raises(ReleaseRefused, match="hosted_deployment_refused"):
+        server_research_runtime(settings)
 
 
 def test_create_app_refuses_a_passed_runtime_with_another_research_hash(
@@ -380,15 +445,254 @@ def test_create_app_refuses_a_passed_runtime_with_another_research_hash(
         create_app(settings, research_runtime=local)
 
 
-def test_the_worker_main_refuses_before_it_runs_without_a_record(monkeypatch: pytest.MonkeyPatch) -> None:
-    from edge_os_api.core import database, settings as settings_module
-    from edge_os_api.core.research.operating_release import ReleaseRefused
-    from edge_os_api.research import investigation_jobs
+# --- Record v2: the execution release, and the production gate for controlled execution -----------------------------
 
-    configured = load_settings(production_env())
-    monkeypatch.setattr(settings_module, "load_settings", lambda: configured)
-    monkeypatch.setattr(database, "make_engine", lambda *_a, **_k: object())
-    monkeypatch.setattr(database, "make_session_factory", lambda _engine: object())
-    monkeypatch.setattr("sys.argv", ["worker", "--once"])
-    with pytest.raises(ReleaseRefused, match="hosted_deployment"):
-        investigation_jobs.main()
+EXECUTION_ID = "inapp-wmon-moe-20261023/1"
+EXECUTION_SHA = "4" * 64
+
+
+def record_v2(**changes: Any) -> dict[str, Any]:
+    value = record(schema_version=hosted_deployment.RECORD_VERSION_2,
+                   execution_release={"release_id": EXECUTION_ID, "sha256": EXECUTION_SHA})
+    value.update(changes)
+    return value
+
+
+def approve_actual(monkeypatch: pytest.MonkeyPatch, releases: dict[str, str]) -> None:
+    from edge_os_api.execution import operating_release
+
+    monkeypatch.setattr(operating_release, "APPROVED_ACTUAL_RELEASES", releases)
+
+
+def controlled_env(path: Path, **changes: str) -> dict[str, str]:
+    return production_env(EDGE_OS_EXECUTION_MODE="controlled", EDGE_OS_HOSTED_DEPLOYMENT_ID=DEPLOYMENT,
+                          EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH=str(path), **changes)
+
+
+def test_a_v2_record_binds_its_exact_execution_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record_v2())
+    approve(monkeypatch, record_v2(), sha)
+    loaded = hosted_deployment.check_hosted_deployment(running(record_path=path))
+    assert loaded is not None
+    assert (loaded.execution_release_id, loaded.execution_release_sha256) == (EXECUTION_ID, EXECUTION_SHA)
+    assert loaded.admits_execution_release(EXECUTION_ID, EXECUTION_SHA)
+    assert not loaded.admits_execution_release(EXECUTION_ID, "5" * 64)
+    assert not loaded.admits_execution_release("another-release/1", EXECUTION_SHA)
+    assert loaded.admits_research_release(RESEARCH_ID, RESEARCH_SHA)
+
+
+def test_a_v1_record_still_parses_and_grants_no_execution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record())
+    approve(monkeypatch, record(), sha)
+    loaded = hosted_deployment.check_hosted_deployment(running(record_path=path))
+    assert loaded is not None
+    assert loaded.execution_release_id is None and loaded.execution_release_sha256 is None
+    assert not loaded.admits_execution_release(EXECUTION_ID, EXECUTION_SHA)
+    assert not loaded.admits_execution_release("", "")
+
+
+@pytest.mark.parametrize("value", [
+    record(execution_release={"release_id": EXECUTION_ID, "sha256": EXECUTION_SHA}),
+    {key: item for key, item in record_v2().items() if key != "execution_release"},
+    record_v2(execution_release=None),
+    record_v2(execution_release={"release_id": EXECUTION_ID}),
+    record_v2(execution_release={"release_id": EXECUTION_ID, "sha256": EXECUTION_SHA, "extra": "x"}),
+    record_v2(execution_release={"release_id": EXECUTION_ID, "sha256": "A" * 64}),
+    record_v2(execution_release={"release_id": "", "sha256": EXECUTION_SHA}),
+    record_v2(schema_version="edge-os.hosted-deployment/3"),
+])
+def test_a_malformed_execution_binding_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                  value: dict[str, Any]) -> None:
+    path, sha = write_record(tmp_path, value)
+    approve(monkeypatch, value, sha)
+    with pytest.raises(HostedDeploymentRefused, match="hosted_deployment_invalid"):
+        hosted_deployment.check_hosted_deployment(running(record_path=path))
+
+
+def test_production_refuses_controlled_execution_without_a_named_record() -> None:
+    with pytest.raises(ConfigError, match="execution_mode: controlled execution needs an approved hosted deployment"):
+        load_settings(production_env(EDGE_OS_EXECUTION_MODE="controlled"))
+
+
+def test_production_refuses_controlled_execution_for_an_unregistered_record(tmp_path: Path) -> None:
+    path, _ = write_record(tmp_path, record_v2())
+    with pytest.raises(ConfigError) as caught:
+        load_settings(controlled_env(path))
+    assert "hosted_deployment: hosted_deployment_not_approved" in str(caught.value)
+    assert "execution_mode: controlled execution needs an approved hosted deployment" in str(caught.value)
+
+
+def test_production_refuses_controlled_execution_for_a_v1_record(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record())
+    approve(monkeypatch, record(), sha)
+    approve_actual(monkeypatch, {EXECUTION_ID: EXECUTION_SHA})
+    with pytest.raises(ConfigError, match="execution_mode: the hosted deployment record binds no execution release"):
+        load_settings(controlled_env(path))
+
+
+@pytest.mark.parametrize("actual", [{}, {EXECUTION_ID: "5" * 64}, {"another-release/1": EXECUTION_SHA}])
+def test_production_refuses_a_bound_release_that_is_not_the_approved_execution_release(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, actual: dict[str, str]) -> None:
+    path, sha = write_record(tmp_path, record_v2())
+    approve(monkeypatch, record_v2(), sha)
+    approve_actual(monkeypatch, actual)
+    with pytest.raises(ConfigError, match="execution_mode: the record's execution release is not the approved "
+                                          "actual execution release"):
+        load_settings(controlled_env(path))
+
+
+def test_production_admits_controlled_execution_only_for_the_exact_bound_release(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record_v2())
+    approve(monkeypatch, record_v2(), sha)
+    approve_actual(monkeypatch, {EXECUTION_ID: EXECUTION_SHA})
+    settings = load_settings(controlled_env(path))
+    assert settings.execution_mode == "controlled"
+
+
+def test_controlled_execution_never_admits_the_privy_app_secret(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record_v2())
+    approve(monkeypatch, record_v2(), sha)
+    approve_actual(monkeypatch, {EXECUTION_ID: EXECUTION_SHA})
+    with pytest.raises(ConfigError) as caught:
+        load_settings({**controlled_env(path), "EDGE_OS_PRIVY_APP_SECRET": "do-not-print"})
+    assert "EDGE_OS_PRIVY_APP_SECRET" in str(caught.value)
+    assert "do-not-print" not in str(caught.value)
+
+
+def test_a_v2_record_does_not_admit_fixture_execution_or_other_modes(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record_v2())
+    approve(monkeypatch, record_v2(), sha)
+    approve_actual(monkeypatch, {EXECUTION_ID: EXECUTION_SHA})
+    base = controlled_env(path)
+    for change, message in (
+            ({"EDGE_OS_EXECUTION_MODE": "fixture"}, "execution_mode"),
+            ({"EDGE_OS_WALLET_PROVIDER": "fixture"}, "wallet_provider"),
+            ({"EDGE_OS_RESEARCH_HISTORY_MODE": "recorded"}, "research_history_mode")):
+        with pytest.raises(ConfigError, match=message):
+            load_settings({**base, **change})
+
+
+def test_the_approved_actual_execution_releases_stay_empty() -> None:
+    from edge_os_api.execution import operating_release
+
+    assert dict(operating_release.APPROVED_ACTUAL_RELEASES) == {}
+
+
+# --- Loopback database route for the host research worker (builder decision 2026-10-23, option A) -------------------
+
+LOOPBACK_URL = "postgresql+psycopg://app@127.0.0.1:5432/edge_os?sslmode={mode}"
+LOOPBACK_REFUSAL = "database_url: production needs a hosted database, not a loopback host"
+
+
+def loopback_env(path: Path | None = None, *, mode: str = "verify-full", host: str = "127.0.0.1",
+                 **changes: str) -> dict[str, str]:
+    env = production_env(EDGE_OS_DATABASE_URL=LOOPBACK_URL.format(mode=mode).replace("127.0.0.1", host), **changes)
+    if path is not None:
+        env.update(EDGE_OS_HOSTED_DEPLOYMENT_ID=DEPLOYMENT, EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH=str(path))
+    return env
+
+
+def test_production_refuses_a_loopback_database_without_a_named_record() -> None:
+    with pytest.raises(ConfigError, match=LOOPBACK_REFUSAL):
+        load_settings(loopback_env())
+
+
+def test_production_refuses_a_loopback_database_for_an_unregistered_record(tmp_path: Path) -> None:
+    path, _ = write_record(tmp_path, record())
+    with pytest.raises(ConfigError) as caught:
+        load_settings(loopback_env(path))
+    assert "hosted_deployment: hosted_deployment_not_approved" in str(caught.value)
+    assert LOOPBACK_REFUSAL in str(caught.value)
+
+
+def test_production_refuses_a_loopback_database_whose_sslmode_differs_from_the_record(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record())
+    approve(monkeypatch, record(), sha)
+    with pytest.raises(ConfigError) as caught:
+        load_settings(loopback_env(path, mode="require"))
+    assert "hosted_deployment: hosted_deployment_tls_mismatch" in str(caught.value)
+    assert LOOPBACK_REFUSAL in str(caught.value)
+
+
+@pytest.mark.parametrize("value", [record(), record_v2()])
+def test_production_admits_127_0_0_1_only_for_a_registered_record_with_its_tls_mode(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: dict[str, Any]) -> None:
+    path, sha = write_record(tmp_path, value)
+    approve(monkeypatch, value, sha)
+    settings = load_settings(loopback_env(path))
+    assert settings.database_url.startswith("postgresql+psycopg://app@127.0.0.1:5432/")
+
+
+@pytest.mark.parametrize("host", ["localhost", ""])
+def test_production_still_refuses_other_loopback_forms_with_a_registered_record(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str) -> None:
+    path, sha = write_record(tmp_path, record())
+    approve(monkeypatch, record(), sha)
+    with pytest.raises(ConfigError, match=LOOPBACK_REFUSAL):
+        load_settings(loopback_env(path, host=host))
+
+
+def test_a_v1_record_admits_the_loopback_route_but_still_no_controlled_execution(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path, sha = write_record(tmp_path, record())
+    approve(monkeypatch, record(), sha)
+    approve_actual(monkeypatch, {EXECUTION_ID: EXECUTION_SHA})
+    with pytest.raises(ConfigError) as caught:
+        load_settings(loopback_env(path, EDGE_OS_EXECUTION_MODE="controlled"))
+    assert "execution_mode: the hosted deployment record binds no execution release" in str(caught.value)
+    assert LOOPBACK_REFUSAL not in str(caught.value)
+
+
+def test_a_non_loopback_production_database_is_unchanged_by_the_loopback_route(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert load_settings(production_env()).database_url == production_env()["EDGE_OS_DATABASE_URL"]
+    path, sha = write_record(tmp_path, record())
+    approve(monkeypatch, record(), sha)
+    named = production_env(EDGE_OS_HOSTED_DEPLOYMENT_ID=DEPLOYMENT, EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH=str(path))
+    assert load_settings(named).database_url == named["EDGE_OS_DATABASE_URL"]
+
+
+# --- Every loopback, unspecified or multi-host database host is refused in production ------------------------------
+
+OTHER_LOOPBACK_HOSTS = [
+    "", "localhost", "LOCALHOST", "LocalHost", "localhost.", "LOCALHOST.", "db.localhost", "DB.LOCALHOST.",
+    "127.0.0.1.", "127.0.0.2", "127.1.2.3", "127.255.255.254", "127.1", "2130706433", "0x7f000001", "0177.0.0.1",
+    "[::1]", "[0:0:0:0:0:0:0:1]", "[::0001]", "[::1%25lo]", "[::ffff:127.0.0.1]", "[::ffff:7f00:2]",
+    "0.0.0.0", "0", "[::]", "[::ffff:0.0.0.0]",
+    "127.0.0.1,db.example", "db.example,127.0.0.1", "db.example,db2.example", " 127.0.0.1", "127.0.0.1%09",
+]
+
+
+@pytest.mark.parametrize("host", OTHER_LOOPBACK_HOSTS)
+def test_production_refuses_every_other_loopback_unspecified_or_multi_host_form(host: str) -> None:
+    with pytest.raises(ConfigError, match=LOOPBACK_REFUSAL):
+        load_settings(loopback_env(host=host))
+
+
+@pytest.mark.parametrize("host", OTHER_LOOPBACK_HOSTS)
+def test_a_registered_record_admits_none_of_the_other_loopback_forms(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str) -> None:
+    path, sha = write_record(tmp_path, record())
+    approve(monkeypatch, record(), sha)
+    with pytest.raises(ConfigError, match=LOOPBACK_REFUSAL):
+        load_settings(loopback_env(path, host=host))
+
+
+@pytest.mark.parametrize("host", ["edge-os-postgres", "db.example", "localhost.example", "mylocalhost",
+                                  "127.example", "10.0.0.5", "128.0.0.1", "1.2.3.4", "[2001:db8::1]",
+                                  "[::ffff:10.0.0.5]"])
+def test_production_admits_non_loopback_hosts_as_before(host: str) -> None:
+    settings = load_settings(loopback_env(host=host))
+    assert settings.database_url == LOOPBACK_URL.format(mode="verify-full").replace("127.0.0.1", host)
+
+
+@pytest.mark.parametrize("host", ["localhost", "LOCALHOST", "[::1]", "127.0.0.2", "0.0.0.0", "127.0.0.1,db.example"])
+def test_local_keeps_accepting_loopback_forms(host: str) -> None:
+    url = f"postgresql+psycopg://app@{host}:5432/edge_os"
+    settings = load_settings(production_env(EDGE_OS_ENV="local", EDGE_OS_DATABASE_URL=url))
+    assert settings.database_url == url

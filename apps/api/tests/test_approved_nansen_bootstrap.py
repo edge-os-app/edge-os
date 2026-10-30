@@ -1,4 +1,4 @@
-"""The server default registers and composes exactly one approved Nansen-only release (#58 NANSEN-RUNTIME-RELEASE-L4).
+"""The server default registers and composes exactly one approved MOE history plus Nansen release (#58 NANSEN-RUNTIME-RELEASE-L4).
 
 Runs with `--noconftest`: no database, socket or provider. A recording stand-in for `os.environ` holding only literal
 fake sentinels is installed before any project import, so the real environment is never consulted and every looked-up
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
+import logging
 import os
 import socket
 from collections.abc import Iterator
@@ -19,13 +20,13 @@ from typing import Any
 
 import pytest
 
-RELEASE_ID = "actual-moe-nansen-demo-20261018/1"
-RELEASE_SHA256 = "dce1e05ffdecf72eedaf340e55fad0e2a4271c1ea7860d15aed17fd2c1b1d743"
+RELEASE_ID = "actual-moe-history2h-nansen-20261022/1"
+RELEASE_SHA256 = "45c8cfbf5d61eb519ee3140e02e50b2b7091669dc28cbef224bdc6a0e77ca877"
 # The one report request the release permits, pinned independently of the definition it must match.
 EXPECTED_REQUEST: dict[str, Any] = {
     "token_address": "0xd8e004acba279417c04c0633cb5a21ceca207777",
     "token_symbol": "MOE",
-    "window": {"start_utc": "2026-10-17T12:00:00Z", "end_utc": "2026-10-18T12:00:00Z"},
+    "window": {"start_utc": "2026-10-21T23:40:00Z", "end_utc": "2026-10-22T23:40:00Z"},
     "operations": ["holders", "flows"],
     "holder_query": {"label_type": "all_holders", "aggregate_by_entity": False, "order_field": "token_amount",
                      "value_usd_min": None},
@@ -118,7 +119,7 @@ def test_the_registries_carry_exactly_the_one_accepted_nansen_only_release() -> 
     assert set(released_runtime_bootstrap.RELEASE_DEFINITIONS) == {RELEASE_ID}
     assert operating_release.APPROVED_RELEASES == {RELEASE_ID: RELEASE_SHA256}
     definition = _definition()
-    assert definition.kind == "ACTUAL" and definition.history is None and definition.nansen is not None
+    assert definition.kind == "ACTUAL" and definition.history is not None and definition.nansen is not None
     assert definition.nansen.endpoint == "https://api.nansen.ai"
     assert definition.nansen.credential_slot == "NANSEN_API_KEY"
     assert release_sha256(definition) == RELEASE_SHA256
@@ -134,10 +135,10 @@ def test_the_default_composes_the_api_and_worker_runtime_without_reading_or_sock
     worker = released_runtime_bootstrap.server_research_runtime(SETTINGS)
     assert api is not None and worker is not None
     assert api.release_sha256 == worker.release_sha256 == RELEASE_SHA256
-    assert api.release.history is None and worker.release.history is None
+    assert api.release.history is not None and worker.release.history is not None
     assert (api.evidence_class, api.transport_kind, api.nansen_transport_kind) == (
         "PROVIDER_ACTUAL", "PROVIDER_HTTP", "PROVIDER_HTTP")
-    assert api.network_transport is False and api.nansen_network is True
+    assert api.network_transport is True and api.nansen_network is True
     assert isinstance(api.nansen_transport, NansenHttpFactory) and api.nansen_transport.network
     assert nansen_request(api.release.nansen) == EXPECTED_REQUEST
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -146,15 +147,16 @@ def test_the_default_composes_the_api_and_worker_runtime_without_reading_or_sock
 
 
 def test_the_default_is_registered_in_code_not_gated_by_settings_or_environment(
-        monkeypatch: pytest.MonkeyPatch, no_sockets: list[Any]) -> None:
+        monkeypatch: pytest.MonkeyPatch, no_sockets: list[Any], caplog: pytest.LogCaptureFixture) -> None:
     # Registration is code-owned: a hostile environment changes nothing and local/test composition stays available.
-    # Production additionally needs an approved hosted deployment record, which is empty here.
+    # Production names no hosted deployment record here, so research stays off and the server still starts.
     monkeypatch.setenv("EDGE_OS_NANSEN_RELEASE", "actual-attacker/1")
     monkeypatch.setenv("NANSEN_API_KEY", "fake-nansen-SENTINEL-4b5c6d")
     runtime = released_runtime_bootstrap.server_research_runtime(SETTINGS)
     assert runtime is not None and runtime.release_sha256 == RELEASE_SHA256
-    with pytest.raises(ReleaseRefused, match="hosted_deployment_not_matched"):
-        released_runtime_bootstrap.server_research_runtime(SimpleNamespace(env="production"))
+    with caplog.at_level(logging.INFO, logger="edge_os"):
+        assert released_runtime_bootstrap.server_research_runtime(SimpleNamespace(env="production")) is None
+    assert "no hosted deployment is named" in caplog.text
     assert set(released_runtime_bootstrap.RELEASE_DEFINITIONS) == {RELEASE_ID}
     assert operating_release.APPROVED_RELEASES == {RELEASE_ID: RELEASE_SHA256}
     assert nansen_request(runtime.release.nansen) == EXPECTED_REQUEST

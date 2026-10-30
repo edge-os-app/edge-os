@@ -8,6 +8,8 @@ import type { InvestigationConfiguration, InvestigationEnvelope, InvestigationPr
 import { EffectComparisonPanel } from "./EffectComparisonPanel";
 import { ResearchNansenReport } from "./ResearchNansenReport";
 import { declarationRelease, describeRelease, releaseBounds, sourceRelease, transportRelease } from "../lib/research-release";
+import { deriveHistoryPlan, historyUnknowns } from "../lib/history-declaration";
+import type { HistoryDirection, HistoryPlan } from "../lib/history-declaration";
 
 const ADOPTED_FIELDS = ["edge_spec", "question", "pool_binding", "variants", "direction", "horizons", "sources",
   "candidate_limit", "parameter_limit", "compute_limit", "period", "partitions", "permitted_access",
@@ -62,6 +64,18 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
   const [reopenId, setReopenId] = useState("");
   const [configuration, setConfiguration] = useState<InvestigationConfiguration | null>(null);
   const [edgeSpec, setEdgeSpec] = useState<InvestigationProposal["edge_spec"] | null>(null);
+  // The real source this server serves when it composes an approved ACTUAL release. Wording only; the server still
+  // decides which sources exist. A read failure leaves the recorded labels in place.
+  const [realSource, setRealSource] = useState<HistorySource | null>(null);
+
+  useEffect(() => {
+    let current = true;
+    api.historySources().then((catalog) => {
+      if (!current) return;
+      setRealSource(catalog.sources.find((item) => sourceRelease(item)?.kind === "ACTUAL") ?? null);
+    }).catch(() => { /* the recorded wording is the safe fallback */ });
+    return () => { current = false; };
+  }, []);
 
   useEffect(() => {
     let current = true;
@@ -225,6 +239,8 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
 
   if (loading) return <section className="panel" aria-busy="true"><h2>Investigation plan</h2><p role="status">Loading the saved plan.</p></section>;
 
+  const realRelease = realSource ? sourceRelease(realSource) : null;
+
   return (
     <section className="panel stack investigation-review" aria-labelledby="investigation-title" data-testid="investigation-review">
       <div>
@@ -267,7 +283,9 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
         <div className="status ok" data-testid="investigation-saved">
           <p className="visually-hidden" role="status">Declaration saved before outcome review. No study started.</p>
           <h3 ref={savedHeading} tabIndex={-1}>Declaration saved</h3>
-          <p>Saved before outcome review. No study started. This profile uses an unqualified synthetic fixture.</p>
+          <p>{realRelease
+            ? "Saved before outcome review. No study started. This saved profile is an interface example; the real-MOE study on this page is the history investigation below."
+            : "Saved before outcome review. No study started. This profile uses an unqualified synthetic fixture."}</p>
           <dl className="kv">
             <dt>Declaration ID</dt><dd className="mono">{selected.declaration.record_id}</dd>
             <dt>Budget version</dt><dd>{selected.declaration.content.configuration.budget_version}</dd>
@@ -286,7 +304,9 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
 
       {proposal && configuration && edgeSpec ? (
         <div className="stack">
-          <p role="note" className="status stop">{proposal.notice} The proposal keeps your original request unchanged. This synthetic pool is not qualified for production research.</p>
+          <p role="note" className="status stop">{realRelease && realSource
+            ? `The real-MOE study on this page is the history investigation below. It uses the approved operating release ${realRelease.release_id} on pool ${realSource.market.pool_address} (base ${realSource.market.base_asset}, quote ${realSource.market.quote_asset}). This separate bounded review is an interface example: adoption saves a pre-outcome declaration and runs no study. Its example pool is not the real-MOE study's market and is not qualified for production research.`
+            : `${proposal.notice} The proposal keeps your original request unchanged. This synthetic pool is not qualified for production research.`}</p>
           <section aria-labelledby="request-review-title" className="stack">
             <h3 id="request-review-title">Your request and hypothesis</h3>
             <p className="words" data-testid="investigation-original-request">{configuration.question}</p>
@@ -334,10 +354,14 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
           <section aria-labelledby="scope-title" className="stack">
             <h3 id="scope-title">Proposed scope and budget</h3>
             <dl className="kv">
-              <dt>Pool</dt><dd>{configuration.pool_binding.profile_id} · unqualified synthetic fixture</dd>
-              <dt>Limitations</dt><dd>{configuration.pool_binding.limitations.join(" ")}</dd>
-              <dt>Data source</dt><dd>{configuration.sources.join(", ")}</dd>
-              <dt>Permitted access</dt><dd>Fixture only. No provider queries.</dd>
+              <dt>{realRelease ? "Example pool (not the real-MOE study market)" : "Pool"}</dt>
+              <dd>{realRelease ? "Unqualified interface example; the saved declaration keeps its exact identifier."
+                : `${configuration.pool_binding.profile_id} · unqualified synthetic fixture`}</dd>
+              <dt>Limitations</dt><dd>{realRelease
+                ? "Interface example only; no production pool or source is qualified."
+                : configuration.pool_binding.limitations.join(" ")}</dd>
+              <dt>Data source</dt><dd>{realRelease ? "Interface example only" : configuration.sources.join(", ")}</dd>
+              <dt>Permitted access</dt><dd>{realRelease ? "Interface example only. No provider queries." : "Fixture only. No provider queries."}</dd>
               <dt>Budget version</dt><dd>{configuration.budget_version}</dd>
               <dt>Cost ceiling</dt><dd>$0. No paid access is permitted.</dd>
               <dt>Partitions</dt><dd>{configuration.partitions.map((item) => `${item.partition_id}: ${item.role}`).join(", ")}</dd>
@@ -501,10 +525,6 @@ function expressions(row: RuleRow, quoteUnit: string) {
   };
 }
 
-function shiftMinutes(value: string, minutes: number): string {
-  return new Date(new Date(value).valueOf() + minutes * 60_000).toISOString().replace(".000Z", "Z");
-}
-
 function storedKey(name: string): string {
   try {
     const saved = window.sessionStorage.getItem(name);
@@ -572,6 +592,7 @@ function TransportFacts({ transport }: { transport: TransportSummary }) {
 export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { intakeId: string; interpretationRevisionId: string | null }) {
   const [question, setQuestion] = useState("");
   const [sources, setSources] = useState<HistorySource[]>([]);
+  const [researchUnavailable, setResearchUnavailable] = useState(false);
   const [budget, setBudget] = useState<ResearchBudget | null>(null);
   const [declarations, setDeclarations] = useState<HistoryDeclaration[]>([]);
   const [selected, setSelected] = useState<HistoryDeclaration | null>(null);
@@ -610,7 +631,9 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
       const [catalog, saved, request] = await Promise.all([api.historySources(), api.historyInvestigations(intakeId),
         api.get(intakeId)].map((call) => Promise.resolve(call))) as [Awaited<ReturnType<typeof api.historySources>>,
         Awaited<ReturnType<typeof api.historyInvestigations>>, Awaited<ReturnType<typeof api.get>>];
-      setSources(catalog.sources); setDeclarations(saved.declarations); setQuestion(request.intake.content.original_request);
+      setSources(catalog.sources);
+      setResearchUnavailable(catalog.mode === "unavailable" && !catalog.operating_release);
+      setDeclarations(saved.declarations); setQuestion(request.intake.content.original_request);
       await refreshBudget();
     } catch (cause) { setLoadError(cause instanceof ApiError ? cause.detail : "Recorded-history research could not be loaded."); }
   };
@@ -626,9 +649,17 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
   const frozenRelease = selected ? declarationRelease(selected.declaration.content.frozen as unknown as Record<string, unknown>) : null;
   const rulesComplete = rules.every((row) => /^[1-9][0-9]?$/.test(row.lookback) && /^-?[0-9]+(\.[0-9]+)?$/.test(row.threshold)
     && /^[0-9]+(\.[0-9]+)?$/.test(row.volume));
-  const ready = source !== null && question.length > 0 && hypothesis.trim().length > 0 && rulesComplete && adopted;
+  // The longest rule lookback decides how much history a decision needs before the schedule can start.
+  const lookbackBuckets = rules.reduce((longest, row) => {
+    const value = Number(row.lookback);
+    return Number.isInteger(value) && value > longest ? value : longest;
+  }, 0);
+  const plan = source ? deriveHistoryPlan({ window: source.window, direction: direction as HistoryDirection, lookbackBuckets }) : null;
+  const planRefusal = plan && !plan.ok && rulesComplete ? plan.reason : "";
+  const ready = source !== null && question.length > 0 && hypothesis.trim().length > 0 && rulesComplete && adopted
+    && plan !== null && plan.ok;
 
-  const buildDeclaration = (source: HistorySource): Record<string, unknown> => {
+  const buildDeclaration = (source: HistorySource, plan: Extract<HistoryPlan, { ok: true }>): Record<string, unknown> => {
     const release = sourceRelease(source);
     const fixedBounds = release ? releaseBounds(release) : null;
     const quoteUnit = `QUOTE:${source.market.quote_asset}`;
@@ -636,12 +667,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
     const evaluations = rules.map(() => crypto.randomUUID());
     const variants = rules.map((_, index) => `rule-${index + 1}`);
     const descriptive = direction === "DESCRIPTIVE";
-    const { start, end } = source.window;
-    const partitions = descriptive
-      ? [{ partition_id: "described", role: "DESCRIPTIVE", start, end }]
-      : [{ partition_id: "train", role: "TRAINING", start, end: shiftMinutes(start, 60) },
-        { partition_id: "validate", role: "VALIDATION", start: shiftMinutes(start, 60), end: shiftMinutes(start, 90) },
-        { partition_id: "holdout", role: "HOLDOUT", start: shiftMinutes(start, 90), end }];
+    const partitions = plan.partitions;
     return {
       operation_id: crypto.randomUUID(), idempotency_key: `ui-history-${crypto.randomUUID()}`,
       expected_interpretation_revision_id: interpretationRevisionId,
@@ -650,7 +676,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
         falsification: descriptive ? { status: "DESCRIPTIVE_ONLY", criteria: "No outcome claim is evaluated." }
           : { status: "DECLARED", criteria: direction === "OUTPERFORM" ? "The triggered minus untriggered mean is not positive." : "The triggered minus untriggered mean is not negative." },
         alternatives: ["Short-term noise explains any difference."],
-        unknowns: ["Recorded responses are synthetic; no real pool behaviour is measured."] },
+        unknowns: historyUnknowns(source.evidence_class, sourceRelease(source)?.release_id ?? null) },
       configuration: {
         question, source: { source_id: source.source_id, profile_sha256: source.profile_sha256, evidence_class: source.evidence_class },
         market: source.market, window: source.window,
@@ -658,7 +684,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
         direction, horizons: [{ value: 5, unit: "MINUTES" }], partitions,
         evaluation_plan: evaluations.map((evaluation_id, index) => ({ evaluation_id, trial_id: trial, variant_id: variants[index],
           horizon: { value: 5, unit: "MINUTES" }, partition_ids: [partitions[0].partition_id] })),
-        schedule: { version: "p09.decision-clock/1", start: shiftMinutes(start, 15), end: shiftMinutes(end, -10), interval_seconds: 300 },
+        schedule: plan.schedule,
         rule_map: { schema_version: "edge-os.hypothesis-rule-map/1", control: "UNTRIGGERED_DECISIONS", incremental_volume_declared: true,
           rules: rules.map((row, index) => {
             const built = expressions(row, quoteUnit);
@@ -699,7 +725,9 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
 
   const declare = () => {
     if (!ready || busy || !source || pendingDeclaration) return;
-    void saveDeclaration(buildDeclaration(source));
+    const current = deriveHistoryPlan({ window: source.window, direction: direction as HistoryDirection, lookbackBuckets });
+    if (!current.ok) return;
+    void saveDeclaration(buildDeclaration(source, current));
   };
 
   const startJob = async (fresh: boolean) => {
@@ -732,12 +760,16 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
     finally { await loadJobs(selected); await refreshBudget(); setBusy(false); }
   };
 
+  const actualSource = sources.find((item) => sourceRelease(item)?.kind === "ACTUAL") ?? null;
+
   return (
     <section className="stack" aria-labelledby="history-title" data-testid="history-investigation"
       style={{ overflowWrap: "anywhere" }}>
-      <h3 id="history-title">Recorded-history investigation</h3>
-      {sources.some((item) => sourceRelease(item)?.kind === "ACTUAL")
-        ? <p className="status stop">This server composes an approved actual operating release: its source calls the named provider within the listed fixed limits. Every other source is a SYNTHETIC recording. Results are descriptive and grant no trading permission.</p>
+      <h3 id="history-title">{actualSource ? "History investigation" : "Recorded-history investigation"}</h3>
+      {researchUnavailable
+        ? <p className="status stop" data-testid="research-unavailable" role="status">Research is not available here yet. This server composes no research release, so a new study cannot start. Saved studies still open below; nothing is read or sent.</p>
+        : actualSource
+        ? <p className="status stop">{`This server composes the approved actual operating release ${sourceRelease(actualSource)!.release_id}: its history source calls the named providers within the fixed limits. Results are descriptive and grant no trading permission.`}</p>
         : <p className="status stop">Recorded responses only: every source here is a SYNTHETIC recording replayed locally. No provider is called and nothing here is observed market history. Results are descriptive and grant no trading permission.</p>}
       {loadError ? <div className="status err" role="alert"><p>{loadError}</p><button className="btn btn-secondary" type="button" onClick={() => void loadAll()}>Retry</button></div> : null}
       {budget ? (
@@ -797,8 +829,8 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
         </div>
       ) : null}
 
-      <details open={declarations.length === 0}>
-        <summary>Declare a new recorded-history investigation</summary>
+      {researchUnavailable ? null : <details open={declarations.length === 0}>
+        <summary>{actualSource ? "Declare a new history investigation" : "Declare a new recorded-history investigation"}</summary>
         <div className="stack">
           <div className="field">
             <label htmlFor="history-source">Recorded source</label>
@@ -878,11 +910,12 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
               onChange={(event) => setAdopted(event.target.checked)} />
             I reviewed and adopt every setting above before any data is read
           </label>
+          {planRefusal ? <p className="status stop" role="alert" data-testid="history-window-refusal">{planRefusal}</p> : null}
           <button className="btn btn-primary" type="button" onClick={declare} disabled={!ready || pendingDeclaration !== null} aria-disabled={busy || undefined}>
             {busy ? "Saving…" : "Save history declaration"}
           </button>
         </div>
-      </details>
+      </details>}
     </section>
   );
 }
