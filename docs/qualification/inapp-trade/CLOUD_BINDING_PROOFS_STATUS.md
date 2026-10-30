@@ -163,6 +163,7 @@ Not changed: `operating_release.py` registries, `release.authored.json`, the sea
 
 RED first: before the module existed, `tests/execution/test_inapp_binding_fill.py` failed at collection
 (`ModuleNotFoundError: edge_os_api.execution.inapp_binding_fill`). The review-regression tests added for candidate
-2 were run against the candidate-1 module first: 18 failed, 95 passed.
+2 were run against the candidate-1 module first: 18 failed, 95 passed. The candidate-3 regressions (non-ASCII digits in `at`, a non-finite number) failed
+against the candidate-2 module first: 3 failed, 113 passed.
 
 Final results, reviews and the final SHA are in the "Final candidate" section below.

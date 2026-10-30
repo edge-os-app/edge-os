@@ -57,7 +57,7 @@ DOES_NOT_SHOW = (
 _QUANTITY = re.compile(r"0x(?:0|[1-9a-f][0-9a-f]*)")
 _WORDS = re.compile(r"0x((?:[0-9a-f]{64})+)")
 _HASH = re.compile(r"0x[0-9a-f]{64}")
-_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+_AT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 
 
 class BindingFillRefused(Exception):
@@ -85,7 +85,14 @@ def _strict_json(data: bytes) -> Any:
     def refuse_constant(name: str) -> Any:
         raise ValueError(name)
 
-    return json.loads(data.decode("utf-8"), object_pairs_hook=_unique, parse_constant=refuse_constant)
+    def finite_float(text: str) -> float:
+        value = float(text)
+        if value in (float("inf"), float("-inf")):
+            raise ValueError("non-finite number")
+        return value
+
+    return json.loads(data.decode("utf-8"), object_pairs_hook=_unique, parse_constant=refuse_constant,
+                      parse_float=finite_float)
 
 
 def _word_of(address: str) -> str:

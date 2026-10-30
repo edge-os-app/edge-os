@@ -558,3 +558,18 @@ def test_reads_at_or_after_the_release_signing_cutoff_are_stale():
     late = fill(valid_until="2026-05-28T20:26:50Z", mandate_expires_at="2026-10-25T00:00:00Z")
     refused("READ_BLOCK_STALE", release_fill=late)
     build(release_fill=fill(valid_until="2026-05-28T20:26:51Z"))
+
+
+# ---------------------------------------------------------------- review regressions (candidate b3f3289)
+
+def test_an_at_time_with_non_ascii_digits_refuses():
+    store = records()
+    store["operations"][1]["at"] = "٢٠٢٦-05-28T20:26:50Z"
+    refused("READS_RECORDS_INVALID", store)
+
+
+@pytest.mark.parametrize("params", ["[1e400]", '{"a": -1e400}'])
+def test_a_non_finite_number_in_the_records_refuses(params):
+    text = raw(records()).decode().replace('"params": []', '"params": ' + params, 1)
+    with pytest.raises(bf.BindingFillRefused, match="READS_RECORDS_INVALID"):
+        bf.build_reads_artifact(authored(), fill(), text.encode())

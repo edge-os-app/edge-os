@@ -191,7 +191,7 @@ those bytes. `verify-reads` rebuilds the artifact from the records and compares 
 
 | Case | Code |
 | --- | --- |
-| Records file not the schema, missing/extra key, a repeated JSON key anywhere, wrong order, wrong `expect`/`method`, a status that is not one of `RESULT`, `RPC_ERROR`, `REPLY_LOST`, `SKIPPED` | `READS_RECORDS_INVALID` |
+| Records file not the schema, missing/extra key, a repeated JSON key or a non-finite number anywhere, an `at` that is not ASCII `YYYY-MM-DDTHH:MM:SSZ`, wrong order, wrong `expect`/`method`, a status that is not one of `RESULT`, `RPC_ERROR`, `REPLY_LOST`, `SKIPPED` | `READS_RECORDS_INVALID` |
 | A record's params differ from the plan at `B` (compared as canonical JSON bytes, so `0` is not `false`), or its `request_sha256` is not the hash of its own params (edited record) | `READS_RECORD_MISMATCH` |
 | A status other than `RESULT`, a non-null `error`, or a missing result: never read as zero | `READ_UNAVAILABLE` |
 | A malformed block, word or `at`; uppercase hex (one chain state has one artifact); `at` times out of order; a block timestamp after its own read or out of range | `READ_MALFORMED` |
