@@ -3,6 +3,7 @@
 import { Fragment } from "react";
 import { describeExpression, summarizeValue } from "../lib/describe";
 import type { Strategy } from "../lib/types";
+import { plural } from "../lib/plural";
 
 export function RulesReview({ strategy }: { strategy: Strategy }) {
   const rows: [string, string][] = [
@@ -13,7 +14,7 @@ export function RulesReview({ strategy }: { strategy: Strategy }) {
     ["Costs", summarizeValue("cost_assumptions", strategy.cost_assumptions)],
     ["Risk limits", summarizeValue("risk_limits", strategy.risk_limits)],
     ["Actions", summarizeValue("action_scope", strategy.action_scope)],
-    ["Cadence", `${summarizeValue("decision_interval_seconds", strategy.decision_interval_seconds)}. Needs ${strategy.warmup_buckets} earlier five-minute buckets of history.`],
+    ["How often", `${summarizeValue("decision_interval_seconds", strategy.decision_interval_seconds)}. Needs ${plural(strategy.warmup_buckets, "earlier five-minute period")} of history.`],
     ["Trading permission", strategy.execution_permission.state === "NOT_GRANTED" ? "Not granted" : strategy.execution_permission.state],
   ];
   return (

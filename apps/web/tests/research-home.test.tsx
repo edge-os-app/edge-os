@@ -149,17 +149,17 @@ describe("preparation copy follows the configured interpreter", () => {
     expect(note()).toMatch(/authorize a trade/i);
   });
 
-  it("keeps the fixture interpreter clearly a fixture and not a paid call", async () => {
+  it("keeps the example mode clearly example data and not a paid call", async () => {
     render(<ResearchHome userId="user-1" {...props} />);
-    await waitFor(() => expect(note()).toMatch(/fixture/i));
+    await waitFor(() => expect(note()).toMatch(/example mode/i));
     expect(note()).not.toMatch(/\bfree\b/i);
     expect(note()).not.toMatch(/may incur a model cost/i);
   });
 
-  it("keeps the local fake provider clearly not a real model call", async () => {
+  it("keeps the example mode clearly not a real model call", async () => {
     mocks.interpreter.mockResolvedValue({ interpreter: { kind: "HERMES_LOCAL_FAKE_PROVIDER", id: "x", notice: "local fake notice" }, samples: mocks.samples });
     render(<ResearchHome userId="user-1" {...props} />);
-    await waitFor(() => expect(note()).toMatch(/local fake provider/i));
+    await waitFor(() => expect(note()).toMatch(/example mode/i));
     expect(note()).not.toMatch(/\bfree\b/i);
     expect(note()).not.toMatch(/may incur a model cost/i);
   });
@@ -170,7 +170,7 @@ describe("preparation copy follows the configured interpreter", () => {
     await waitFor(() => expect(screen.getByText(/examples could not be loaded/i)).toBeInTheDocument());
     expect(note()).not.toMatch(/\bfree\b/i);
     expect(note()).not.toMatch(/may incur a model cost/i);
-    expect(note()).not.toMatch(/fixture/i);
+    expect(note()).not.toMatch(/example mode/i);
   });
 
   it("never calls preparing free while the interpreter configuration is still unknown", async () => {

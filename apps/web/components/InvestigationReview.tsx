@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { payloadBindingText } from "../lib/types";
 import type { HistoryDeclaration, HistorySource, InvestigationJob, InvestigationReport, ResearchBudget, TransportSummary } from "../lib/api";
@@ -8,9 +8,22 @@ import type { InvestigationConfiguration, InvestigationEnvelope, InvestigationPr
 import { EffectComparisonPanel } from "./EffectComparisonPanel";
 import { ResearchNansenReport } from "./ResearchNansenReport";
 import { declarationRelease, describeRelease, releaseBounds, sourceRelease, transportRelease } from "../lib/research-release";
+import { Details } from "./Details";
+import { plural } from "../lib/plural";
+import { EVIDENCE_CLASS, VERDICT, plain } from "../lib/labels";
 import { deriveHistoryPlan, historyUnknowns } from "../lib/history-declaration";
 import type { HistoryDirection, HistoryPlan } from "../lib/history-declaration";
 
+const PARTITION_ROLE: Record<string, string> = {
+  DESCRIPTIVE: "Descriptive", TRAINING: "Training", VALIDATION: "Validation", HOLDOUT: "Holdout",
+};
+const REPORT_OUTCOME: Record<string, string> = {
+  SUPPORTED: "Supported", LIMITED: "Limited", CONTRADICTORY: "Contradictory", UNRESOLVED: "Unresolved",
+  UNAVAILABLE: "Unavailable", FAILED: "Failed", UNKNOWN: "Unknown",
+};
+const DIRECTION: Record<string, string> = {
+  DESCRIPTIVE: "Describe only", OUTPERFORM: "Triggered decisions outperform", UNDERPERFORM: "Triggered decisions underperform",
+};
 const ADOPTED_FIELDS = ["edge_spec", "question", "pool_binding", "variants", "direction", "horizons", "sources",
   "candidate_limit", "parameter_limit", "compute_limit", "period", "partitions", "permitted_access",
   "stopping_rule", "evaluation_plan", "budget_version", "optional_tools"];
@@ -245,31 +258,31 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
     <section className="panel stack investigation-review" aria-labelledby="investigation-title" data-testid="investigation-review">
       <div>
         <h2 id="investigation-title">Investigation plan</h2>
-        <p className="muted">Review the proposed scope and adoption sources. Saving records a pre-outcome declaration. It does not read data, run a study or start a trade.</p>
+        <p className="muted">Review the proposed scope and sources. Saving records the rule before any result is read. It does not read data, run a study or start a trade.</p>
       </div>
       {error ? <p className="status err" role="alert" tabIndex={-1} ref={errorRef}>{error}</p> : null}
       {refreshingProposal ? <p role="status" aria-busy="true">Refreshing the current review. Your edits are unchanged.</p> : null}
       {proposalError ? <div className="status err" role="alert">
         <p>{proposalRetryReplacesDraft
-          ? `A new hypothesis could not be prepared. ${proposalError} The saved declaration is unchanged.`
+          ? `A new hypothesis could not be prepared. ${proposalError} The saved rule is unchanged.`
           : proposalError}</p>
         <button className="btn btn-secondary" type="button" onClick={() => void refreshProposal(proposalRetryReplacesDraft)} disabled={busy || refreshingProposal}>
           {proposalRetryReplacesDraft ? "Retry new hypothesis" : "Retry proposal"}
         </button>
       </div> : null}
-      {reopenId ? <button className="btn btn-secondary" type="button" onClick={() => void reopen(reopenId)} disabled={busy}>Retry opening saved declaration</button> : null}
+      {reopenId ? <button className="btn btn-secondary" type="button" onClick={() => void reopen(reopenId)} disabled={busy}>Retry opening the saved rule</button> : null}
       {refreshNotice ? <p className="status stop" role="status">{refreshNotice}</p> : null}
-      {savedReadFailed ? <button className="btn btn-secondary" type="button" onClick={() => void retrySavedReads()} disabled={busy}>Retry saved declarations</button> : null}
+      {savedReadFailed ? <button className="btn btn-secondary" type="button" onClick={() => void retrySavedReads()} disabled={busy}>Retry saved rules</button> : null}
 
       {declarations?.length ? (
         <div className="stack">
-          <h3>Saved declarations</h3>
+          <h3>Saved rules</h3>
           {declarations.map((item) => (
             <div className="card" key={item.record_id}>
               <strong>{item.content.edge_spec.hypothesis}</strong>
               <span className="muted">{item.content.edge_spec.claim.status === "DESCRIPTIVE_ONLY" ? "Descriptive only" : "Hypothesis"} · {item.content.configuration.budget_version}</span>
               <button className="btn btn-secondary" type="button" onClick={() => void reopen(item.record_id)} disabled={busy}>
-                {busy ? "Opening…" : "Reopen saved declaration"}
+                {busy ? "Opening…" : "Reopen saved rule"}
               </button>
             </div>
           ))}
@@ -281,23 +294,28 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
 
       {selected ? (
         <div className="status ok" data-testid="investigation-saved">
-          <p className="visually-hidden" role="status">Declaration saved before outcome review. No study started.</p>
-          <h3 ref={savedHeading} tabIndex={-1}>Declaration saved</h3>
+          <p className="visually-hidden" role="status">Rule saved before any result was read. No study started.</p>
+          <h3 ref={savedHeading} tabIndex={-1}>Rule saved</h3>
           <p>{realRelease
-            ? "Saved before outcome review. No study started. This saved profile is an interface example; the real-MOE study on this page is the history investigation below."
-            : "Saved before outcome review. No study started. This profile uses an unqualified synthetic fixture."}</p>
+            ? "Saved before any result was read. No study started. This saved profile is an example; the real-MOE study on this page is the history investigation below."
+            : "Saved before any result was read. No study started. This profile uses example data that is not approved for production research."}</p>
           <dl className="kv">
-            <dt>Declaration ID</dt><dd className="mono">{selected.declaration.record_id}</dd>
-            <dt>Budget version</dt><dd>{selected.declaration.content.configuration.budget_version}</dd>
-            <dt>P08 declaration-time outcome labels read</dt><dd>{selected.declaration.content.outcome_labels_read ? "Yes" : "No"}</dd>
+            
+            
+            <dt>Outcome labels read when saved</dt><dd>{selected.declaration.content.outcome_labels_read ? "Yes" : "No"}</dd>
             <dt>Provider queries</dt><dd>{selected.access_history[0]?.provider_queries ?? 0}</dd>
             <dt>Saved access event</dt><dd>{selected.access_history[0]?.event ?? "Unavailable"}</dd>
           </dl>
-          <details>
-            <summary>Review the complete saved configuration</summary>
+          <Details summary="Details">
+            <dl className="kv">
+              <dt>Rule ID</dt><dd className="mono">{selected.declaration.record_id}</dd>
+              <dt>Budget version</dt><dd className="mono">{selected.declaration.content.configuration.budget_version}</dd>
+              <dt>Outcome-label snapshot</dt><dd className="mono">P08 · read: {selected.declaration.content.outcome_labels_read ? "yes" : "no"}</dd>
+              <dt>Saved access event</dt><dd className="mono">{selected.access_history[0]?.event ?? "Unavailable"}</dd>
+            </dl>
             <pre className="records-json">{JSON.stringify(selected.declaration.content, null, 2)}</pre>
-            <p className="muted">Sources, field origins, optional tools, trial identities and evaluation identities are saved with this declaration.</p>
-          </details>
+            <p className="muted">Sources, field origins, extra tools, trial identities and test identities are saved with this rule.</p>
+          </Details>
           <EffectComparisonPanel intakeId={intakeId} saved={selected} />
         </div>
       ) : null}
@@ -305,8 +323,15 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
       {proposal && configuration && edgeSpec ? (
         <div className="stack">
           <p role="note" className="status stop">{realRelease && realSource
-            ? `The real-MOE study on this page is the history investigation below. It uses the approved operating release ${realRelease.release_id} on pool ${realSource.market.pool_address} (base ${realSource.market.base_asset}, quote ${realSource.market.quote_asset}). This separate bounded review is an interface example: adoption saves a pre-outcome declaration and runs no study. Its example pool is not the real-MOE study's market and is not qualified for production research.`
-            : `${proposal.notice} The proposal keeps your original request unchanged. This synthetic pool is not qualified for production research.`}</p>
+            ? `The real-MOE study on this page is the history investigation below. It uses the approved locked research setup on its market. This separate review is an example: adoption saves the rule before any result is read and runs no study. Its example market is not the real-MOE study's market and is not approved for production research.`
+            : "This is an example-only proposal. No study runs. The proposal keeps your original request unchanged. This example market is not approved for production research."}</p>
+          {!realRelease ? <Details summary="Details"><p className="mono">{proposal.notice}</p></Details> : null}
+          {realRelease && realSource ? <Details summary="Details"><dl className="kv">
+            <dt>Locked research setup</dt><dd className="mono">{realRelease.release_id}</dd>
+            <dt>Market pool</dt><dd className="mono">{realSource.market.pool_address}</dd>
+            <dt>Base asset</dt><dd className="mono">{realSource.market.base_asset}</dd>
+            <dt>Quote asset</dt><dd className="mono">{realSource.market.quote_asset}</dd>
+          </dl></Details> : null}
           <section aria-labelledby="request-review-title" className="stack">
             <h3 id="request-review-title">Your request and hypothesis</h3>
             <p className="words" data-testid="investigation-original-request">{configuration.question}</p>
@@ -316,7 +341,7 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
                 onChange={(event) => setEdgeSpec({ ...edgeSpec, hypothesis: event.target.value })} />
             </div>
             <div className="field">
-              <label htmlFor="edge-claim-status">Claim status</label>
+              <label htmlFor="edge-claim-status">Claim type</label>
               <select id="edge-claim-status" className="input" value={edgeSpec.claim.status}
                 onChange={(event) => {
                   const status = event.target.value as typeof edgeSpec.claim.status;
@@ -332,7 +357,7 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
                 onChange={(event) => setEdgeSpec({ ...edgeSpec, claim: { ...edgeSpec.claim, text: event.target.value } })} />
             </div>
             <div className="field">
-              <label htmlFor="edge-falsification">Falsification condition or descriptive status</label>
+              <label htmlFor="edge-falsification">What would show this is wrong, or the descriptive status</label>
               <textarea id="edge-falsification" className="input" value={edgeSpec.falsification.criteria}
                 onChange={(event) => setEdgeSpec({ ...edgeSpec,
                   falsification: { ...edgeSpec.falsification, status: edgeSpec.claim.status === "DESCRIPTIVE_ONLY" ? "DESCRIPTIVE_ONLY" : "DECLARED",
@@ -344,7 +369,7 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
                 onChange={(event) => setEdgeSpec({ ...edgeSpec, alternatives: event.target.value.split("\n").slice(0, 10) })} />
             </div>
             <div className="field">
-              <label htmlFor="edge-unknowns">Unverified mechanism details and evidence gaps</label>
+              <label htmlFor="edge-unknowns">What we do not know yet and evidence gaps</label>
               <textarea id="edge-unknowns" className="input" value={edgeSpec.unknowns.join("\n")}
                 onChange={(event) => setEdgeSpec({ ...edgeSpec, unknowns: event.target.value.split("\n").slice(0, 20) })} />
               <span className="muted">Participant incentives, persistence, capacity, costs and capture remain unknown until evidence supports a claim.</span>
@@ -354,18 +379,23 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
           <section aria-labelledby="scope-title" className="stack">
             <h3 id="scope-title">Proposed scope and budget</h3>
             <dl className="kv">
-              <dt>{realRelease ? "Example pool (not the real-MOE study market)" : "Pool"}</dt>
-              <dd>{realRelease ? "Unqualified interface example; the saved declaration keeps its exact identifier."
-                : `${configuration.pool_binding.profile_id} · unqualified synthetic fixture`}</dd>
-              <dt>Limitations</dt><dd>{realRelease
+              <dt>Market</dt>
+              <dd>{realRelease ? "Example only; the saved rule keeps its exact identifier."
+                : "Example market (not approved for production research)"}</dd>
+              <dt>Limits</dt><dd>{realRelease
                 ? "Interface example only; no production pool or source is qualified."
                 : configuration.pool_binding.limitations.join(" ")}</dd>
-              <dt>Data source</dt><dd>{realRelease ? "Interface example only" : configuration.sources.join(", ")}</dd>
-              <dt>Permitted access</dt><dd>{realRelease ? "Interface example only. No provider queries." : "Fixture only. No provider queries."}</dd>
-              <dt>Budget version</dt><dd>{configuration.budget_version}</dd>
+              <dt>Data source</dt><dd>{realRelease ? "Interface example only" : "Example data only"}</dd>
+              <dt>Permitted access</dt><dd>{realRelease ? "Interface example only. No provider queries." : "Example data only. No provider queries."}</dd>
               <dt>Cost ceiling</dt><dd>$0. No paid access is permitted.</dd>
-              <dt>Partitions</dt><dd>{configuration.partitions.map((item) => `${item.partition_id}: ${item.role}`).join(", ")}</dd>
+              <dt>Time periods</dt><dd>{configuration.partitions.map((item) => plain(PARTITION_ROLE, item.role, "Unknown role")).join(", ")}</dd>
             </dl>
+            <Details summary="Details"><dl className="kv">
+              <dt>Example market ID</dt><dd className="mono">{configuration.pool_binding.profile_id}</dd>
+              <dt>Example data sources</dt><dd className="mono">{configuration.sources.join(", ")}</dd>
+              <dt>Limitations</dt><dd>{configuration.pool_binding.limitations.join(" ")}</dd>
+              <dt>Budget version</dt><dd className="mono">{configuration.budget_version}</dd>
+            </dl></Details>
             <div className="field">
               <label htmlFor="variant-primary">Primary variant</label>
               <input id="variant-primary" className="input" value={configuration.variants[0]?.hypothesis ?? ""}
@@ -411,11 +441,11 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
                 onChange={(event) => { if (event.target.value) updatePeriod({ ...configuration.period, start: utcValue(event.target.value) }); }} />
             </div>
             <fieldset>
-              <legend className="legend">Temporal partitions in UTC</legend>
-              <p className="muted">Every interval is explicit. Predictive review keeps training, validation and holdout separate. Descriptive work covers the complete period without an invented holdout.</p>
+              <legend className="legend">Time periods in UTC</legend>
+              <p className="muted">Every period is explicit. A predictive review keeps training, validation and holdout separate. Descriptive work covers the complete period without an invented holdout.</p>
               {configuration.partitions.map((partition) => (
                 <div className="field" key={partition.partition_id}>
-                  <strong>{partition.role} · {partition.partition_id}</strong>
+                  <strong>{plain(PARTITION_ROLE, partition.role, "Unknown role")}</strong>
                   <label htmlFor={`partition-${partition.partition_id}-start`}>Start</label>
                   <input id={`partition-${partition.partition_id}-start`} className="input" type="datetime-local" value={datetimeValue(partition.start)}
                     onChange={(event) => { if (event.target.value) updateConfiguration("partitions", configuration.partitions.map((item) => item.partition_id === partition.partition_id ? { ...item, start: utcValue(event.target.value) } : item)); }} />
@@ -424,13 +454,26 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
                     onChange={(event) => { if (event.target.value) updateConfiguration("partitions", configuration.partitions.map((item) => item.partition_id === partition.partition_id ? { ...item, end: utcValue(event.target.value) } : item)); }} />
                 </div>
               ))}
+              <Details summary="Details"><dl className="kv">
+                {configuration.partitions.map((partition) => (
+                  <Fragment key={partition.partition_id}>
+                    <dt>{plain(PARTITION_ROLE, partition.role, "Unknown role")} ID</dt>
+                    <dd className="mono">{partition.partition_id} · {partition.start} to {partition.end}</dd>
+                  </Fragment>
+                ))}
+              </dl></Details>
             </fieldset>
             <section aria-labelledby="evaluation-plan-title" className="stack">
-              <h4 id="evaluation-plan-title">Explicit proposed evaluations</h4>
-              <p className="muted">Each row binds one evaluation identity to one trial, variant, horizon and exact partition. Rows are adopted individually as listed; no combinations are generated.</p>
+              <h4 id="evaluation-plan-title">Planned tests</h4>
+              <p className="muted">Each row fixes one test to one trial, variant, horizon and time period. Rows are adopted exactly as listed; no combinations are generated.</p>
               {configuration.evaluation_plan.map((item) => (
-                <p className="mono" key={item.evaluation_id}>{item.evaluation_id} · trial {item.trial_id} · {item.variant_id} · {item.horizon.value} {item.horizon.unit.toLowerCase()} · {item.partition_ids.join(", ")}</p>
+                <p key={item.evaluation_id}>{item.variant_id} · {item.horizon.value} {item.horizon.unit.toLowerCase()} · {item.partition_ids.map((id) => plain(PARTITION_ROLE, id.toUpperCase(), id)).join(", ")}</p>
               ))}
+              <Details summary="Details"><ul>
+                {configuration.evaluation_plan.map((item) => (
+                  <li className="mono" key={item.evaluation_id}>{item.evaluation_id} · trial {item.trial_id} · variant {item.variant_id} · {item.partition_ids.join(", ")}</li>
+                ))}
+              </ul></Details>
             </section>
             <div className="field">
               <label htmlFor="period-end">Period end (UTC)</label>
@@ -448,7 +491,7 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
                 onChange={(event) => updateConfiguration("parameter_limit", Number(event.target.value))} />
             </div>
             <div className="field">
-              <label htmlFor="evaluation-limit">Compute limit, evaluations</label>
+              <label htmlFor="evaluation-limit">Compute limit, number of tests</label>
               <input id="evaluation-limit" className="input" type="number" min={1} max={100} value={configuration.compute_limit.max_evaluations}
                 onChange={(event) => updateConfiguration("compute_limit", { ...configuration.compute_limit, max_evaluations: Number(event.target.value) })} />
             </div>
@@ -463,11 +506,11 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
                 onChange={(event) => updateConfiguration("stopping_rule", event.target.value)} />
             </div>
             <fieldset>
-              <legend className="legend">Optional tools</legend>
+              <legend className="legend">Extra tools</legend>
               <p className="muted">These tools are unavailable in this build. Mark each unavailable or not required.</p>
               {(["creator_history", "wallet_pnl", "social_signals"] as const).map((tool) => (
                 <div className="field" key={tool}>
-                  <label htmlFor={`tool-${tool}`}>{tool.replaceAll("_", " ")}</label>
+                  <label htmlFor={`tool-${tool}`}>{tool === "creator_history" ? "Creator history" : tool === "wallet_pnl" ? "Wallet profit and loss" : "Social signals"}</label>
                   <select id={`tool-${tool}`} className="input" value={configuration.optional_tools[tool]}
                     onChange={(event) => updateConfiguration("optional_tools", { ...configuration.optional_tools,
                       [tool]: event.target.value as "UNAVAILABLE" | "NOT_REQUIRED" })}>
@@ -481,13 +524,13 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
 
           <label className="choice">
             <input type="checkbox" checked={adopted} onChange={(event) => setAdopted(event.target.checked)} />
-            <span>I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.</span>
+            <span>I reviewed the hypothesis and every required setting above. I adopt this exact, example-only rule for a future investigation.</span>
           </label>
           <div className="btn-row">
             <button className="btn btn-primary" type="button" onClick={() => void save()} disabled={!adopted || busy || refreshingProposal}>
-              {busy ? "Saving declaration…" : "Adopt and save declaration"}
+              {busy ? "Saving rule…" : "Adopt and save rule"}
             </button>
-            <span className="muted">Save records the plan before outcomes. It starts no study and grants no provider, wallet or financial permission.</span>
+            <span className="muted">Save records the rule before any result is read. It starts no study and grants no provider, wallet or financial permission.</span>
           </div>
         </div>
       ) : null}
@@ -543,19 +586,19 @@ function JobReport({ report }: { report: InvestigationReport }) {
   const content = report.content;
   return (
     <div className="stack" data-testid="history-report">
-      <h5>Saved report: {content.outcome}</h5>
+      <h5>Saved report: {plain(REPORT_OUTCOME, content.outcome, "Unknown verdict")}</h5>
       <p>{content.notice}</p>
       <dl className="kv">
         <dt>Report ID</dt><dd className="mono" data-testid="history-report-id">{report.report_id}</dd>
         <dt>Stored copy</dt><dd>{report.stored_hash_matches_content ? "Read back. Its hash matches." : "Could not be confirmed."}</dd>
-        <dt>Reasons</dt><dd>{content.outcome_reasons.join(", ")}</dd>
-        <dt>Dataset</dt><dd className="mono" data-testid="history-report-dataset">{content.dataset_id}</dd>
-        <dt>Data</dt><dd>{content.source_id}; {content.evidence_class}; {content.content_label}; verdict {content.dataset_verdict.overall}</dd>
-        <dt>Statistics</dt><dd>{content.statistical_status}; significance {content.claims.significance}; capital authority {content.claims.capital_authority}</dd>
+        <dt>Reasons</dt><dd>{content.outcome_reasons.length ? plural(content.outcome_reasons.length, "reason") : "None recorded"}</dd>
+        <dt>Saved data</dt><dd className="mono" data-testid="history-report-dataset">{content.dataset_id}</dd>
+        <dt>Data</dt><dd>{plain(EVIDENCE_CLASS, content.evidence_class, "unknown data label")}; verdict {plain(VERDICT, content.dataset_verdict.overall, "Unknown verdict")}</dd>
+        <dt>Statistics</dt><dd>{content.statistical_status.replaceAll("_", " ").toLowerCase()}; significance {content.claims.significance ?? "Unknown"}; trading permission {content.claims.capital_authority ?? "Unknown"}</dd>
       </dl>
       {content.variants.length ? (
         <table>
-          <caption>Adopted rules, triggered minus untriggered mean response</caption>
+          <caption>Adopted rules: mean when the rule fired minus mean when it did not</caption>
           <thead><tr><th scope="col">Variant</th><th scope="col">Outcome</th><th scope="col">Triggered</th><th scope="col">Control</th><th scope="col">Difference</th></tr></thead>
           <tbody>{content.variants.map((item) => (
             <tr key={item.evaluation_id}><td>{item.variant_id}</td><td>{item.outcome}</td><td>{item.triggered_observed}</td>
@@ -563,7 +606,19 @@ function JobReport({ report }: { report: InvestigationReport }) {
         </table>
       ) : null}
       {content.contrary_findings.length ? <p className="status stop">Contrary findings kept: {content.contrary_findings.map((item) => `${item.variant_id} ${item.finding}`).join("; ")}</p> : null}
-      {content.protected_partitions?.length ? <p className="muted">Not read: {content.protected_partitions.map((item) => `${item.role} partition`).join(", ")}.</p> : null}
+      {content.protected_partitions?.length ? <p className="muted">Not read: {content.protected_partitions.map((item) => `${plain(PARTITION_ROLE, item.role, "Unknown")} period`).join(", ")}.</p> : null}
+      <Details summary="Details">
+        <dl className="kv">
+          <dt>Outcome code</dt><dd className="mono">{content.outcome}</dd>
+          <dt>Reasons</dt><dd className="mono">{content.outcome_reasons.join(", ") || "none"}</dd>
+          <dt>Data label</dt><dd className="mono">{content.evidence_class} · {content.content_label}</dd>
+          <dt>Source</dt><dd className="mono">{content.source_id}</dd>
+          <dt>Dataset verdict</dt><dd className="mono">{content.dataset_verdict.overall}</dd>
+          <dt>Statistical status</dt><dd className="mono">{content.statistical_status}</dd>
+          <dt>Claims</dt><dd className="mono">{Object.entries(content.claims).map(([key, value]) => `${key}: ${value}`).join(", ") || "none"}</dd>
+          <dt>Report hash</dt><dd className="mono">{report.content_sha256}</dd>
+        </dl>
+      </Details>
     </div>
   );
 }
@@ -572,19 +627,37 @@ function JobReport({ report }: { report: InvestigationReport }) {
 function TransportFacts({ transport }: { transport: TransportSummary }) {
   const corroboration = transport.corroboration;
   const release = transportRelease(transport);
-  const chainPhrase = release?.operating_release?.kind === "ACTUAL"
-    ? "chain id checked against provider responses"
-    : release?.operating_release?.kind === "STAND_IN"
-    ? "chain id checked against stand-in responses"
-    : "chain id checked against recorded responses";
+  const kind = release?.operating_release?.kind;
+  const dataLabel = kind === "ACTUAL" ? "real provider responses" : kind === "STAND_IN"
+    ? "example responses, not provider data" : "recorded responses";
+  const chainPhrase = kind === "ACTUAL" ? "chain id checked against provider responses"
+    : kind === "STAND_IN" ? "chain id checked against stand-in responses" : "chain id checked against recorded responses";
   return (
-    <p className="muted" data-testid="history-transport">
-      {release
-        ? `Operating release ${release.operating_release?.release_id ?? "unknown"} through the accepted P07 HTTP clients (${Object.values(transport.client_classes ?? {}).join(", ")}) over ${(release.transport_kind ?? "").replaceAll("_", " ").toLowerCase()}. ${release.operating_release?.kind === "ACTUAL" ? "Provider responses" : "Stand-in responses, not provider data"}; ${release.requests_hashed ?? 0} request hashes kept; endpoint hosts ${Object.values(release.endpoint_hosts ?? {}).join(", ")}: `
-        : transport.clients === "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"
-        ? `Authored HTTP responses served on this server through the accepted P07 HTTP clients (${Object.values(transport.client_classes ?? {}).join(", ")}), no network. Not provider data: `
-        : "Native recording, replayed locally: "}{transport.envio_pages_framed} Envio pages framed; {chainPhrase}: {transport.chain_id === null ? "not read" : `${transport.chain_id}${transport.chain_network ? ` (${transport.chain_network})` : " (not Monad)"}`}; receipt corroboration {corroboration.class}, {corroboration.sample_size} of {corroboration.population_size} checked, {corroboration.mismatches} mismatches{transport.corroboration_reason ? ` (${transport.corroboration_reason})` : ""}. Client calls: {Object.entries(transport.client_calls).map(([name, count]) => `${name} ${count}`).join(", ")}. Recorded declarations, not read by the application: {transport.recorded_declarations.join(", ").replaceAll("_", " ")}.
-    </p>
+    <>
+      <p className="muted" data-testid="history-transport">
+        The server read {plural(transport.envio_pages_framed, "saved page")} and checked {plural(corroboration.sample_size, "receipt")}
+        {" "}of {corroboration.population_size}. It found {plural(corroboration.mismatches, "mismatch", "mismatches")}.
+        {" "}The source returned {dataLabel}. Results are descriptive and grant no trading permission.
+      </p>
+      <Details summary="Details">
+        <dl className="kv">
+          {release ? <>
+            <dt>Locked research setup</dt><dd className="mono">{release.operating_release?.release_id ?? "unknown"}</dd>
+            <dt>Transport</dt><dd className="mono">{(release.transport_kind ?? "").replaceAll("_", " ").toLowerCase()} through {Object.values(transport.client_classes ?? {}).join(", ")}</dd>
+            <dt>Request hashes kept</dt><dd className="mono">{release.requests_hashed ?? 0}</dd>
+            <dt>Endpoint hosts</dt><dd className="mono">{Object.values(release.endpoint_hosts ?? {}).join(", ") || "none"}</dd>
+          </> : <>
+            <dt>Transport</dt><dd className="mono">{transport.clients ?? "native recording"}</dd>
+            <dt>Client classes</dt><dd className="mono">{Object.values(transport.client_classes ?? {}).join(", ") || "none"}</dd>
+            <dt>Network</dt><dd className="mono">{transport.clients === "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT" ? "none; authored responses served on this server" : "none; recorded responses replayed on this server"}</dd>
+          </>}
+          <dt>Chain check</dt><dd className="mono">{chainPhrase}: {transport.chain_id === null ? "not read" : `${transport.chain_id}${transport.chain_network ? ` (${transport.chain_network})` : " (not Monad)"}`}</dd>
+          <dt>Corroboration</dt><dd className="mono">{corroboration.class}, {corroboration.sample_size} of {corroboration.population_size} checked, {corroboration.mismatches} mismatches{transport.corroboration_reason ? ` (${transport.corroboration_reason})` : ""}</dd>
+          <dt>Client calls</dt><dd className="mono">{Object.entries(transport.client_calls).map(([name, count]) => `${name} ${count}`).join(", ")}</dd>
+          <dt>Recorded declarations</dt><dd className="mono">{transport.recorded_declarations.join(", ").replaceAll("_", " ") || "none"}</dd>
+        </dl>
+      </Details>
+    </>
   );
 }
 
@@ -635,7 +708,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
       setResearchUnavailable(catalog.mode === "unavailable" && !catalog.operating_release);
       setDeclarations(saved.declarations); setQuestion(request.intake.content.original_request);
       await refreshBudget();
-    } catch (cause) { setLoadError(cause instanceof ApiError ? cause.detail : "Recorded-history research could not be loaded."); }
+    } catch (cause) { setLoadError(cause instanceof ApiError ? cause.detail : "Saved history research could not be loaded."); }
   };
   useEffect(() => { void loadAll(); }, [intakeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -712,7 +785,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
       setPendingDeclaration(null);
       setDeclarations((current) => [...current.filter((item) => item.declaration.record_id !== saved.declaration.record_id), saved]);
       setAdopted(false); await open(saved);
-      setNotice("Declaration saved before any collection. No data was read.");
+      setNotice("Rule and limits saved before any collection. No data was read.");
     } catch (cause) {
       if (cause instanceof ApiError && cause.status !== 0) {
         setPendingDeclaration(null);
@@ -773,21 +846,22 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
         : <p className="status stop">Recorded responses only: every source here is a SYNTHETIC recording replayed locally. No provider is called and nothing here is observed market history. Results are descriptive and grant no trading permission.</p>}
       {loadError ? <div className="status err" role="alert"><p>{loadError}</p><button className="btn btn-secondary" type="button" onClick={() => void loadAll()}>Retry</button></div> : null}
       {budget ? (
-        <p data-testid="research-budget">Research budget available: {budget.available.provider_requests} provider requests, {budget.available.compute_seconds} compute seconds. Reserved {budget.reserved.provider_requests}; unknown liability {budget.unknown_liability.provider_requests}.</p>
+        <p data-testid="research-budget">Research budget available: {plural(budget.available.provider_requests, "provider request")}, {plural(budget.available.compute_seconds, "compute second")}. Reserved {budget.reserved.provider_requests}; unknown liability {budget.unknown_liability.provider_requests}.</p>
       ) : null}
       {error ? <p className="status err" role="alert">{error}</p> : null}
       {notice ? <p className="status ok" role="status">{notice}</p> : null}
-      {pendingDeclaration && !busy ? <button className="btn btn-secondary" type="button" onClick={() => void saveDeclaration(pendingDeclaration)}>Retry the same declaration</button> : null}
+      {pendingDeclaration && !busy ? <button className="btn btn-secondary" type="button" onClick={() => void saveDeclaration(pendingDeclaration)}>Retry the same rule</button> : null}
       {uncertainStart ? <button className="btn btn-secondary" type="button" onClick={() => void startJob(false)} disabled={busy}>Check again with the same start</button> : null}
 
       {declarations.length ? (
         <div className="stack">
-          <h4>Saved history declarations</h4>
+          <h4>Saved history rules</h4>
           {declarations.map((item) => (
             <div className="card" key={item.declaration.record_id}>
               <strong>{item.declaration.content.edge_spec.hypothesis}</strong>
-              <span className="muted">{item.declaration.content.configuration.source.source_id} · {item.declaration.content.configuration.direction}</span>
-              <button className="btn btn-secondary" type="button" onClick={() => void open(item)} disabled={busy}>Open this declaration</button>
+              <span className="muted">{plain(DIRECTION, item.declaration.content.configuration.direction, "Unknown")}</span>
+              <Details summary="Details"><p className="mono">Source {item.declaration.content.configuration.source.source_id}</p></Details>
+              <button className="btn btn-secondary" type="button" onClick={() => void open(item)} disabled={busy}>Open this rule</button>
             </div>
           ))}
         </div>
@@ -795,32 +869,39 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
 
       {selected ? (
         <div className="stack" data-testid="history-declaration">
-          <h4>Declaration {selected.declaration.record_id}</h4>
+          <h4>Rule {selected.declaration.record_id.slice(0, 8)}</h4>
           <dl className="kv">
-            <dt>Declaration ID</dt><dd className="mono" data-testid="history-declaration-id">{selected.declaration.record_id}</dd>
-            <dt>Saved before data</dt><dd>{selected.declaration.content.declaration_state}; provider queries {selected.access_history[0]?.provider_queries ?? 0}</dd>
-            <dt>Configuration hash</dt><dd className="mono">{selected.declaration.content.frozen.configuration_sha256}</dd>
-            <dt>Rule map hash</dt><dd className="mono">{selected.declaration.content.frozen.rule_map_sha256}</dd>
-            <dt>Reserved per job</dt><dd>{selected.declaration.content.configuration.resource_bounds.provider_requests} provider requests, {selected.declaration.content.configuration.resource_bounds.compute_seconds} compute seconds</dd>
-            {frozenRelease ? <>
-              <dt>Operating release</dt><dd className="mono" data-testid="history-declaration-release">{frozenRelease.id} · {frozenRelease.sha256}</dd>
-            </> : null}
+            <dt>Saved before data</dt><dd>{selected.declaration.content.declaration_state.startsWith("DECLARED") ? "Yes" : "Unknown"}; provider queries {selected.access_history[0]?.provider_queries ?? 0}</dd>
+            <dt>Reserved per job</dt><dd>{plural(selected.declaration.content.configuration.resource_bounds.provider_requests, "provider request")}, {plural(selected.declaration.content.configuration.resource_bounds.compute_seconds, "compute second")}</dd>
           </dl>
+          <Details summary="Details">
+            <dl className="kv">
+              <dt>Rule ID</dt><dd className="mono" data-testid="history-declaration-id">{selected.declaration.record_id}</dd>
+              <dt>Saved state</dt><dd className="mono">{selected.declaration.content.declaration_state}</dd>
+              <dt>Settings hash</dt><dd className="mono">{selected.declaration.content.frozen.configuration_sha256}</dd>
+              <dt>Rules hash</dt><dd className="mono">{selected.declaration.content.frozen.rule_map_sha256}</dd>
+              {frozenRelease ? <><dt>Locked research setup</dt><dd className="mono" data-testid="history-declaration-release">{frozenRelease.id} · {frozenRelease.sha256}</dd></> : null}
+            </dl>
+          </Details>
           <div className="btn-row">
             <button className="btn btn-primary" type="button" onClick={() => void startJob(false)} disabled={busy}>Start investigation job</button>
             <button className="btn btn-secondary" type="button" onClick={() => void loadJobs(selected)} disabled={busy}>Check job status</button>
           </div>
           {jobs.map((job) => (
             <div className="card stack" key={job.job_id} data-testid="history-job" data-state={job.state}>
-              <strong>Job {job.job_id.slice(0, 8)}: {job.state}</strong>
-              <p role="status">{STATE_COPY[job.state] ?? job.state}{job.terminal_reason ? ` (${job.terminal_reason})` : ""}</p>
-              <p className="muted">Attempts and events: {job.events.map((event) => event.kind).join(" → ")}</p>
+              <strong>Job {job.job_id.slice(0, 8)}</strong>
+              <p role="status">{STATE_COPY[job.state] ?? "Unknown state"}</p>
+              <p className="muted">Saved steps: {plural(job.events.length, "step")}.</p>
+              <Details summary="Details"><p className="mono">{job.state}{job.terminal_reason ? ` · ${job.terminal_reason}` : ""}</p>
+                <p className="mono">{job.events.map((event) => event.kind).join(" → ") || "none"}</p></Details>
               <p className="muted">Provider requests: reserved {job.budget.reserved?.provider_requests ?? 0}, consumed {job.budget.consumed?.provider_requests ?? 0}, released {job.budget.released?.provider_requests ?? 0}, unknown liability {job.budget.unknown_liability?.provider_requests ?? 0}.</p>
               {job.dataset?.transport ? <TransportFacts transport={job.dataset.transport} /> : null}
-              {job.dataset ? <p>Dataset <span className="mono">{job.dataset.dataset_id}</span>: {job.dataset.summary.status}, {job.dataset.summary.verdict.overall}, {job.dataset.summary.binding_state}{job.dataset.summary.unavailable_states.length ? `; ${job.dataset.summary.unavailable_states.join(", ")}` : ""}; provider usage {job.dataset.summary.provider_requests_state}.</p> : null}
+              {job.dataset ? <p>Saved data {job.dataset.dataset_id.slice(0, 8)}: {plain(VERDICT, job.dataset.summary.verdict.overall, "Unknown verdict")}. Provider use: {job.dataset.summary.provider_requests_state.replaceAll("_", " ").toLowerCase()}.</p> : null}
+              {job.dataset ? <Details summary="Details"><p className="mono">Data {job.dataset.dataset_id} · status {job.dataset.summary.status} · verdict {job.dataset.summary.verdict.overall} · binding {job.dataset.summary.binding_state}{job.dataset.summary.unavailable_states.length ? ` · ${job.dataset.summary.unavailable_states.join(", ")}` : ""} · provider use {job.dataset.summary.provider_requests_state}</p>
+                <p className="mono">Data label {job.dataset.summary.evidence_class} · {job.dataset.summary.content_label}; source {job.dataset.summary.source_id}</p></Details> : null}
               {job.dataset?.payload_binding && job.dataset.payload_binding.status !== "NOT_REQUIRED"
-                ? <p data-testid="history-payload-binding" data-status={job.dataset.payload_binding.status}
-                  style={{ overflowWrap: "anywhere" }}>{payloadBindingText(job.dataset.payload_binding)}</p> : null}
+                ? <><p data-testid="history-payload-binding" data-status={job.dataset.payload_binding.status}>The saved data {job.dataset.payload_binding.status === "PASS" ? "matches the recorded delivery. It does not prove where the data came from." : "does not match the recorded delivery. Do not use it as a market or a replay."}</p>
+                  <Details summary="Details"><p className="mono" style={{ overflowWrap: "anywhere" }}>{payloadBindingText(job.dataset.payload_binding)}</p></Details></> : null}
               {RUNNING.has(job.state) && !job.cancel_requested_at ? <button className="btn btn-secondary" type="button" onClick={() => void cancel(job)} disabled={busy}>Cancel this job</button> : null}
               {!RUNNING.has(job.state) && job.state !== "REPORTED" ? <button className="btn btn-secondary" type="button" onClick={() => void startJob(true)} disabled={busy}>Retry as a new job</button> : null}
               {job.report ? <JobReport report={job.report} /> : null}
@@ -829,11 +910,10 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
         </div>
       ) : null}
 
-      {researchUnavailable ? null : <details open={declarations.length === 0}>
-        <summary>{actualSource ? "Declare a new history investigation" : "Declare a new recorded-history investigation"}</summary>
+      {researchUnavailable ? null : <Details open={declarations.length === 0} summary={actualSource ? "Start a new history investigation" : "Start a new recorded-history investigation"}>
         <div className="stack">
           <div className="field">
-            <label htmlFor="history-source">Recorded source</label>
+            <label htmlFor="history-source">Saved source</label>
             <select id="history-source" className="input" value={sourceId} onChange={(event) => {
               const next = sources.find((item) => item.source_id === event.target.value);
               setSourceId(event.target.value); setAdopted(false);
@@ -844,18 +924,34 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
               else if (next) setBounds((current) => ({ ...current,
                 provider_requests: String(next.transport ? next.transport.provider_requests_needed : next.page_requests_recorded) }));
             }}>
-              <option value="">Choose a recorded source</option>
+              <option value="">Choose a saved source</option>
               {sources.map((item) => <option key={item.source_id} value={item.source_id} disabled={item.available === false}>
                 {item.title}{item.available === false ? " (not available on this server)" : ""}</option>)}
             </select>
           </div>
-          {source ? <p className="muted">{source.evidence_class}, {source.content_label}. Pool <span className="mono">{source.market.pool_address}</span>; window {source.window.start} to {source.window.end}.</p> : null}
-          {sourceRelease(source) ? <p className="muted" data-testid="history-source-release">{describeRelease(sourceRelease(source)!)}</p> : null}
-          {source?.transport ? <p className="muted" data-testid="history-source-transport">{sourceRelease(source)
-            ? `Served through the accepted P07 HTTP clients under operating release ${sourceRelease(source)!.release_id} (${sourceRelease(source)!.kind.replace("_", "-").toLowerCase()}), ${sourceRelease(source)!.evidence_class}. ${sourceRelease(source)!.kind === "ACTUAL" ? "Provider responses under an approved release." : "Stand-in responses on this server, not provider data."}`
-            : source.transport.clients === "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"
-            ? "Served through the accepted P07 HTTP clients over authored responses on this server, with no network and no credential."
-            : "Replayed through the accepted Envio HyperSync transport with QuickNode receipt checks, against recorded responses only."} It needs {source.transport.provider_requests_needed} provider requests: {source.page_requests_recorded} pages, one chain read and {source.transport.corroboration_sample_size} receipts.</p> : null}
+          {source ? <p className="muted">{plain(EVIDENCE_CLASS, source.evidence_class, "unknown data label")}. Pool <span className="mono">{source.market.pool_address}</span>; window {source.window.start} to {source.window.end}.</p> : null}
+          {sourceRelease(source) ? <><p className="muted" data-testid="history-source-release">The server fixes these limits and keeps the credentials. You cannot change them here.</p><Details summary="Details"><p className="muted mono" style={{ overflowWrap: "anywhere" }}>{describeRelease(sourceRelease(source)!)}</p></Details></> : null}
+          {source?.transport ? <>
+            <p className="muted" data-testid="history-source-transport">
+              {sourceRelease(source)
+                ? (sourceRelease(source)!.kind === "ACTUAL"
+                  ? "The server calls the named providers under its locked research setup. Results are provider responses. "
+                  : "The server serves example responses under its locked research setup. Not provider data. ")
+                : source.transport.clients === "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"
+                ? "The server serves example responses with no network and no credential. "
+                : "The server replays saved responses with receipt checks against recordings only. "}
+              It needs {plural(source.transport.provider_requests_needed, "provider request")}: {plural(source.page_requests_recorded, "page")},
+              {" "}one chain read and {plural(source.transport.corroboration_sample_size, "receipt")}.
+            </p>
+            <Details summary="Details"><p className="mono" style={{ overflowWrap: "anywhere" }}>
+              {sourceRelease(source)
+                ? `Locked research setup ${sourceRelease(source)!.release_id} (${sourceRelease(source)!.kind.replace("_", "-").toLowerCase()}), ${sourceRelease(source)!.evidence_class}. ${sourceRelease(source)!.kind === "ACTUAL" ? "Provider responses under an approved setup." : "Example responses on this server, not provider data."}`
+                : source.transport.clients === "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"
+                ? "Accepted P07 HTTP clients over authored responses on this server, no network and no credential."
+                : "Accepted Envio HyperSync transport with QuickNode receipt checks, against recorded responses only."}
+              {" "}provider requests {source.transport.provider_requests_needed}: {source.page_requests_recorded} pages, one chain read and {source.transport.corroboration_sample_size} receipts.
+            </p></Details>
+          </> : null}
           <div className="field">
             <label htmlFor="history-hypothesis">Your hypothesis in your own words</label>
             <textarea id="history-hypothesis" className="input" value={hypothesis} onChange={(event) => { setHypothesis(event.target.value); setAdopted(false); }} />
@@ -871,8 +967,8 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
           {rules.map((row, index) => (
             <fieldset key={index} className="stack">
               <legend>Rule {index + 1} (your own rule; worked-example rules are refused)</legend>
-              <label className="field">Price return lookback (buckets)
-                <input className="input" aria-label={`Rule ${index + 1} lookback buckets`} value={row.lookback} inputMode="numeric"
+              <label className="field">Price change lookback (five-minute periods)
+                <input className="input" aria-label={`Rule ${index + 1} lookback periods`} value={row.lookback} inputMode="numeric"
                   onChange={(event) => { setRules(rules.map((item, at) => at === index ? { ...item, lookback: event.target.value.trim() } : item)); setAdopted(false); }} />
               </label>
               <label className="field">Return condition
@@ -896,9 +992,9 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
             {rules.length > 1 ? <button className="btn btn-secondary" type="button" onClick={() => { setRules(rules.slice(0, -1)); setAdopted(false); }}>Remove the last rule</button> : null}
           </div>
           <fieldset className="stack">
-            <legend>Resource bounds reserved before any collection</legend>
+            <legend>Limits reserved before any collection</legend>
             {(["provider_requests", "compute_seconds", "deadline_seconds"] as const).map((name) => (
-              <label className="field" key={name}>{name.replace("_", " ")}
+              <label className="field" key={name}>{name === "provider_requests" ? "Provider requests" : name === "compute_seconds" ? "Compute seconds" : "Deadline seconds"}
                 <input className="input" aria-label={`Bound ${name}`} value={bounds[name]} inputMode="numeric"
                   readOnly={sourceRelease(source) !== null}
                   onChange={(event) => { setBounds({ ...bounds, [name]: event.target.value.trim() }); setAdopted(false); }} />
@@ -912,10 +1008,10 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
           </label>
           {planRefusal ? <p className="status stop" role="alert" data-testid="history-window-refusal">{planRefusal}</p> : null}
           <button className="btn btn-primary" type="button" onClick={declare} disabled={!ready || pendingDeclaration !== null} aria-disabled={busy || undefined}>
-            {busy ? "Saving…" : "Save history declaration"}
+            {busy ? "Saving…" : "Save history rule"}
           </button>
         </div>
-      </details>}
+      </Details>}
     </section>
   );
 }

@@ -3,15 +3,17 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
 import { financial, formatRaw, type ConsentReview, type ConsentState, type ReviewedTerms } from "../lib/financial";
+import { Details } from "./Details";
+import { EVIDENCE_CLASS, plain } from "../lib/labels";
 
 const ACTIVATION_COPY: Record<string, string> = {
-  ACTIVATION_UNAVAILABLE: "No qualified execution route exists in this build. The adopted consent stays inactive and no action can run.",
+  ACTIVATION_UNAVAILABLE: "No approved trade route exists in this build. The adopted permission stays inactive and no action can run.",
   CONSENT_NOT_ADOPTED: "Adopt exact reviewed terms first. Nothing runs without them.",
   CONSENT_EXPIRED: "The adopted terms expired. No action can run until new terms are reviewed and adopted.",
   TERMS_VERSION_UNSUPPORTED: "These terms use a version the bounded action path does not support.",
   TERMS_INCOMPLETE: "A required limit is missing, so no action can run.",
-  TERMS_ASSET_MISMATCH: "A limit names an asset outside this revision's market, so no action can run.",
-  AGENT_NOT_READY: "The agent has no confirmed wallet bound to an exact saved revision.",
+  TERMS_ASSET_MISMATCH: "A limit names an asset outside this version's market, so no action can run.",
+  AGENT_NOT_READY: "The agent has no confirmed wallet bound to an exact saved version.",
 };
 
 const LIMITS = [
@@ -120,22 +122,22 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
   return (
     <section className="panel" aria-label="Agent authority" style={{ overflowWrap: "anywhere" }}>
       <h2>Bounded authority</h2>
-      {phase === "loading" && <p role="status" className="muted">Loading saved consent…</p>}
+      {phase === "loading" && <p role="status" className="muted">Loading saved permission…</p>}
       {phase === "error" && <div role="alert"><p>{error}</p>
         <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={() => void load()}>Try again</button></div>}
       {state && <>
-        <p>Adopting terms saves an <strong>inactive</strong> consent. It never signs, moves funds or grants wallet permission by itself.</p>
+        <p>Adopting terms saves an <strong>inactive</strong> permission. It never signs, moves funds or grants wallet permission by itself.</p>
         <p data-testid="activation-state" role="status">
           {activation?.state === "FIXTURE_QUALIFIED"
-            ? `Fixture qualification (${activation.evidence_class}). Bounded fixture actions can run under these exact terms; this is not live authority.`
+            ? `Example qualification (${plain(EVIDENCE_CLASS, activation.evidence_class, "unknown data label")}). Example actions can run under these exact terms; this is not live authority.`
             : activation?.state === "CONTROLLED_QUALIFIED"
-            ? `One controlled action is qualified (${activation.evidence_class}) under its exact release. Exit and recurring execution are unavailable.`
-            : ACTIVATION_COPY[activation?.reason ?? ""] ?? `Unavailable: ${activation?.reason}`}
+            ? `One controlled action is qualified (${plain(EVIDENCE_CLASS, activation.evidence_class, "unknown data label")}) under its exact setup. Exit and recurring execution are unavailable.`
+            : ACTIVATION_COPY[activation?.reason ?? ""] ?? (activation?.state === "UNAVAILABLE" ? ACTIVATION_COPY.ACTIVATION_UNAVAILABLE : `Unavailable: ${activation?.reason}`)}
         </p>
-        {controlledMode && !controlled && <p>No prepared controlled action is available. Exact terms cannot be reviewed yet.</p>}
+        {controlledMode && !controlled && <p>No prepared trade is available. You cannot review terms yet.</p>}
         {controlled && <div data-testid="controlled-action-terms">
           <h3>One controlled entry</h3>
-          <p>These are prepared terms. The activation status above determines whether they can run.</p>
+          <p>These are prepared permission terms. The activation status above decides whether they can run.</p>
           <dl className="kv">
             <dt>Input, raw</dt><dd>{controlled.input.raw} <span className="mono">{controlled.input.asset_id}</span></dd>
             <dt>Minimum output, raw</dt><dd>{controlled.minimum_output.raw} <span className="mono">{controlled.minimum_output.asset_id}</span></dd>
@@ -148,8 +150,15 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
             <dt>Referrer</dt><dd className="mono">{controlled.fees.referrer_address}</dd>
             <dt>Expiry</dt><dd><time dateTime={controlled.expires_at}>{controlled.expires_at}</time></dd>
             <dt>Signer and policy</dt><dd className="mono">{controlled.signer_id} · {controlled.policy_id} · {controlled.policy_content_sha256}</dd>
-            <dt>Release and evidence</dt><dd className="mono">{controlled.release_id} · {controlled.release_sha256} · {controlled.evidence_class}</dd>
+            <dt>Locked research setup</dt><dd>in Details</dd>
           </dl>
+          <Details summary="Details"><dl className="kv">
+            <dt>Setup ID and hash</dt><dd className="mono">{controlled.release_id} · {controlled.release_sha256}</dd>
+            <dt>Data label</dt><dd className="mono">{controlled.evidence_class}</dd>
+            <dt>Binding hash</dt><dd className="mono">{controlled.binding_sha256}</dd>
+            <dt>Signer and policy</dt><dd className="mono">{controlled.signer_id} · {controlled.policy_id} · {controlled.policy_content_sha256}</dd>
+            <dt>Fee collector and referrer</dt><dd className="mono">{controlled.fees.fee_collector_address} · {controlled.fees.referrer_address}</dd>
+          </dl></Details>
           <div data-testid="release-limits">
             <h4>Release limits</h4>
             <dl className="kv">
@@ -166,14 +175,14 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
           <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={() => void load()}>Check saved consent</button>
         </div>}
         {state.identity && <dl className="kv">
-          <dt>Saved revision</dt><dd className="mono">{state.identity.publication_revision_id}</dd>
+          <dt>Saved version</dt><dd className="mono">{state.identity.publication_revision_id}</dd>
           <dt>Execution identity</dt><dd className="mono">{state.identity.execution_revision_id}</dd>
           <dt>Wallet</dt><dd className="mono">{state.identity.wallet_id}</dd>
           <dt>Network</dt><dd>{state.identity.network_id}</dd>
         </dl>}
 
         {state.adoptions.length === 0 && !shown && assets && <fieldset style={{ border: 0, padding: 0, minWidth: 0 }}>
-          <legend><h3 style={{ margin: 0 }}>Terms to review</h3></legend>
+          <legend><h3 style={{ margin: 0 }}>Permission to review</h3></legend>
           <p className="muted">Whole base units. Unlike assets are never added together.</p>
           {LIMITS.map((item) => <div key={item.key}>
             <label htmlFor={`limit-${item.key}-${agentId}`}>{item.label} ({assets[item.asset].decimals} decimals)</label>
@@ -181,7 +190,7 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
               value={limits[item.key]} onChange={(event) => setLimits({ ...limits, [item.key]: event.target.value.trim() })} />
             <span className="muted">{/^\d+$/.test(limits[item.key]) ? formatRaw(limits[item.key], assets[item.asset].decimals) : ""}</span>
           </div>)}
-          <label htmlFor={`limit-attempts-${agentId}`}>Economic attempts</label>
+          <label htmlFor={`limit-attempts-${agentId}`}>Number of trades allowed</label>
           <input id={`limit-attempts-${agentId}`} className="input" inputMode="numeric" style={{ minHeight: 44 }} value={attempts}
             onChange={(event) => setAttempts(event.target.value.trim())} />
           <label htmlFor={`limit-expiry-${agentId}`}>Expiry (UTC)</label>
@@ -203,7 +212,7 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
           </button>
         </div>}
         {state.adoptions.map((adoption) => <p key={adoption.adoption_id} data-testid="consent-adopted">
-          Adopted, status {adoption.status} · consent <span className="mono">{adoption.consent_hash}</span>
+          Adopted, status {adoption.status.toLowerCase()} · permission <span className="mono">{adoption.consent_hash}</span>
         </p>)}
       </>}
     </section>
@@ -214,20 +223,20 @@ function ReviewSummary({ review }: { review: ConsentReview }) {
   const terms = review.content.terms;
   return (
     <div data-testid="consent-review">
-      <h3>Reviewed terms</h3>
+      <h3>Reviewed permission</h3>
       <dl className="kv">
         <dt>Review hash</dt><dd className="mono">{review.review_hash}</dd>
-        <dt>Purpose</dt><dd>{terms.operating_purpose}{terms.trial_objective ? ` — ${terms.trial_objective}` : ""}</dd>
+        <dt>Purpose</dt><dd>{terms.operating_purpose === "TRIAL" ? "Trial" : terms.operating_purpose === "ONGOING" ? "Ongoing" : "Unknown"}{terms.trial_objective ? ` — ${terms.trial_objective}` : ""}</dd>
         {terms.allocation.map((amount) => <Fragment key={`alloc-${amount.asset_id}`}><dt>Allocation</dt>
           <dd>{formatRaw(amount.raw, amount.decimals)} <span className="mono">{amount.asset_id}</span></dd></Fragment>)}
         {terms.allowances.map((term) => <Fragment key={term.name}><dt>{term.name}</dt>
           <dd>{formatRaw(term.amount.raw, term.amount.decimals)} <span className="mono">{term.amount.asset_id}</span></dd></Fragment>)}
         {terms.gas_budget && <><dt>Gas budget</dt><dd>{formatRaw(terms.gas_budget.raw, terms.gas_budget.decimals)} MON</dd></>}
-        <dt>Attempts</dt><dd>{terms.attempt_budget}</dd>
+        <dt>Trades allowed</dt><dd>{terms.attempt_budget}</dd>
         <dt>Expiry</dt><dd><time dateTime={terms.expiry}>{terms.expiry}</time></dd>
         <dt>Actions</dt><dd>{terms.supported_actions.join(", ")}</dd>
-        <dt>Route</dt><dd>{terms.route.adapter} (unqualified)</dd>
-        <dt>Evidence</dt><dd>{terms.evidence.status}</dd>
+        <dt>Route</dt><dd>One fixed trade route (not approved)</dd>
+        <dt>Evidence</dt><dd>{terms.evidence.status === "HYPOTHESIS" ? "Hypothesis" : terms.evidence.status.replaceAll("_", " ").toLowerCase()}</dd>
         <dt>Stop effects</dt><dd>{terms.stop_effects.join("; ")}</dd>
       </dl>
       {review.content.unknowns && review.content.unknowns.length > 0 &&

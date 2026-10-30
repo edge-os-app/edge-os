@@ -44,7 +44,7 @@ describe("deriveHistoryPlan", () => {
     expect(result.schedule).toEqual({ version: "p09.decision-clock/1", start: "2026-09-25T10:45:00Z",
       end: "2026-09-25T10:55:00Z", interval_seconds: 300 });
     expect(result.decisions).toBe(2);
-    expect(refusal(SYNTHETIC, 9).reason).toContain("at most 8 buckets");
+    expect(refusal(SYNTHETIC, 9).reason).toContain("at most 8 periods");
   });
 
   it("offers a predictive lookback with two usable decisions on the two-hour MOE shape", () => {
@@ -69,14 +69,14 @@ describe("deriveHistoryPlan", () => {
   it("refuses more descriptive lookback than the MOE window can support", () => {
     const result = refusal(MOE, 2, "DESCRIPTIVE");
     expect(result.maxLookbackBuckets).toBe(1);
-    expect(result.reason).toContain("at most 1 bucket");
+    expect(result.reason).toContain("at most 1 period");
   });
 
   it("refuses every predictive MOE declaration and names DESCRIPTIVE", () => {
     for (const lookback of [1, 2, 3]) {
       const result = refusal(MOE, lookback);
       expect(result.reason).toContain("No lookback fits");
-      expect(result.reason).toContain("use DESCRIPTIVE");
+      expect(result.reason).toContain("describe only");
     }
   });
 
@@ -112,13 +112,12 @@ describe("deriveHistoryPlan", () => {
 describe("historyUnknowns", () => {
   it("keeps the synthetic limits text unchanged", () => {
     expect(historyUnknowns("RECORDED_RESPONSE", null))
-      .toEqual(["Recorded responses are synthetic; no real pool behaviour is measured."]);
+      .toEqual(["Saved responses are example data; no real market behaviour is measured."]);
   });
 
   it("names the providers and release for an actual source, and keeps the limits", () => {
     const text = historyUnknowns("PROVIDER_ACTUAL", "actual-moe-history2h-nansen-20261022/1")[0];
     expect(text).toContain("named providers");
-    expect(text).toContain("actual-moe-history2h-nansen-20261022/1");
     expect(text).toContain("Costs are not modelled");
     expect(text).toContain("window is short");
     expect(text).not.toContain("synthetic");

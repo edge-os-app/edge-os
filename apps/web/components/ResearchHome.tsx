@@ -31,12 +31,12 @@ function runtimeClass(kind: string | null): RuntimeClass {
 }
 
 const PREPARATION_NOTE: Record<RuntimeClass, string> = {
-  LIVE: "Preparing sends your words to the configured model interpreter. That call may incur a model cost. "
+  LIVE: "Preparing sends your words to the research agent. That call may cost model money. "
     + "It does not start a study or authorize a trade. We keep your words and restrictions, ask only what is "
     + "missing, then show the rules for review.",
-  FIXTURE: "Preparing uses the fixture interpreter, which calls no model. It does not start a study or authorize "
+  FIXTURE: "Preparing uses the research agent in example mode, which calls no model. It does not start a study or authorize "
     + "a trade. We keep your words and restrictions, ask only what is missing, then show the rules for review.",
-  LOCAL_FAKE: "Preparing uses the local fake provider, which calls no real model. It does not start a study or "
+  LOCAL_FAKE: "Preparing uses the research agent in example mode, which calls no real model. It does not start a study or "
     + "authorize a trade. We keep your words and restrictions, ask only what is missing, then show the rules "
     + "for review.",
   UNKNOWN: "Preparing saves your words and restrictions and shows the rules for review. It does not start a study "
@@ -204,13 +204,13 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
               </label>
             ))}
           </div>
-          <p className="muted" style={{ marginTop: 8 }}>Job we will keep: <strong>{JOB_LABEL[job]}</strong>. An investigation stays an investigation.</p>
+          <p className="muted" style={{ marginTop: 8 }}>Job we will keep: {JOB_LABEL[job]}. An investigation stays an investigation.</p>
         </fieldset>
 
         {job === "INVESTIGATE_EFFECT" ? (
           <label className="choice">
             <input type="checkbox" checked={useMarket} onChange={(e) => setUseMarket(e.target.checked)} />
-            <span>{runtimeKind === null ? "Use the synthetic market." : "Use the synthetic fixture market."} <span className="muted">{runtimeKind === null || runtimeKind === "FIXTURE" ? "Leave this off and we will ask which market." : "Leave this off and the application suggests the synthetic fixture market for you to adopt."}</span></span>
+            <span>{runtimeKind === null ? "Use the example market." : "Use the example market."} <span className="muted">{runtimeKind === null || runtimeKind === "FIXTURE" ? "Leave this off and we will ask which market." : "Leave this off and the application suggests the example market for you to adopt."}</span></span>
           </label>
         ) : null}
 
@@ -247,7 +247,7 @@ export function ResearchHome({ userId, go, consumeReturn }: { userId: string | n
           {interpreterUnavailable ? (
             <p role="status" className="status err">{interpreterUnavailable}</p>
           ) : (
-            <p className="muted" id={`${formId}-examples`}>{runtimeKind === "FIXTURE" ? "Fixture examples." : "Examples."} {fixtureNotice || (runtimeKind === "FIXTURE" ? "The fixture interpreter answers only these." : "")} Picking one fills the form; you can edit it.</p>
+            <p className="muted" id={`${formId}-examples`}>{runtimeKind === "FIXTURE" ? "Example questions." : "Examples."} {fixtureNotice || (runtimeKind === "FIXTURE" ? "The research agent answers only these." : "")} Picking one fills the form; you can edit it.</p>
           )}
           {samplesError && !interpreterUnavailable ? <p role="status" className="muted">The examples could not be loaded. You can still write your own request.</p> : null}
           {undoExample ? <button type="button" className="btn btn-secondary" onClick={restoreTyped}>Restore what I typed{editedSinceExample ? " (replaces your edits)" : ""}</button> : null}

@@ -97,17 +97,17 @@ describe("agent funding", () => {
     render(<AgentFunding agentId="agent-a" />);
     const amount = await screen.findByLabelText(/Amount in base units/);
     await userEvent.type(amount, "007");
-    expect(screen.getByRole("button", { name: "Save reviewed deposit" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save deposit plan" })).toBeDisabled();
     await userEvent.clear(amount);
     await userEvent.type(amount, "5");
-    await userEvent.click(screen.getByRole("button", { name: "Save reviewed deposit" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save deposit plan" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("not confirmed");
-    expect(screen.getByRole("button", { name: "Save reviewed deposit" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save deposit plan" })).toBeDisabled();
     const firstKey = mocks.prepareDeposit.mock.calls[0][1].reference;
     await userEvent.click(screen.getByRole("button", { name: "Check saved funding" }));
     mocks.prepareDeposit.mockResolvedValueOnce({});
-    await waitFor(() => expect(screen.getByRole("button", { name: "Save reviewed deposit" })).toBeEnabled());
-    await userEvent.click(screen.getByRole("button", { name: "Save reviewed deposit" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save deposit plan" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "Save deposit plan" }));
     await waitFor(() => expect(mocks.prepareDeposit).toHaveBeenCalledTimes(2));
     expect(mocks.prepareDeposit.mock.calls[1][1].reference).toBe(firstKey);
   });
@@ -147,15 +147,15 @@ describe("agent authority", () => {
       review_hash: review.review_hash, consent_hash: "sha256:c", status: "INACTIVE", content: {}, created_at: "t" }],
       activation: { state: "FIXTURE_QUALIFIED", reason: null, evidence_class: "SYNTHETIC_FIXTURE_QUALIFICATION" } }));
     await userEvent.click(screen.getByRole("button", { name: "Adopt these exact terms (inactive)" }));
-    expect(await screen.findByTestId("consent-adopted")).toHaveTextContent("status INACTIVE");
+    expect(await screen.findByTestId("consent-adopted")).toHaveTextContent("status inactive");
     expect(mocks.adopt).toHaveBeenCalledWith("agent-a", "r-1", review.review_hash);
     expect(screen.getByTestId("activation-state")).toHaveTextContent("not live authority");
   });
 
   it("explains why no action can run when the build has no qualified route", async () => {
-    mocks.consent.mockResolvedValue(consent({ activation: { state: "UNAVAILABLE", reason: "ACTIVATION_UNAVAILABLE", evidence_class: null } }));
+    mocks.consent.mockResolvedValue(consent({ activation: { state: "UNAVAILABLE", reason: "activation unavailable", evidence_class: null } }));
     render(<AgentAuthority agentId="agent-a" />);
-    expect(await screen.findByTestId("activation-state")).toHaveTextContent("No qualified execution route");
+    expect(await screen.findByTestId("activation-state")).toHaveTextContent("No approved trade route");
   });
 });
 
@@ -167,18 +167,18 @@ describe("agent actions", () => {
       created_at: "t", updated_at: "t" }], blocking_reason: "SUBMISSION_UNKNOWN" }));
     mocks.action.mockResolvedValue(detail());
     render(<AgentActions agentId="agent-a" />);
-    expect(await screen.findByTestId("actions-blocking")).toHaveTextContent("SUBMISSION_UNKNOWN");
+    expect(await screen.findByTestId("actions-blocking")).toHaveTextContent("Blocked. The reason is in Details.");
     expect(screen.getByTestId("actions-jobs")).toHaveTextContent("Reconcile it before anything new runs");
     await userEvent.click(screen.getByRole("button", { name: /Open action/ }));
     const lineage = await screen.findByTestId("action-lineage");
-    expect(within(lineage).getByTestId("action-receipts")).toHaveTextContent("SUBMISSION_UNKNOWN");
+    expect(within(lineage).getByTestId("action-receipts")).toHaveTextContent("Outcome unknown");
     expect(lineage).not.toHaveTextContent("CONFIRMED");
     expect(lineage).toHaveTextContent("FIXTURE_TRANSPORT_SIGNS_NOTHING");
     mocks.reconcileAction.mockResolvedValue({ receipt_outcome: "CONFIRMED", case_state: "CONFIRMED", decision_status: "CONFIRMED" });
     mocks.action.mockResolvedValue(detail({ queue: { ...detail().queue!, state: "SUBMITTED_CONFIRMED", blocking_reason: null },
       receipts: [...detail().receipts, { outcome: "CONFIRMED", breach: false, created_at: "t", content: {} }] }));
     await userEvent.click(screen.getByRole("button", { name: "Reconcile original action" }));
-    await waitFor(() => expect(screen.getByTestId("action-receipts")).toHaveTextContent("SUBMISSION_UNKNOWN → CONFIRMED"));
+    await waitFor(() => expect(screen.getByTestId("action-receipts")).toHaveTextContent("Outcome unknown → Confirmed"));
     expect(mocks.schedule).not.toHaveBeenCalled();
   });
 
@@ -195,7 +195,7 @@ describe("agent actions", () => {
     mocks.removals.mockResolvedValue({ removals: [{ request_id: "x", state: "REQUESTED", reason: "OWNER_REQUESTED",
       requested_at: "t", updated_at: "t", evidenced_signer: null }] });
     await userEvent.click(await screen.findByRole("button", { name: "Request removal" }));
-    expect(await screen.findByTestId("actions-removal")).toHaveTextContent("Removal REQUESTED");
+    expect(await screen.findByTestId("actions-removal")).toHaveTextContent("Removal Requested");
     expect(screen.getByTestId("actions-positions")).toHaveTextContent("50 base units held");
   });
 
@@ -203,14 +203,14 @@ describe("agent actions", () => {
     mocks.actions.mockResolvedValue(actions());
     mocks.schedule.mockRejectedValueOnce(new ApiError(0, "timeout", "late"));
     render(<AgentActions agentId="agent-a" />);
-    await userEvent.click(await screen.findByRole("button", { name: "Run one bounded evaluation" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Run one check" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("not confirmed");
-    expect(screen.getByRole("button", { name: "Run one bounded evaluation" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Run one check" })).toBeDisabled();
     const key = mocks.schedule.mock.calls[0][1];
     await userEvent.click(screen.getByRole("button", { name: "Check saved actions" }));
     mocks.schedule.mockResolvedValueOnce({});
-    await waitFor(() => expect(screen.getByRole("button", { name: "Run one bounded evaluation" })).toBeEnabled());
-    await userEvent.click(screen.getByRole("button", { name: "Run one bounded evaluation" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run one check" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "Run one check" }));
     await waitFor(() => expect(mocks.schedule).toHaveBeenCalledTimes(2));
     expect(mocks.schedule.mock.calls[1][1]).toBe(key);
   });
@@ -223,7 +223,7 @@ describe("deposit reference recovery", () => {
     mocks.prepareDeposit.mockRejectedValueOnce(new ApiError(0, "network_error", "unreachable"));
     render(<AgentFunding agentId="agent-r" />);
     await userEvent.type(await screen.findByLabelText(/Amount in base units/), "5");
-    await userEvent.click(screen.getByRole("button", { name: "Save reviewed deposit" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save deposit plan" }));
     await screen.findByRole("button", { name: "Check saved funding" });
     const saved = mocks.prepareDeposit.mock.calls[0][1].reference;
     mocks.funding.mockResolvedValue(funding({ flows: [{ flow_id: "f", agent_id: "agent-r", wallet_id: "w", network_id: 10143,
@@ -233,7 +233,7 @@ describe("deposit reference recovery", () => {
     await waitFor(() => expect(screen.getByTestId("funding-flows")).toHaveTextContent(saved));
     mocks.prepareDeposit.mockResolvedValueOnce({});
     await userEvent.type(screen.getByLabelText(/Amount in base units/), "7");
-    await userEvent.click(screen.getByRole("button", { name: "Save reviewed deposit" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save deposit plan" }));
     await waitFor(() => expect(mocks.prepareDeposit).toHaveBeenCalledTimes(2));
     expect(mocks.prepareDeposit.mock.calls[1][1].reference).not.toBe(saved);
   });
@@ -245,14 +245,14 @@ describe("committed change with a failed read-back (F2)", () => {
       .mockResolvedValue(actions());
     mocks.schedule.mockResolvedValueOnce({ job_id: "j" });
     render(<AgentActions agentId="agent-a" />);
-    await userEvent.click(await screen.findByRole("button", { name: "Run one bounded evaluation" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Run one check" }));
     expect(await screen.findByText(/was saved, but the current actions could not be read/)).toBeInTheDocument();
     expect(screen.queryByText(/Evaluation saved/i)).toBeNull();
-    expect(screen.getByRole("button", { name: "Run one bounded evaluation" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Run one check" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Halt all swaps" })).toBeDisabled();
     expect(mocks.schedule).toHaveBeenCalledTimes(1);
     await userEvent.click(screen.getByRole("button", { name: "Check saved actions" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Run one bounded evaluation" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run one check" })).toBeEnabled());
     expect(mocks.schedule).toHaveBeenCalledTimes(1); // nothing was repeated automatically
   });
 
@@ -490,7 +490,7 @@ describe("controlled action propagation", () => {
       receipts:[{outcome:"CONFIRMED", breach:false, created_at:"2026-10-18T00:00:01Z", content:{
         actual_gas:{asset_id:"monad:143/native", decimals:18, raw:"600000000000000"}, source_ref:"original-receipt:finalized:block-a"}}] }));
     render(<AgentActions agentId="agent-a" />);
-    await userEvent.click(await screen.findByRole("button", {name:"Open action p23:d:ENTRY"}));
+    await userEvent.click(await screen.findByRole("button", {name:/Open action/}));
     expect(screen.getByTestId("actions-mode")).toHaveTextContent(/one controlled action/i);
     expect(screen.getByText(/qualified-current-source/)).toBeInTheDocument();
     expect(screen.getByTestId("action-original")).not.toHaveTextContent(/authored recorded responses/i);

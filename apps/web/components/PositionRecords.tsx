@@ -48,24 +48,24 @@ export function PositionRecords({ records, sourceRecordId }: { records: AccountV
             <option value="">All assets</option>{assets.map((value) => <option key={value}>{value}</option>)}
           </select>
         </label>
-        <label>Strategy revision
+        <label>Saved version
           <select className="input" style={{ minHeight: 44 }} value={strategyRevision} onChange={(event) => setStrategyRevision(event.target.value)}>
-            <option value="">All revisions</option>{revisions.map((value) => <option key={value}>{value}</option>)}
+            <option value="">All versions</option>{revisions.map((value) => <option key={value}>{value}</option>)}
           </select>
         </label>
       </div>
       {!positions.length && <p className="muted">No positions match these filters.</p>}
       {unmatchedSourceAction && <section className="panel" aria-label="Exact source action">
         <h2>Exact saved source action</h2>
-        <p>The owner-matched parent position is unavailable. This saved action is shown without inferring or assigning a position relationship.</p>
+        <p>The matching parent position is unavailable. This saved action is shown without inferring or assigning a position relationship.</p>
         <ul><li id={`record-${unmatchedSourceAction.record_id}`}>
           {unmatchedSourceAction.content.action_id} · {unmatchedSourceAction.content.status} · {unmatchedSourceAction.content.updated_at}
           {unmatchedSourceAction.content.reason && <p>{unmatchedSourceAction.content.reason}</p>}
         </li></ul>
       </section>}
       {sourceEdge && !sourceEdgePosition && <section className="panel" id={`record-${sourceEdge.record_id}`} aria-label="Exact edge evidence source">
-        <h2>Exact saved revision evidence</h2>
-        <p>No matching position is available in the bounded account page. This saved evidence is shown without assigning it to a position.</p>
+        <h2>Exact saved version evidence</h2>
+        <p>No matching position is available on this page. This saved evidence is shown without assigning it to a position.</p>
         <p>{sourceEdge.content.agent_id} · {sourceEdge.content.strategy_revision} · {sourceEdge.content.edge_revision} · {sourceEdge.content.edge_evidence_status ?? sourceEdge.content.status} · {sourceEdge.content.updated_at}</p>
         {sourceEdge.content.reason && <p>{sourceEdge.content.reason}</p>}
         <p>Record ID: <code>{sourceEdge.record_id}</code></p>
@@ -83,9 +83,9 @@ export function PositionRecords({ records, sourceRecordId }: { records: AccountV
               {content.agent_id} · {content.position_id} · {content.asset_id} · {content.position_state}
             </summary>
             <p><strong>Wallet and network.</strong> {content.wallet_id} · {content.network_id}</p>
-            <p><strong>Strategy and mandate.</strong> {content.strategy_revision} · {content.mandate_id}</p>
-            <p><strong>{content.position_state === "CLOSED" ? "Historical attributed quantity." : "Attributed quantity."}</strong> {content.quantity ? `${formatAmount(content.quantity)} ${content.quantity.asset_id}` : "Unknown"}{content.position_state === "CLOSED" && " Current residual wallet inventory is unavailable."}</p>
-            <p><strong>Acquisition basis.</strong> {formatValue(content.basis)}{content.basis?.amount && ` ${content.basis.amount.asset_id}`}</p>
+            <p><strong>Saved version and permission.</strong> {content.strategy_revision} · {content.mandate_id}</p>
+            <p><strong>{content.position_state === "CLOSED" ? "Historical recorded quantity." : "Recorded quantity."}</strong> {content.quantity ? `${formatAmount(content.quantity)} ${content.quantity.asset_id}` : "Unknown"}{content.position_state === "CLOSED" && " Current residual wallet inventory is unavailable."}</p>
+            <p><strong>Cost basis.</strong> {formatValue(content.basis)}{content.basis?.amount && ` ${content.basis.amount.asset_id}`}</p>
             <p><strong>Realized quote result.</strong> {content.realized_result
               ? formatResult(content.realized_result) : formatValue(content.realized)}{(content.realized_result?.amount ?? content.realized?.amount) &&
                 ` ${(content.realized_result?.amount ?? content.realized?.amount)?.asset_id}`}</p>
@@ -94,8 +94,8 @@ export function PositionRecords({ records, sourceRecordId }: { records: AccountV
                 ` ${(content.estimated_unrealized_result?.amount ?? content.unrealized?.amount)?.asset_id}`}</p>
             {content.reason && <p><strong>Saved note.</strong> {content.reason}</p>}
             <p><strong>Mark.</strong> {formatValue(content.mark)} · {content.updated_at}</p>
-            <h3>Revision-linked edge evidence</h3>
-            {!edgeEvidence.length && <p>No saved edge evidence for this revision.</p>}
+            <h3>Evidence for this version</h3>
+            {!edgeEvidence.length && <p>No saved evidence for this version.</p>}
             <ul>{edgeEvidence.map((item) => (
               <li id={`record-${item.record_id}`} key={item.record_id}>
                 {item.content.edge_revision} · {item.content.edge_evidence_status ?? item.content.status} · {item.content.updated_at}

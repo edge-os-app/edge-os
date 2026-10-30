@@ -45,7 +45,7 @@ describe("wallet setup UI", () => {
     mocks.get.mockRejectedValue(new ApiError(404, "not_found", "The requested wallet setup was not found."));
     render(<WalletSetup agentId="agent-a" revision={REVISION} />);
     expect(await screen.findByText("No wallet setup saved")).toBeInTheDocument();
-    expect(screen.getByText(/authored local fixture/i)).toBeInTheDocument();
+    expect(screen.getByText(/example wallet data/i)).toBeInTheDocument();
     expect(mocks.prepare).not.toHaveBeenCalled();
     expect(mocks.dispatch).not.toHaveBeenCalled();
   });
@@ -58,7 +58,7 @@ describe("wallet setup UI", () => {
     await screen.findByText("No wallet setup saved");
 
     await userEvent.click(screen.getByRole("button", { name: "Save wallet setup" }));
-    expect(await screen.findByText("Saved, not dispatched")).toBeInTheDocument();
+    expect(await screen.findByText("Saved, not started")).toBeInTheDocument();
     expect(mocks.prepare).toHaveBeenCalledWith("agent-a", expect.objectContaining({
       network_id: 10143, strategy_id: "strategy-a", strategy_revision_id: REVISION.strategyRevisionId }));
     expect(mocks.dispatch).not.toHaveBeenCalled();
@@ -84,7 +84,7 @@ describe("wallet setup UI", () => {
     mocks.get.mockResolvedValue(record({ state: "FAILED", reason: "CANCELLED_BEFORE_DISPATCH",
       cancellation_intent: "REQUESTED_BEFORE_DISPATCH" }));
     render(<WalletSetup agentId="agent-a" />);
-    expect(await screen.findByText("Cancelled before dispatch")).toBeInTheDocument();
+    expect(await screen.findByText("Cancelled before start")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create wallet now" })).toBeNull();
     expect(mocks.dispatch).not.toHaveBeenCalled();
   });
@@ -104,7 +104,7 @@ describe("wallet setup UI", () => {
       .mockResolvedValue(record({ state: "UNKNOWN", reason: "RESPONSE_LOST", creation_dispatched: true }));
     mocks.dispatch.mockRejectedValue(new ApiError(0, "timeout", "The service did not answer in time."));
     render(<WalletSetup agentId="agent-a" />);
-    await screen.findByText("Saved, not dispatched");
+    await screen.findByText("Saved, not started");
 
     await userEvent.click(screen.getByRole("button", { name: "Create wallet now" }));
     // The reconcile read returns UNKNOWN; creation is not offered.
@@ -118,7 +118,7 @@ describe("wallet setup UI", () => {
       .mockRejectedValue(new ApiError(503, "service_unavailable", "A required service is unavailable."));
     mocks.dispatch.mockRejectedValue(new ApiError(0, "network_error", "The service could not be reached."));
     render(<WalletSetup agentId="agent-a" />);
-    await screen.findByText("Saved, not dispatched");
+    await screen.findByText("Saved, not started");
 
     await userEvent.click(screen.getByRole("button", { name: "Create wallet now" }));
     expect(await screen.findByRole("button", { name: "Check the saved setup" })).toBeInTheDocument();
@@ -131,7 +131,7 @@ describe("wallet setup UI", () => {
     render(<WalletSetup revision={REVISION} />);
     await userEvent.type(screen.getByLabelText("Agent ID"), "agent-a");
     await userEvent.click(screen.getByTestId("wallet-setup-check"));
-    expect(await screen.findByText("Saved, not dispatched")).toBeInTheDocument();
+    expect(await screen.findByText("Saved, not started")).toBeInTheDocument();
 
     const pending = deferred<WalletSetupRecord>();
     mocks.get.mockReturnValueOnce(pending.promise);
@@ -157,7 +157,7 @@ describe("wallet setup UI", () => {
     fastB.resolve(record({ state: "CONFIRMED", wallet_id: "fixture:owner-a:agent-b", agent_id: "agent-b" }));
     expect(await screen.findByText("Wallet confirmed")).toBeInTheDocument();
     slowA.resolve(record({ state: "REQUESTED", agent_id: "agent-a" }));
-    await waitFor(() => expect(screen.queryByText("Saved, not dispatched")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Saved, not started")).toBeNull());
     expect(screen.getByText("Wallet confirmed")).toBeInTheDocument();
   });
 
@@ -191,6 +191,6 @@ describe("wallet setup UI", () => {
     await screen.findByText("No wallet setup saved");
     expect(screen.queryByRole("button", { name: "Save wallet setup" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Create wallet now" })).toBeNull();
-    expect(screen.queryByText(/authored local fixture/i)).toBeNull();
+    expect(screen.queryByText(/example wallet data/i)).toBeNull();
   });
 });

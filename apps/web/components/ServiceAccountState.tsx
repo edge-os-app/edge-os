@@ -4,9 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "../lib/api";
 import { loadServiceProjection, type ServiceProjectionPage, type ServiceProjectionRecord } from "../lib/account-views";
 import { formatRaw } from "../lib/financial";
+import { Details } from "./Details";
+import { FLOW_KIND, plain } from "../lib/labels";
 
 const KIND_LABEL: Record<string, string> = { AGENT: "Agent", CAPITAL_FLOW: "Deposit or withdrawal", POSITION: "Position",
-  ACTION: "Action", MONITORING: "Evaluations" };
+  ACTION: "Action", MONITORING: "Checks" };
 
 function amount(value: { raw: string; decimals: number; asset_id: string } | null | undefined): string {
   return value ? `${formatRaw(value.raw, value.decimals)} ${value.asset_id}` : "—";
@@ -16,7 +18,7 @@ function detail(record: ServiceProjectionRecord): string {
   const item = record.content;
   switch (item.record_kind) {
     case "CAPITAL_FLOW":
-      return `${item.flow_kind}: ${amount(item.quantity)}${item.reason ? `. ${item.reason}` : ""} Not a trading result.`;
+      return `${plain(FLOW_KIND, item.flow_kind, "Deposit or withdrawal")}: ${amount(item.quantity)}${item.reason ? `. ${item.reason}` : ""} Not a trading result.`;
     case "POSITION":
       return `Held ${amount(item.quantity)}; cost basis ${item.basis?.state === "KNOWN" ? amount(item.basis.amount) : "unknown"}; `
         + `realized ${item.realized_result?.state === "KNOWN" ? amount(item.realized_result.amount) : "unknown"}; `
@@ -24,8 +26,8 @@ function detail(record: ServiceProjectionRecord): string {
     case "ACTION":
       return `${item.action_id}${item.pending_reconciliation ? " · reconciliation pending" : ""}`;
     case "MONITORING":
-      return `${item.evaluation_completions} of ${item.evaluation_attempts} evaluations finished`
-        + `${item.pending_reconciliation ? " · reconcile the original action before another evaluation" : ""}`;
+      return `${item.evaluation_completions} of ${item.evaluation_attempts} checks finished`
+        + `${item.pending_reconciliation ? " · reconcile the original action before another check" : ""}`;
     default:
       return `${item.wallet_id ?? ""} · ${item.permission_state ?? ""}`;
   }
@@ -52,7 +54,7 @@ export function ServiceAccountState({ agentId }: { agentId: string }) {
       {error && <div role="alert"><p>{error}</p>
         <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={() => void load()}>Try again</button></div>}
       {page && !loading && <>
-        <p className="muted">{page.notice} {page.ports === "FIXTURE" ? "Ports: authored local fixtures." : "Ports: unavailable."}</p>
+        <p className="muted">{page.notice} {page.ports === "FIXTURE" ? "Connections: example data." : "Connections: unavailable."}</p>
         <div className="btn-row">
           <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={() => void load()}>Refresh saved state</button>
           <span className="muted">This panel reads the saved state when it opens. Refresh it after a change above.</span>
@@ -61,9 +63,9 @@ export function ServiceAccountState({ agentId }: { agentId: string }) {
           <ul className="stack" aria-label="Projected records">
             {page.records.map((record) => (
               <li key={record.record_id} className="card" data-kind={record.content.record_kind}>
-                <strong>{KIND_LABEL[record.content.record_kind] ?? record.content.record_kind}: {record.content.status}</strong>
+                <strong>{KIND_LABEL[record.content.record_kind] ?? "Unknown"}: {record.content.status.replaceAll("_", " ").toLowerCase()}</strong>
                 <span>{detail(record)}</span>
-                <span className="muted mono">from {record.source.table}</span>
+                <Details summary="Details"><span className="muted mono">saved from {record.source.table} · ID {record.source.id}</span></Details>
               </li>
             ))}
           </ul>

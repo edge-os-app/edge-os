@@ -64,17 +64,17 @@ describe("P09 effect comparison", () => {
   it("shows exact adopted IDs and rules, saves before evaluation, then reopens the stored report", async () => {
     const user = userEvent.setup();
     render(<EffectComparisonPanel intakeId="request-1" saved={saved} />);
-    await user.click(await screen.findByRole("button", { name: "Load explicit synthetic example" }));
-    expect(screen.getByText(saved.declaration.record_id)).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Load the example comparison" }));
+    expect(document.body).toHaveTextContent(saved.declaration.record_id);
     expect(screen.getByText("33333333-3333-4333-8333-333333333333")).toBeInTheDocument();
-    expect(screen.getByText(/This visible example was authored/)).toBeInTheDocument();
-    expect(screen.getByText(/one immutable P06 rule mapping across P09 runs/)).toBeInTheDocument();
+    expect(screen.getByText(/This example was written/)).toBeInTheDocument();
+    expect(screen.getByText(/one fixed rule across comparisons/)).toBeInTheDocument();
     expect(screen.getByText(/four opportunities per evaluation/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Adopt synthetic run declaration" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Adopt example comparison" })).toBeDisabled();
     await user.click(screen.getByRole("checkbox"));
     mocks.effectRuns.mockResolvedValue({ runs: [run()] });
-    await user.click(screen.getByRole("button", { name: "Adopt synthetic run declaration" }));
-    await screen.findByText(/Run declaration saved/);
+    await user.click(screen.getByRole("button", { name: "Adopt example comparison" }));
+    await screen.findByText(/Comparison saved/);
     expect(mocks.adopt).toHaveBeenCalledOnce();
     expect(mocks.execute).not.toHaveBeenCalled();
     const [, declarationId, body] = mocks.adopt.mock.calls[0];
@@ -83,7 +83,7 @@ describe("P09 effect comparison", () => {
       saved.declaration.content.configuration.evaluation_plan.map((item) => item.evaluation_id));
 
     mocks.effectRuns.mockImplementation(async () => ({ runs: [await mocks.execute.mock.results[0]?.value ?? run()] }));
-    await user.click(screen.getByRole("button", { name: "Evaluate synthetic fixture" }));
+    await user.click(screen.getByRole("button", { name: "Evaluate example data" }));
     expect(await screen.findByTestId("effect-report-saved")).toHaveTextContent("UNRESOLVED");
     expect(screen.getAllByText(/STAT_Q01_PROFILE_NOT_QUALIFIED/).length).toBeGreaterThan(0);
     expect(mocks.execute).toHaveBeenCalledOnce();
@@ -96,8 +96,8 @@ describe("P09 effect comparison", () => {
     const protectedSaved = structuredClone(saved);
     protectedSaved.declaration.content.configuration.partitions[0].role = "HOLDOUT";
     render(<EffectComparisonPanel intakeId="request-1" saved={protectedSaved} />);
-    expect(await screen.findByText(/does not access training, validation, or holdout rows/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Load explicit synthetic example" })).toBeNull();
+    expect(await screen.findByText(/does not read training, validation or holdout rows/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load the example comparison" })).toBeNull();
   });
 
   it("refreshes the selected run from durable failed-attempt history after a lost response", async () => {
@@ -110,11 +110,11 @@ describe("P09 effect comparison", () => {
     mocks.execute.mockRejectedValueOnce(new Error("response lost after server commit"));
     const user = userEvent.setup();
     render(<EffectComparisonPanel intakeId="request-1" saved={saved} />);
-    await screen.findByRole("button", { name: "Evaluate synthetic fixture" });
-    await user.click(screen.getByRole("button", { name: "Evaluate synthetic fixture" }));
-    expect(await screen.findByRole("button", { name: "Retry synthetic evaluation" })).toBeInTheDocument();
-    expect(screen.getByText(/P09 outcome access: recorded at event sequence/)).toBeInTheDocument();
-    await user.click(screen.getByText("Run declaration and append-only attempt history"));
+    await screen.findByRole("button", { name: "Evaluate example data" });
+    await user.click(screen.getByRole("button", { name: "Evaluate example data" }));
+    expect(await screen.findByRole("button", { name: "Retry example evaluation" })).toBeInTheDocument();
+    expect(screen.getByText(/Result access: recorded at step/)).toBeInTheDocument();
+    await user.click(screen.getByText("Comparison and attempt history"));
     expect(screen.getByText(/OUTCOME_ACCESS_STARTED|outcome_accessed/)).toBeInTheDocument();
   });
 });

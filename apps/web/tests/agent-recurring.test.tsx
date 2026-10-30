@@ -63,16 +63,16 @@ describe("recurring operation", () => {
     expect(await screen.findByTestId("recurring-wait")).toHaveTextContent("Active. Next slot 2026-10-13T09:10:00Z.");
     expect(screen.getByTestId("recurring-missed")).toHaveTextContent("3 · latest 2026-10-13T08:50:00Z to 2026-10-13T09:00:00Z, not replayed");
     const slots = within(screen.getByTestId("recurring-occurrences"));
-    expect(slots.getByText(/SIGNAL · SUBMITTED_CONFIRMED/)).toBeDefined();
+    expect(slots.getByText(/signal · submitted confirmed/)).toBeDefined();
     expect(screen.getByTestId("recurring-occurrences")).toHaveTextContent(
-      "Inputs observed 2026-10-13T09:05:00Z, collected 2026-10-13T09:05:00Z, evaluated 2026-10-13T09:06:10Z (SYNTHETIC_FIXTURE).");
-    expect(screen.getByTestId("recurring-occurrences")).toHaveTextContent("Submission TERMINAL CONFIRMED, started 2026-10-13T09:06:11Z, completed 2026-10-13T09:06:12Z.");
+      "Inputs observed 2026-10-13T09:05:00Z, collected 2026-10-13T09:05:00Z, evaluated 2026-10-13T09:06:10Z.");
+    expect(screen.getByTestId("recurring-occurrences")).toHaveTextContent("Submission Finished CONFIRMED, started 2026-10-13T09:06:11Z, completed 2026-10-13T09:06:12Z.");
   });
 
   it.each([
     ["WAITING_RECONCILIATION", "Waiting: an earlier action's outcome is unknown."],
     ["PRODUCER_NOT_SEEN", "Waiting: no scheduler pass was recorded in the last two slots."],
-    ["STOPPED:STOP_NEW_ENTRIES", "Stopped: stop new entries denies matching work."],
+    ["STOPPED:STOP_NEW_ENTRIES", "Stopped: stop new entries blocks matching work."],
     ["ENDED:REMOVAL_REQUESTED", "Ended: Agent removal was requested."],
   ])("states the saved wait reason %s honestly", async (reason, text) => {
     mocks.deployment.mockResolvedValue(projection({ wait_reason: reason, pending_reconciliation: reason === "WAITING_RECONCILIATION" ? ["act-9"] : [] }));
@@ -100,14 +100,14 @@ describe("recurring operation", () => {
         action_id: null, evaluation: null, submission: null }] }));
     render(<AgentRecurring agentId="agent-a" />);
     expect(await screen.findByTestId("recurring-next")).toHaveTextContent("None (PRODUCER_NOT_SEEN)");
-    expect(screen.getByTestId("recurring-occurrences")).toHaveTextContent("Ended without an evaluation · DENIED · DEPLOYMENT_ENDED:OWNER_ENDED");
+    expect(screen.getByTestId("recurring-occurrences")).toHaveTextContent("Ended without an evaluation · denied");
   });
 
   it("refuses to offer activation when the terms are not qualified", async () => {
     mocks.deployment.mockResolvedValue({ deployment: null });
-    mocks.consent.mockResolvedValue({ ...consent, activation: { state: "UNAVAILABLE", reason: "ACTIVATION_UNAVAILABLE", evidence_class: null } });
+    mocks.consent.mockResolvedValue({ ...consent, activation: { state: "UNAVAILABLE", reason: "activation unavailable", evidence_class: null } });
     render(<AgentRecurring agentId="agent-a" />);
-    expect(await screen.findByTestId("recurring-unavailable")).toHaveTextContent("ACTIVATION_UNAVAILABLE");
+    expect(await screen.findByTestId("recurring-unavailable")).toHaveTextContent("activation unavailable");
     expect(screen.queryByRole("button", { name: "Start recurring operation" })).toBeNull();
   });
 });

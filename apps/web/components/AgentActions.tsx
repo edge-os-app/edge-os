@@ -2,19 +2,31 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
+import { Details } from "./Details";
+import { ACTION_JOB_STATE, EVIDENCE_CLASS, QUEUE_STATE, REMOVAL_STATE, plain } from "../lib/labels";
+import { plural } from "../lib/plural";
 import { financial, formatRaw, heldKey, MONAD_EXPLORER_BASE, releaseKey, type ActionDetail, type AgentActions as AgentActionsView,
   type OriginalTransaction, type Removal, type Stop } from "../lib/financial";
 
 const JOB_COPY: Record<string, string> = {
-  QUEUED: "Saved. Waiting for the bounded worker to evaluate it.",
-  DECIDED: "Decision saved. Waiting to admit the one action it allows.",
-  ENQUEUED: "Admitted. Waiting for submission checks.",
+  QUEUED: "Saved. Waiting for the bounded worker to check it.",
+  DECIDED: "Decision saved. Waiting to accept the one action it allows.",
+  ENQUEUED: "Accepted. Waiting for submission checks.",
   SUBMITTED: "The original action's outcome is not settled. Reconcile it before anything new runs for this wallet.",
   COMPLETED: "Finished.",
   UNAVAILABLE: "Unavailable. Nothing was submitted.",
 };
 
 const UNSETTLED = new Set(["SUBMITTED_UNKNOWN", "CLAIMED", "BREACHED", "RECONCILE_MISMATCH"]);
+const OPERATION: Record<string, string> = { ENTRY: "Entry", EXIT: "Exit" };
+const DECISION_STATUS: Record<string, string> = { ADMITTED: "Allowed", APPROVED: "Allowed", ALLOWED: "Allowed",
+  DENIED: "Refused", REFUSED: "Refused", REJECTED: "Refused" };
+const ADMISSION_STATUS: Record<string, string> = { ADMITTED: "Allowed", DENIED: "Refused", REFUSED: "Refused" };
+const RECEIPT_OUTCOME: Record<string, string> = { CONFIRMED: "Confirmed", REVERTED: "Reverted", UNKNOWN: "Unknown", FAILED: "Failed",
+  SUBMISSION_UNKNOWN: "Outcome unknown", SUBMITTED_CONFIRMED: "Confirmed", SUBMITTED_REVERTED: "Reverted" };
+const RECOVERY_STATE: Record<string, string> = { NOT_OPENED: "Not opened", OPEN: "Open", CLOSED: "Closed", NONE: "None" };
+const RESERVATION_STATE: Record<string, string> = { RESERVED: "Reserved", RELEASED: "Released", CONSUMED: "Used", HELD: "Held" };
+const STOP_MODE: Record<string, string> = { STOP_NEW_ENTRIES: "Stop new entries", HALT_ALL_SWAPS: "Halt all swaps" };
 const TRANSACTION_HASH = /^0x[0-9a-fA-F]{64}$/;
 
 /** A saved hash links only when it is the exact 32-byte hex shape. Anything else stays plain text. */
@@ -86,49 +98,52 @@ export function AgentActions({ agentId }: { agentId: string }) {
   const blocked = busy || uncertain;
   return (
     <section className="panel" aria-label="Agent actions" style={{ overflowWrap: "anywhere" }}>
-      <h2>Bounded actions</h2>
+      <h2>Actions</h2>
       {phase === "loading" && <p role="status" className="muted">Loading saved actions…</p>}
       {phase === "missing" && <p>No confirmed wallet is saved for this agent. Set up the agent wallet first.</p>}
       {phase === "error" && <div role="alert"><p>{error}</p>
         <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={() => void load()}>Try again</button></div>}
       {view && <>
         <p className="muted" data-testid="actions-mode">{view.provider_mode === "fixture"
-          ? "Authored fixture market, quotes, transport and receipts. No transaction is signed or sent."
+          ? "Example market, quotes, transport and receipts. No transaction is signed or sent."
           : view.provider_mode === "controlled"
-          ? "One controlled action requires its exact release and qualified current observations. Exit and recurring execution are unavailable."
-          : "No qualified execution route exists in this build. Evaluations end unavailable and nothing is submitted."}</p>
-        <p>Each run evaluates the saved rules once for the current five-minute slot. It is not continuous trading.</p>
+          ? "One controlled action requires its exact setup and checked current observations. Exit and recurring execution are unavailable."
+          : "No approved trade route exists in this build. Checks end unavailable and nothing is submitted."}</p>
+        <p>Each run checks the saved rules once for the current five-minute slot. It is not continuous trading.</p>
         {error ? <p role="alert" className="status err">{error}</p> : null}
         {notice ? <p role="status" className="status">{notice}</p> : null}
         {uncertain && <div className="btn-row">
           <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={() => void load()}>Check saved actions</button>
           <span className="muted">The last request is unconfirmed. New requests stay paused until this read succeeds.</span>
         </div>}
-        {view.blocking_reason && <p className="status err" data-testid="actions-blocking">Blocked: {view.blocking_reason}</p>}
+        {view.blocking_reason && <><p className="status err" data-testid="actions-blocking">Blocked. The reason is in Details.</p><Details summary="Details"><p className="mono">{view.blocking_reason}</p></Details></>}
         <div className="btn-row">
           <button className="btn btn-primary" style={{ minHeight: 44 }} type="button" disabled={blocked}
             onClick={() => void write(() => financial.schedule(agentId, heldKey("evaluation", agentId)),
               "Evaluation saved. The bounded worker runs it from saved state.", () => releaseKey("evaluation", agentId))}>
-            {busy ? "Saving…" : "Run one bounded evaluation"}
+            {busy ? "Saving…" : "Run one check"}
           </button>
           <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={busy} onClick={() => void load()}>Refresh</button>
         </div>
 
-        <h3>Evaluations</h3>
-        {!view.jobs.length && <p className="muted">No evaluations yet.</p>}
+        <h3>Checks</h3>
+        {!view.jobs.length && <p className="muted">No checks yet.</p>}
         <ul data-testid="actions-jobs">{[...view.jobs].reverse().map((job) => <li key={job.job_id}>
-          <strong>{job.state}</strong>{job.outcome ? ` · ${job.outcome}` : ""}{job.reason ? ` · ${job.reason}` : ""} · slot <time dateTime={job.decision_slot}>{job.decision_slot}</time>
+          <strong>{plain(ACTION_JOB_STATE, job.state, "Unknown state")}</strong>{job.outcome ? ` · ${job.outcome}` : ""}{job.reason ? " · reason in Details" : ""} · slot <time dateTime={job.decision_slot}>{job.decision_slot}</time>
           <p className="muted">{JOB_COPY[job.state] ?? job.state}</p>
-          {job.provenance?.observations && <p className="muted">
-            Observation: {job.provenance.observations.source ?? "source unavailable"} · {job.provenance.observations.evidence_class ?? "unqualified"}
-            {job.provenance.observations.finality && ` · ${job.provenance.observations.finality}`}
-            {job.provenance.observations.collected_at && ` · collected ${job.provenance.observations.collected_at}`}
-            {job.provenance.observations.delivery_profile_sha256 && ` · delivery ${job.provenance.observations.delivery_profile_sha256}`}
-            {job.provenance.observations.warmup_buckets != null && ` · warmup ${job.provenance.observations.warmup_buckets} buckets`}
-            {job.provenance.observations.forward_observation?.event && ` · event ${job.provenance.observations.forward_observation.event}`}
-          </p>}
+          {job.provenance?.observations && <>
+            <p className="muted">Observation saved. Data source and evidence are in Details.</p>
+            <Details summary="Details"><p className="mono">
+              source {job.provenance.observations.source ?? "unavailable"} · data label {job.provenance.observations.evidence_class ?? "unqualified"}
+              {job.provenance.observations.finality ? ` · ${job.provenance.observations.finality}` : ""}
+              {job.provenance.observations.collected_at ? ` · collected ${job.provenance.observations.collected_at}` : ""}
+              {job.provenance.observations.delivery_profile_sha256 ? ` · delivery ${job.provenance.observations.delivery_profile_sha256}` : ""}
+              {job.provenance.observations.warmup_buckets != null ? ` · warmup ${plural(job.provenance.observations.warmup_buckets, "period")}` : ""}
+              {job.provenance.observations.forward_observation?.event ? ` · event ${job.provenance.observations.forward_observation.event}` : ""}
+            </p></Details>
+          </>}
           {job.action_id && <button className="btn btn-ghost" style={{ minHeight: 44 }} type="button"
-            onClick={() => void openAction(job.action_id!)}>Open action {job.action_id}</button>}
+            onClick={() => void openAction(job.action_id!)}>Open action {job.action_id.slice(0, 8)}</button>}
         </li>)}</ul>
 
         {view.positions.length > 0 && <>
@@ -150,7 +165,7 @@ export function AgentActions({ agentId }: { agentId: string }) {
           <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={blocked}
             onClick={() => void write(() => financial.stop(agentId, "HALT_ALL_SWAPS"), "All swaps are halted.")}>Halt all swaps</button>
         </div>
-        <ul data-testid="actions-stops">{stops.map((stop) => <li key={stop.stop_id}>{stop.mode} · {stop.scope} · <time dateTime={stop.created_at}>{stop.created_at}</time></li>)}</ul>
+        <ul data-testid="actions-stops">{stops.map((stop) => <li key={stop.stop_id}>{plain(STOP_MODE, stop.mode, "Unknown stop")} · <time dateTime={stop.created_at}>{stop.created_at}</time></li>)}</ul>
 
         <h3>Remove agent</h3>
         <p className="muted">Removal withdraws the agent's signer. A requested removal denies new submissions at once. You keep access to the wallet and its holdings.</p>
@@ -159,7 +174,7 @@ export function AgentActions({ agentId }: { agentId: string }) {
           onClick={() => void write(() => financial.requestRemoval(agentId, heldKey("removal", agentId), "Owner removed the agent"),
             "Removal requested. New submissions are denied.")}>Request removal</button>
           : <div data-testid="actions-removal">
-              <p>Removal {latestRemoval.state}{latestRemoval.evidenced_signer ? ` · signer ${latestRemoval.evidenced_signer}` : ""}</p>
+              <p>Removal {plain(REMOVAL_STATE, latestRemoval.state, "Unknown")}{latestRemoval.evidenced_signer ? ` · signer ${latestRemoval.evidenced_signer}` : ""}</p>
               {latestRemoval.state !== "CONFIRMED" && <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button"
                 disabled={blocked} onClick={() => void write(() => financial.reconcileRemoval(agentId), "Removal status checked.")}>
                 Check removal status</button>}
@@ -178,33 +193,42 @@ function ActionLineage({ detail, busy, onReconcile }: { detail: ActionDetail; bu
     <div data-testid="action-lineage">
       <h3>Action {detail.action_id}</h3>
       <dl className="kv">
-        <dt>Operation</dt><dd>{detail.operation}</dd>
-        <dt>Decision</dt><dd>{detail.decision.status} at <time dateTime={detail.decision.decision_at}>{detail.decision.decision_at}</time></dd>
-        <dt>Execution revision</dt><dd className="mono">{detail.revision_id}</dd>
-        <dt>Consent (mandate)</dt><dd className="mono">{detail.mandate_id}</dd>
+        <dt>Operation</dt><dd>{plain(OPERATION, detail.operation, "Unknown")}</dd>
+        <dt>Decision</dt><dd>{plain(DECISION_STATUS, detail.decision.status, "Unknown state")} at <time dateTime={detail.decision.decision_at}>{detail.decision.decision_at}</time></dd>
+        <dt>Execution version</dt><dd className="mono">{detail.revision_id}</dd>
+        <dt>Permission</dt><dd className="mono">{detail.mandate_id}</dd>
         <dt>Quantity</dt><dd>{formatRaw(detail.payload.quantity.raw, detail.payload.quantity.decimals)} <span className="mono">{detail.payload.quantity.asset_id}</span></dd>
         {detail.payload.input.quote_input && <><dt>Trading input</dt>
           <dd>{formatRaw(detail.payload.input.quote_input.raw, detail.payload.input.quote_input.decimals)} <span className="mono">{detail.payload.input.quote_input.asset_id}</span></dd></>}
-        <dt>Admission</dt><dd>{detail.admission.map((item) => `${item.status}${item.reason ? ` (${item.reason})` : ""}`).join("; ")}</dd>
-        <dt>Queue</dt><dd data-testid="action-queue-state">{detail.queue ? `${detail.queue.state}${detail.queue.blocking_reason ? ` (${detail.queue.blocking_reason})` : ""}` : "None"}</dd>
-        <dt>Receipts</dt><dd data-testid="action-receipts">{detail.receipts.length ? detail.receipts.map((r) => `${r.outcome}${r.breach ? " (breach)" : ""}`).join(" → ") : "None yet"}</dd>
-        <dt>Recovery</dt><dd>{detail.recovery ? detail.recovery.state : "Not opened"}</dd>
+        <dt>Checks</dt><dd>{detail.admission.map((item) => `${plain(ADMISSION_STATUS, item.status, "Unknown state")}${item.reason ? ` (reason in Details)` : ""}`).join("; ")}</dd>
+        <dt>Queue</dt><dd data-testid="action-queue-state">{detail.queue ? `${plain(QUEUE_STATE, detail.queue.state, "Unknown state")}${detail.queue.blocking_reason ? " (reason in Details)" : ""}` : "None"}</dd>
+        <dt>Receipts</dt><dd data-testid="action-receipts">{detail.receipts.length ? detail.receipts.map((r) => `${plain(RECEIPT_OUTCOME, r.outcome, "Unknown state")}${r.breach ? " (breach)" : ""}`).join(" → ") : "None yet"}</dd>
+        <dt>Recovery</dt><dd>{detail.recovery ? plain(RECOVERY_STATE, detail.recovery.state, "Unknown state") : "Not opened"}</dd>
         {!original && <><dt>Transaction hash</dt><dd className="mono">{references?.transaction_hash
           ? <TransactionHash hash={references.transaction_hash} /> : `None (${references?.absent_reason ?? "not recorded"})`}</dd></>}
       </dl>
       {refused && <p className="status err" data-testid="action-refusal">Refused by the wallet policy. Nothing was sent.</p>}
       {detail.receipts.length > 0 && <ul data-testid="action-receipt-evidence">{detail.receipts.map((receipt, index) => <li key={index}>
-        {receipt.outcome} · gas charge {receipt.content.actual_gas
+        {plain(RECEIPT_OUTCOME, receipt.outcome, "Unknown")} · gas charge {receipt.content.actual_gas
           ? `${formatRaw(receipt.content.actual_gas.raw, receipt.content.actual_gas.decimals)} ${receipt.content.actual_gas.asset_id}`
           : "not observed"} · source <span className="mono">{receipt.content.source_ref ?? "not recorded"}</span>
       </li>)}</ul>}
       {original && <OriginalTransactionFacts original={original} settled={!unsettled} />}
       <h4>Reservations</h4>
-      <ul>{detail.reservations.map((item, index) => <li key={index}>{item.scope} · {formatRaw(item.raw, item.decimals)} <span className="mono">{item.asset_id}</span> · {item.state}</li>)}</ul>
+      <ul>{detail.reservations.map((item, index) => <li key={index}>{item.scope} · {formatRaw(item.raw, item.decimals)} <span className="mono">{item.asset_id}</span> · {plain(RESERVATION_STATE, item.state, "Unknown")}</li>)}</ul>
       {unsettled && <div className="btn-row">
         <button className="btn btn-primary" style={{ minHeight: 44 }} type="button" disabled={busy} onClick={onReconcile}>Reconcile original action</button>
         <span className="muted">Reads the original action's receipt. It never sends a replacement.</span>
       </div>}
+      <Details summary="Details"><dl className="kv">
+        <dt>Operation code</dt><dd className="mono">{detail.operation}</dd>
+        <dt>Decision code</dt><dd className="mono">{detail.decision.status} · {detail.decision.reasons.join(", ") || "no reasons"}</dd>
+        <dt>Checks</dt><dd className="mono">{detail.admission.map((item) => `${item.status}${item.reason ? ` (${item.reason})` : ""}`).join("; ") || "none"}</dd>
+        <dt>Queue code</dt><dd className="mono">{detail.queue ? `${detail.queue.state}${detail.queue.blocking_reason ? ` (${detail.queue.blocking_reason})` : ""}` : "None"}</dd>
+        <dt>Receipts</dt><dd className="mono">{detail.receipts.map((r) => r.outcome).join(" → ") || "none"}</dd>
+        <dt>Recovery</dt><dd className="mono">{detail.recovery?.state ?? "Not opened"}</dd>
+        <dt>Reservations</dt><dd className="mono">{detail.reservations.map((item) => `${item.scope}:${item.raw}:${item.asset_id}:${item.state}`).join("; ") || "none"}</dd>
+      </dl></Details>
     </div>
   );
 }
@@ -226,31 +250,36 @@ function OriginalTransactionFacts({ original, settled }: { original: OriginalTra
     <div data-testid="action-original">
       <h4>Original transaction</h4>
       <p data-testid="action-original-stage">{original.reason === "SIGNER_REFUSED"
-        ? "The signer refused. Nothing was signed or sent." : STAGE_COPY[original.stage] ?? original.stage}
+        ? "The signer refused. Nothing was signed or sent." : STAGE_COPY[original.stage] ?? "Unknown stage"}
         {!settled && " No replacement is ever created."}</p>
       <dl className="kv">
-        <dt>Stage</dt><dd>{original.stage}{original.reason ? ` (${original.reason})` : ""}{original.reasons?.length ? ` · ${original.reasons.join(", ")}` : ""}</dd>
+        <dt>Stage</dt><dd>{STAGE_COPY[original.stage] ?? "Unknown stage"}</dd>
         <dt>Transaction hash</dt><dd className="mono" data-testid="action-original-hash">{original.transaction_hash
           ? <TransactionHash hash={original.transaction_hash} /> : "None saved"}</dd>
-        <dt>Candidate identity</dt><dd className="mono">{original.candidate_hash ?? "None"}</dd>
+        <dt>Candidate hash</dt><dd className="mono">{original.candidate_hash ?? "None"}</dd>
         <dt>Nonce</dt><dd>{original.nonce ?? "None"}</dd>
         {original.fee_envelope && <><dt>Fee limit</dt><dd>{original.fee_envelope.gas_limit} gas at most {formatRaw(String(original.fee_envelope.max_fee_per_gas), 9)} gwei</dd></>}
         <dt>Signing request</dt><dd className="mono">{original.signing_request_id ?? "None"}</dd>
         <dt>Wallet</dt><dd className="mono">{original.wallet_address} on chain {original.chain_id}</dd>
-        <dt>Evidence</dt><dd>{original.evidence_class}: {original.evidence_class === "PROVIDER_ACTUAL"
+        <dt>Evidence</dt><dd>{plain(EVIDENCE_CLASS, original.evidence_class, "unknown data label")}: {original.evidence_class === "PROVIDER_ACTUAL"
           ? "release-bound provider evidence; settlement requires the original receipt."
           : original.evidence_class === "SYNTHETIC_FIXTURE"
-          ? "synthetic controlled test responses; no real wallet or chain effect."
+          ? "example controlled test responses; no real wallet or chain effect."
           : original.evidence_class === "AUTHORED_RECORDING"
           ? "authored recorded responses, not a live provider or chain." : "unqualified; effects remain unknown."}</dd>
         {original.scope && <><dt>Scope</dt><dd>{original.scope}</dd></>}
         {original.release_sha256 && <><dt>Release</dt><dd className="mono">{original.release_id} · {original.release_sha256}</dd></>}
-        {original.approved_minimum && <><dt>Approved minimum, raw</dt><dd>{original.approved_minimum.raw} <span className="mono">{original.approved_minimum.asset_id}</span></dd></>}
+        {original.approved_minimum && <><dt>Approved minimum (base units)</dt><dd>{original.approved_minimum.raw} <span className="mono">{original.approved_minimum.asset_id}</span></dd></>}
         {original.quote_observation && <>
           <dt>Quote request and receipt</dt><dd>{original.quote_observation.requested_at} → {original.quote_observation.received_at} · elapsed {original.quote_observation.elapsed_seconds} seconds</dd>
           <dt>Provider quote creation time</dt><dd>{original.quote_observation.provider_created_at ?? "Unknown"}</dd>
         </>}
       </dl>
+      <Details summary="Details"><dl className="kv">
+        <dt>Stage code</dt><dd className="mono">{original.stage}{original.reason ? ` (${original.reason})` : ""}{original.reasons?.length ? ` · ${original.reasons.join(", ")}` : ""}</dd>
+        <dt>Data label</dt><dd className="mono">{original.evidence_class}</dd>
+        {original.release_id ? <><dt>Setup</dt><dd className="mono">{original.release_id} · {original.release_sha256}</dd></> : null}
+      </dl></Details>
     </div>
   );
 }

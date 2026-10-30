@@ -1,3 +1,5 @@
+import { plural } from "./plural";
+
 // The recorded-history declaration must fit the source's real window AND the partition the server can read.
 // The server accepts partitions that are ordered, non-overlapping and inside the window, and a schedule on the
 // five-minute grid inside that window. It requires bounded training, validation and holdout partitions for a
@@ -49,7 +51,7 @@ function predictivePartitions(start: number, end: number, windowBuckets: number)
 }
 
 function directionLabel(direction: HistoryDirection): string {
-  return direction === "DESCRIPTIVE" ? "DESCRIPTIVE" : direction;
+  return direction === "DESCRIPTIVE" ? "describe only" : direction;
 }
 
 /**
@@ -65,19 +67,19 @@ export function deriveHistoryPlan(input: {
   const start = Date.parse(input.window.start);
   const end = Date.parse(input.window.end);
   if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) {
-    return refusal("The source window has no usable start and end.");
+    return refusal("The saved source has no usable start and end.");
   }
   if (start % BUCKET_MS || end % BUCKET_MS) {
-    return refusal("The source window is not on the five-minute bucket grid.");
+    return refusal("The saved source does not start and end on a five-minute period.");
   }
   const windowBuckets = (end - start) / BUCKET_MS;
-  if (!Number.isInteger(windowBuckets)) return refusal("The source window is not a whole number of buckets.");
+  if (!Number.isInteger(windowBuckets)) return refusal("The saved source is not a whole number of five-minute periods.");
 
   const partitions = input.direction === "DESCRIPTIVE"
     ? [{ partition_id: "described", role: "DESCRIPTIVE" as const, start: iso(start), end: iso(end) }]
     : predictivePartitions(start, end, windowBuckets);
   if (partitions === null) {
-    return refusal("The source window is too short for training, validation and holdout partitions.");
+    return refusal("The saved source is too short for training, validation and holdout periods.");
   }
 
   // The server reads only this partition at comparison time. Its buckets start one bucket after its start.
@@ -95,26 +97,26 @@ export function deriveHistoryPlan(input: {
   const minutes = Math.round((windowBuckets * BUCKET_MS) / 60_000);
   if (maxLookbackBuckets < 1) {
     if (input.direction === "DESCRIPTIVE") {
-      return refusal(`This ${minutes}-minute window has no usable decision in its readable partition with a `
-        + `${HISTORY_HORIZON_MINUTES}-minute horizon and its 60-second response window.`);
+      return refusal(`This ${minutes}-minute source has no usable decision in the time it can read, with a `
+        + `${HISTORY_HORIZON_MINUTES}-minute horizon and a 60-second response window.`);
     }
-    return refusal(`This ${minutes}-minute window supports at most ${Math.max(0, lastGrid)} usable decision(s) `
-      + `in its training partition for ${directionLabel(input.direction)}. Predictive work needs at least `
-      + `${HISTORY_DECISION_FLOOR} decisions (1 triggered and 1 control). No lookback fits; use DESCRIPTIVE.`);
+    return refusal(`This ${minutes}-minute source supports at most ${Math.max(0, lastGrid)} usable decisions `
+      + `in its training period for ${directionLabel(input.direction)}. Predictive work needs at least `
+      + `${HISTORY_DECISION_FLOOR} decisions (1 triggered and 1 control). No lookback fits; describe only.`);
   }
   if (!Number.isInteger(lookback) || lookback < 1 || lookback > maxLookbackBuckets) {
     const floorText = input.direction === "DESCRIPTIVE" ? "one usable decision" : "two usable decisions";
-    return refusal(`This ${minutes}-minute window supports at most ${maxLookbackBuckets} bucket(s) of lookback for `
+    return refusal(`This ${minutes}-minute source supports at most ${plural(maxLookbackBuckets, "five-minute period")} of lookback for `
       + `${directionLabel(input.direction)} at a ${HISTORY_HORIZON_MINUTES}-minute horizon (${floorText}); `
-      + `use a lookback of at most ${maxLookbackBuckets} buckets.`, maxLookbackBuckets);
+      + `use a lookback of at most ${plural(maxLookbackBuckets, "period")}.`, maxLookbackBuckets);
   }
 
   const scheduleStart = readableStart + (lookback + 1) * BUCKET_MS;
   const scheduleEnd = lastDecision + BUCKET_MS;
   const decisions = (lastDecision - scheduleStart) / BUCKET_MS + 1;
   if (decisions < required) {
-    return refusal(`This ${minutes}-minute window supports only ${decisions} usable decision(s) in its readable `
-      + `partition for ${directionLabel(input.direction)}; use a lookback of at most ${maxLookbackBuckets - 1} buckets.`,
+    return refusal(`This ${minutes}-minute source supports only ${decisions} usable decisions in the time it can read `
+      + `for ${directionLabel(input.direction)}; use a lookback of at most ${plural(maxLookbackBuckets - 1, "period")}.`,
     maxLookbackBuckets - 1);
   }
   return {
@@ -129,8 +131,8 @@ export function deriveHistoryPlan(input: {
 /** The limits text the declaration declares. A synthetic recording measures no real pool; an actual source names it. */
 export function historyUnknowns(evidenceClass: string, releaseId: string | null): string[] {
   if (evidenceClass === "PROVIDER_ACTUAL") {
-    return [`Recorded responses come from the named providers under the approved release`
-      + `${releaseId ? ` ${releaseId}` : ""}. Costs are not modelled; the window is short.`];
+    return [`Saved responses come from the named providers under the locked research setup`
+      + `${releaseId ? "" : ""}. Costs are not modelled; the window is short.`];
   }
-  return ["Recorded responses are synthetic; no real pool behaviour is measured."];
+  return ["Saved responses are example data; no real market behaviour is measured."];
 }

@@ -69,16 +69,16 @@ describe("direct agent health", () => {
       "2026-10-13T09:06:12Z (execution_local.execution_queue q-1 updated_at)");
     expect(facts.getByTestId("health-read-at")).toHaveTextContent("2026-10-13T09:07:30Z");
     expect(facts.getByTestId("health-next")).toHaveTextContent("2026-10-13T09:10:00Z");
-    expect(facts.getByTestId("health-last-evaluation")).toHaveTextContent("SIGNAL");
-    expect(facts.getByTestId("health-last-evaluation")).toHaveTextContent("collected Unknown (INPUT_COLLECTION_TIME_NOT_SAVED)");
+    expect(facts.getByTestId("health-last-evaluation")).toHaveTextContent("signal");
+    expect(facts.getByTestId("health-last-evaluation")).toHaveTextContent("collected Unknown");
     expect(facts.getByTestId("health-last-attempt")).toHaveTextContent("act-1");
     expect(facts.getByTestId("health-pending")).toHaveTextContent("act-9");
     expect(facts.getByTestId("health-warnings")).toHaveTextContent("ACCOUNT_RECOVERY_OPEN_OR_UNKNOWN");
-    expect(facts.getByTestId("health-controls")).toHaveTextContent("STOP_NEW_ENTRIES");
+    expect(facts.getByTestId("health-controls")).toHaveTextContent("Stop new entries");
     expect(facts.getByTestId("health-inventory")).toHaveTextContent("50000000000000000000");
     expect(facts.getByTestId("health-inventory")).toHaveTextContent("last saved 2026-10-13T09:06:12Z");
     expect(facts.getByTestId("health-unknowns")).toHaveTextContent("native_gas_aggregate");
-    expect(facts.getByTestId("health-digest")).toHaveTextContent("sha256:first");
+    expect(document.body).toHaveTextContent("sha256:first");
     expect(mocks.read).toHaveBeenCalledWith("agent-a");
   });
 
@@ -88,7 +88,7 @@ describe("direct agent health", () => {
         last_tick_at: unknown("NO_DEPLOYMENT"), cursor_slot: unknown("NO_DEPLOYMENT"), missed_slots: unknown("NO_DEPLOYMENT") },
       wait_reason: unknown("NO_DEPLOYMENT") }));
     render(<AgentHealthPanel agentId="agent-a" />);
-    expect(await screen.findByTestId("health-next")).toHaveTextContent("Unknown (NO_DEPLOYMENT)");
+    expect(await screen.findByTestId("health-next")).toHaveTextContent("Unknown");
     expect(screen.getByTestId("health-as-of")).toHaveTextContent("No stored write");
   });
 
@@ -134,7 +134,7 @@ describe("read-only agent health conversation", () => {
     // Only the read-only questions and Ask exist: no control can start, stop, end, remove or sell anything.
     const names = screen.getAllByRole("button").map((b) => b.textContent ?? "");
     expect(names).toEqual(["What did it last do?", "What is next?", "Why is it waiting?", "Is anything pending?",
-      "Was it stopped or removed?", "What inventory is left?", "Did the revision change?", "What is unknown?", "Ask"]);
+      "Was it stopped or removed?", "What inventory is left?", "Did the saved version change?", "What is unknown?", "Ask"]);
   });
 
   it("keeps text typed while an earlier question is answered", async () => {

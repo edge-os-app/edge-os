@@ -63,7 +63,7 @@ describe("Nansen token report", () => {
     mocks.list.mockResolvedValue({ jobs: [job()] });
     mocks.open.mockResolvedValue(record);
     render(<ResearchNansenReport intakeId="intake-1" />);
-    expect(await screen.findByTestId("nansen-job-answer")).toHaveTextContent("Answer: PARTIAL · requests KNOWN 2 · credits KNOWN 6");
+    expect(await screen.findByTestId("nansen-job-answer")).toHaveTextContent("Answer: Partly answered · requests Known 2 · credits Known 6");
     expect(screen.getByTestId("nansen-label")).toHaveTextContent("Not provider data");
     await userEvent.click(screen.getByRole("button", { name: "Open saved report" }));
     const view = await screen.findByTestId("nansen-report-view");
@@ -80,7 +80,7 @@ describe("Nansen token report", () => {
       provider_requests: { state: "UNKNOWN", measured: 0, lost: 1 },
       nansen_credits: { state: "UNKNOWN", measured: 0, deducted: null, reserved_by_package: "6" } } } })] });
     render(<ResearchNansenReport intakeId="intake-1" />);
-    expect(await screen.findByTestId("nansen-job-answer")).toHaveTextContent("credits UNKNOWN (reserved amount held)");
+    expect(await screen.findByTestId("nansen-job-answer")).toHaveTextContent("credits Unknown (reserved amount held)");
   });
 
   it("starts one keyed report with the exact fields and shows a refusal with its code", async () => {
@@ -90,7 +90,7 @@ describe("Nansen token report", () => {
     await userEvent.type(screen.getByLabelText("Token symbol"), "MOE");
     await userEvent.click(screen.getByLabelText("Basic flow records"));
     await userEvent.click(screen.getByRole("button", { name: "Save and reserve this report" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("The window start must be before its end. (WINDOW_INVALID)");
+    expect(await screen.findByRole("alert")).toHaveTextContent("The window start must be before its end.");
     const [intakeId, body] = mocks.start.mock.calls[0];
     expect(intakeId).toBe("intake-1");
     expect(body).toMatchObject({ token_address: "0xd8e004acba279417c04c0633cb5a21ceca207777", token_symbol: "MOE",
@@ -139,7 +139,7 @@ describe("Nansen report under an operating release", () => {
     expect(screen.queryByLabelText("Token contract address")).toBeNull();
     expect(screen.queryByLabelText("Credit limit for this report")).toBeNull();
     const label = screen.getByTestId("nansen-label");
-    expect(label).toHaveTextContent("configured for actual Nansen collection");
+    expect(label).toHaveTextContent("collects real Nansen data");
     expect(label).not.toHaveTextContent(/collected from Nansen|passed|verified/i);
     await userEvent.click(screen.getByRole("button", { name: "Save and reserve this report" }));
     await waitFor(() => expect(mocks.start).toHaveBeenCalledTimes(1));
@@ -162,7 +162,8 @@ describe("Nansen report under an operating release", () => {
     mocks.open.mockResolvedValue(record);
     render(<ResearchNansenReport intakeId="intake-1" />);
     await userEvent.click(await screen.findByRole("button", { name: "Save and reserve this report" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("(WINDOW_INVALID)");
+    expect(await screen.findByRole("alert")).toHaveTextContent("The window start must be before its end.");
+    expect(screen.getByText(/Error code WINDOW_INVALID/)).toBeInTheDocument();
     expect(mocks.start).toHaveBeenCalledTimes(1);
     expect(mocks.start.mock.calls[0][1].limits).toEqual({ max_requests: 3, max_pages: 1, max_bytes: 90000, max_credits: "2.5", per_page: 50 });
     await userEvent.click(screen.getByRole("button", { name: "Open saved report" }));
@@ -177,7 +178,7 @@ describe("Nansen report under an operating release", () => {
     mocks.start.mockResolvedValueOnce(job({ state: "RESERVED", nansen_report: null }));
     render(<ResearchNansenReport intakeId="intake-1" />);
     await screen.findByTestId("nansen-release-request");
-    expect(screen.getByTestId("nansen-label")).toHaveTextContent("Stand-in");
+    expect(screen.getByTestId("nansen-label")).toHaveTextContent("Example Nansen-shaped");
     expect(screen.getByTestId("nansen-label")).toHaveTextContent("Not provider data");
     await userEvent.click(screen.getByRole("button", { name: "Save and reserve this report" }));
     await waitFor(() => expect(mocks.start).toHaveBeenCalledTimes(1));
@@ -284,15 +285,15 @@ describe("saved Nansen report labels", () => {
     expect(within(evidence).getByRole("link", { name: "Nansen API documentation" })).toHaveAttribute("href", "https://docs.nansen.ai");
     expect(view).toHaveTextContent(ACTUAL_NOTICE);
     expect(within(view).getByTestId("nansen-coverage")).toHaveTextContent("partial coverage");
-    expect(within(view).getByTestId("nansen-settlement")).toHaveTextContent("credits UNKNOWN (reserved amount held)");
-    expect(within(view).getByTestId("nansen-sources")).toHaveTextContent("2 saved provider response hashes");
+    expect(within(view).getByTestId("nansen-settlement")).toHaveTextContent("credits Unknown (reserved amount held)");
+    expect(within(view).getByTestId("nansen-sources")).toHaveTextContent("2 saved response hashes");
     expect(within(view).getByTestId("nansen-hashes")).toHaveTextContent("A saved hash did not match. Do not rely on this report.");
   });
 
   it.each([
-    ["RELEASE_STAND_IN_RESPONSE", "Stand-in responses. Not provider data."],
+    ["RELEASE_STAND_IN_RESPONSE", "Example Nansen-shaped responses. Not provider data."],
     ["AUTHORED_FIXTURE", "Authored responses replayed on this server. Not provider data."],
-    ["SOMETHING_ELSE", "Unrecognized evidence class SOMETHING_ELSE. Do not treat this report as provider data."],
+    ["SOMETHING_ELSE", "This report has an unknown data label. Do not treat it as provider data."],
   ])("labels a saved %s report without Nansen attribution", async (evidenceClass, copy) => {
     mocks.list.mockResolvedValue({ jobs: [job()] });
     mocks.open.mockResolvedValue({ ...record, content: { ...record.content, evidence_class: evidenceClass } });

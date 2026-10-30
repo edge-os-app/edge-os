@@ -1,6 +1,8 @@
 import { payloadBindingText } from "../lib/types";
 import type { PayloadBindingLineage, SpotReplayRecord } from "../lib/types";
 import { ReplayBalanceChart } from "./ReplayBalanceChart";
+import { Details } from "./Details";
+import { EVIDENCE_CLASS, plain } from "../lib/labels";
 
 interface Props { replay: SpotReplayRecord }
 
@@ -53,7 +55,7 @@ export function ReplayResult({ replay }: Props) {
       {delayed ? <p data-testid="spot-replay-delayed-note"><strong>Delayed hypothetical replay (300 s decision delay)</strong>. Each fill uses the next bucket&rsquo;s stale historical close, a hypothetical price, not a tradable quote.</p> : null}
       {result.reason ? <p role="alert">{result.reason.code} at {result.reason.path}: {result.reason.detail}</p> : null}
       <section className="spot-replay-summary" aria-labelledby="spot-replay-summary-title">
-        <h4 id="spot-replay-summary-title">Simulated replay summary</h4>
+        <h4 id="spot-replay-summary-title">Replay summary</h4>
         <dl className="kv">
           <dt>Simulated gain/loss</dt><dd>{summaryMetric("gain_loss_quote", "quote")}</dd>
           <dt>Completed trade pairs</dt><dd>{summaryMetric("completed_trade_pairs", "completed trade pairs")}</dd>
@@ -61,22 +63,23 @@ export function ReplayResult({ replay }: Props) {
         </dl>
       </section>
       <ReplayBalanceChart samples={result.samples} />
+      <Details summary="Details">
       <dl className="kv">
         <dt>Replay ID</dt><dd className="mono" data-testid="spot-replay-id">{replay.replay_id}</dd>
         <dt>Saved hash</dt><dd className="mono">{replay.content_sha256}</dd>
-        <dt>Evidence</dt><dd>{history
-          ? `${result.evidence_class}. ${String(result.evidence_class) === "PROVIDER_ACTUAL"
-            ? `Simulated fills on saved provider history dataset ${history.dataset_id} (${history.source_id}, ${history.content_label}). These prices are saved provider history, not synthetic.`
+        <dt>Data source</dt><dd>{history
+          ? `${plain(EVIDENCE_CLASS, result.evidence_class, "unknown data label")}. ${String(result.evidence_class) === "PROVIDER_ACTUAL"
+            ? `Simulated fills on saved provider history ${history.dataset_id.slice(0, 8)} (${history.source_id}, ${history.content_label}). These prices are saved provider history, not synthetic.`
             : KNOWN_SYNTHETIC_CLASSES.has(String(result.evidence_class))
-            ? `Simulated fills on saved recorded-history dataset ${history.dataset_id} (${history.source_id}, ${history.content_label}). Not observed market history.`
-            : `Saved history dataset ${history.dataset_id} (${history.source_id}, ${history.content_label}) has an unrecognized evidence class. This view claims neither observed history nor synthetic prices.`}`
-          : `${result.evidence_class}. This is an authored fixture, not observed market history.`}</dd>
+            ? `Simulated fills on saved recorded history ${history.dataset_id.slice(0, 8)} (${history.source_id}, ${history.content_label}). Not observed market history.`
+            : `Saved history dataset ${history.dataset_id.slice(0, 8)} (${history.source_id}, ${history.content_label}) has an unrecognized evidence class. This view claims neither observed history nor synthetic prices.`}`
+          : `${plain(EVIDENCE_CLASS, result.evidence_class, "unknown data label")}. This is example data, not observed market history.`}</dd>
         <dt>Repeatability</dt><dd className="mono">{result.repeatability_id ?? "Unavailable before replay"}</dd>
       </dl>
       {history ? (
         <section aria-labelledby="spot-replay-lineage-title" data-testid="spot-replay-history-lineage"
           style={{ overflowWrap: "anywhere" }}>
-          <h4 id="spot-replay-lineage-title">Recorded-history lineage ({history.fill_label})</h4>
+          <h4 id="spot-replay-lineage-title">Saved history used ({history.fill_label})</h4>
           <dl className="kv">
             <dt>Dataset</dt><dd className="mono">{history.dataset_id}</dd>
             <dt>Dataset hash</dt><dd className="mono">{history.dataset_content_sha256}</dd>
@@ -92,23 +95,24 @@ export function ReplayResult({ replay }: Props) {
         </section>
       ) : null}
       <section aria-labelledby="spot-replay-saved-inputs-title" data-testid="spot-replay-saved-inputs">
-        <h4 id="spot-replay-saved-inputs-title">Exact saved run settings</h4>
+        <h4 id="spot-replay-saved-inputs-title">Exact saved settings</h4>
         <dl className="kv">
           <dt>Profile</dt><dd data-testid="spot-replay-saved-profile">{inputs.profile_version}{inputs.profile_sha256 ? ` · ${inputs.profile_sha256}` : ""}</dd>
           <dt>Timing profile</dt><dd data-testid="spot-replay-timing-profile">{timingProfile ?? "p12.spot-replay/1"}{inputs.timing_policy ? ` · ${inputs.timing_policy.decision_delay_seconds} s decision delay · ${inputs.timing_policy.fill_rule}` : ""}</dd>
           <dt>Strategy revision</dt><dd className="mono">{inputs.strategy_revision_id}</dd>
           <dt>Run configuration</dt><dd className="mono">{inputs.run_configuration_id}</dd>
-          <dt>Fixture and dataset</dt><dd>{inputs.dataset_fixture_id} · {inputs.dataset_revision_id}</dd>
+          <dt>Example data and saved data</dt><dd>{inputs.dataset_fixture_id} · {inputs.dataset_revision_id}</dd>
           <dt>Evidence</dt><dd>{inputs.evidence_class} · {inputs.dataset_qualification}</dd>
           <dt>Window</dt><dd>{displayUtc(inputs.window_start)} to {displayUtc(inputs.window_end)}</dd>
           <dt>Starting balances</dt><dd>{inputs.initial_cash_quote} quote cash · {inputs.initial_base_amount} base · {inputs.initial_basis_quote} quote basis</dd>
           <dt>Trade size</dt><dd>{inputs.strategy.sizing.amount} {inputs.strategy.sizing.unit}</dd>
-          <dt>Warm-up</dt><dd>{inputs.strategy.warmup_buckets} scheduled buckets</dd>
+          <dt>Warm-up</dt><dd>{inputs.strategy.warmup_buckets} scheduled five-minute periods</dd>
           <dt>Saved costs</dt><dd>{inputs.strategy.cost_assumptions.source_ref} · fee {inputs.strategy.cost_assumptions.fee_rate} · slippage {inputs.strategy.cost_assumptions.slippage_rate}</dd>
           <dt>Entry binding</dt><dd>{bindingSummary("entry")}</dd>
           <dt>Exit binding</dt><dd>{bindingSummary("exit")}</dd>
         </dl>
       </section>
+      </Details>
       <div className="table-scroll">
         <table className="records" aria-label="Quote-denominated replay metrics">
           <thead><tr><th scope="col">Metric</th><th scope="col">Value</th><th scope="col">Status and reasons</th></tr></thead>
@@ -124,7 +128,7 @@ export function ReplayResult({ replay }: Props) {
       {orderEvents.length ? (
         <section aria-labelledby="spot-replay-order-events-title" data-testid="spot-replay-order-events">
           <h4 id="spot-replay-order-events-title">Saved order events</h4>
-          <p className="muted">A FILL_UNAVAILABLE or NO_NEXT_BUCKET event is a recorded event. It is not a failed replay.</p>
+          <p className="muted">A missed fill or a missing next period is a recorded event. It is not a failed replay.</p>
           <ul>
             {orderEvents.map((event, index) => (
               <li key={index}>{String(event.status)}{event.fill_label ? ` · ${String(event.fill_label)}` : ""}
