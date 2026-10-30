@@ -4,7 +4,8 @@ Task `CLOUD-BINDING-PROOFS`, builder-approved normal cloud session, 2026-10-30. 
 (`origin/integration/edge-os-mvp`). Branch `cloud/binding-proofs` (normal pushes only; no PR, no main or
 integration push). No network, RPC, key, wallet, signer or provider call was made.
 
-**Final SHA:** recorded in the last section (the commit that adds it can not contain its own hash).
+**Final SHA:** code and docs candidate `794057b7bbb603fec4157d23dee29cd7a647a5c1`, reviewed PASS by both reviewers.
+The commit that adds this final section changes only this file (a commit cannot carry its own hash).
 
 ## Outcome
 
@@ -167,3 +168,46 @@ RED first: before the module existed, `tests/execution/test_inapp_binding_fill.p
 against the candidate-2 module first: 3 failed, 113 passed.
 
 Final results, reviews and the final SHA are in the "Final candidate" section below.
+
+## Final candidate
+
+Candidate `794057b7bbb603fec4157d23dee29cd7a647a5c1` (branch `cloud/binding-proofs`). History: `518f0af`
+(candidate 1), `b3f3289` (repairs), `794057b` (final repairs).
+
+### Tests on `794057b`
+
+| Command (from `apps/api` unless stated) | Result | Time |
+| --- | --- | --- |
+| `.venv/bin/python -m pytest -q tests/execution/test_inapp_binding_fill.py` | 116 passed | 0.4 s |
+| `.venv/bin/python -m pytest -q tests/execution/test_inapp_binding_fill.py tests/execution/test_inapp_trade_release.py` | 228 passed (reviewers' runs) | 0.5 s |
+| repository root: `PYTHONPATH=apps/api/src:. apps/api/.venv/bin/python -m pytest -q tests/privy_unfunded_proof` | 632 passed, 3 skipped | 22 s |
+| `.venv/bin/python -m pytest -q tests` (full suite, includes `tests/execution` and `tests/admission`, PostgreSQL in Docker) | 4546 passed, 1 skipped, **1 failed** | 19 min |
+
+The one failure is `tests/test_privy_wallet_lookup.py::test_ipc_malformed_or_oversized_frames_get_a_code_only`
+for one frame case (`ConnectionResetError`). It fails identically at the untouched base `275b399` (3 of 3 runs in
+a separate worktree), and this change touches nothing it imports. It is pre-existing and outside this task.
+
+PostgreSQL: the session had no running Docker daemon. `dockerd` was started locally in the container, and the
+harness's own `postgres:18.6-trixie` test containers ran. The first full run's image pull failed transiently
+(1326 setup errors, no assertion failures); the run above is the clean rerun. A second run was stopped partway
+because the code changed under it. No test made a network, RPC, provider, key or signing call.
+
+### Reviews
+
+Two new independent reviewer subagents with no shared context, each re-checking the same commit after every
+repair.
+
+| Reviewer | `518f0af` | `b3f3289` | `794057b` |
+| --- | --- | --- | --- |
+| (a) Spec: ticket and step 6 item by item | FAIL: 1 blocking (Q3 A used `eth_getBlockByNumber` on the broadcast relay, which refuses it) and 7 non-blocking | PASS, 1 non-blocking (non-ASCII digits in `at`) | **PASS, no findings** |
+| (b) Standards and safety: `implementation-standards.md`; adversarial acceptance attempts | FAIL: 2 blocking (repeated JSON keys could hide a failed read; `market_observation_ready` claimed more than the data) and 6 non-blocking | PASS, 1 non-blocking (a `1e400` float raised `ValueError`) | **PASS, no findings** |
+
+Every finding was fixed and has a regression test where it is code. The safety reviewer's attack scripts (more
+than 60 inputs: duplicate keys, `0` for `false`, mixed case, out-of-range values, stale and future times,
+expired release windows, cross-release and cross-slot proofs, non-canonical JSON, deep nesting) all refuse on
+`794057b` with stable codes.
+
+### Not done, by rule
+
+No proof builder for any of the six slots: their content is undefined (Q1-Q6). No registry, release, control
+proof, settings or hosted-record file changed. No PR, no push to `main` or `integration`, no force push.
