@@ -202,11 +202,12 @@ def test_it_never_writes_a_file_or_changes_the_registry(tmp_path: Path,
                                                         capsys: pytest.CaptureFixture[str]) -> None:
     path = write_values(tmp_path, values(tmp_path))
     before = sorted(str(item.relative_to(tmp_path)) for item in tmp_path.rglob("*"))
-    assert hosted_deployment.APPROVED_HOSTED_DEPLOYMENTS == {}
+    registry_before = dict(hosted_deployment.APPROVED_HOSTED_DEPLOYMENTS)
+    assert registry_before
     code, _output, error = invoke(["--values", str(path), "--root", str(tmp_path)], capsys)
     assert (code, error) == (0, "")
     assert sorted(str(item.relative_to(tmp_path)) for item in tmp_path.rglob("*")) == before
-    assert hosted_deployment.APPROVED_HOSTED_DEPLOYMENTS == {}
+    assert dict(hosted_deployment.APPROVED_HOSTED_DEPLOYMENTS) == registry_before
 
 
 def test_a_record_the_parser_refuses_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
