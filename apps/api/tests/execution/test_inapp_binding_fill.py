@@ -69,7 +69,7 @@ def results(**changes):
         "binding.wmon_balance": word(12 * 10**18), "binding.moe_balance": word(7),
         "binding.native_balance": hex(5 * 10**17), "binding.wmon_allowance": word(0),
         "binding.pool_token0": address_word(WMON), "binding.pool_token1": address_word(MOE),
-        "binding.pool_reserves": "0x" + f"{4000 * 10**18:064x}" + f"{9_000_000 * 10**18:064x}" + f"{BLOCK_TIME - 5:064x}",
+        "binding.pool_reserves": "0x" + f"{4000 * 10**18:064x}" + f"{9_000_000 * 10**18:064x}" + f"{BLOCK_TIME - 100:064x}",
     }
     value.update(changes)
     return value
@@ -136,7 +136,7 @@ def test_checked_reads_produce_a_canonical_artifact_bound_to_the_records_and_rel
         "moe": {"token": MOE, "decimals": 18, "balance_raw": "7"},
         "native": {"balance_raw": str(5 * 10**17)},
         "pool": {"address": POOL, "token0": WMON, "token1": MOE, "reserve0_raw": str(4000 * 10**18),
-                 "reserve1_raw": str(9_000_000 * 10**18), "block_timestamp_last": BLOCK_TIME - 5}}
+                 "reserve1_raw": str(9_000_000 * 10**18), "block_timestamp_last": BLOCK_TIME - 100}}
     assert artifact["checks"] == {
         "wmon_balance_covers_input": {"required_raw": str(INPUT_RAW), "result": True},
         "native_balance_covers_gas_budget": {"required_raw": str(BUDGET_RAW), "result": True}}
@@ -336,16 +336,16 @@ def test_the_fragment_carries_the_file_hashes_and_binds_like_bind_release():
     release = inapp.complete_release(authored(), fill())
     assert result["binding_sha256"] == inapp.bind_release(release, result["binding_fill"]).sha256
     assert result["release_sha256"] == release_sha256(release)
-    assert result["derive_approval_ready"] is False
+    assert result["derive_approval_slots_present"] is False
     assert result["missing_for_derive_approval"] == ["cost_model", "exit_capacity", "valuation"]
-    assert result["market_observation_ready"] is True
+    assert result["market_profile_present"] is True
 
 
 def test_all_six_proofs_make_the_fragment_ready_for_derive_approval():
     proofs = {**REQUIRED, **{slot: proof(slot) for slot in ("exit_capacity", "valuation", "cost_model")}}
     result = assemble(proofs)
-    assert result["derive_approval_ready"] is True and result["missing_for_derive_approval"] == []
-    assert result["market_observation_ready"] is False and result["binding_fill"]["market_profile"] is None
+    assert result["derive_approval_slots_present"] is True and result["missing_for_derive_approval"] == []
+    assert result["market_profile_present"] is False and result["binding_fill"]["market_profile"] is None
 
 
 @pytest.mark.parametrize("slot", ["position_inventory", "market", "finality"])
@@ -473,3 +473,88 @@ def test_the_module_imports_no_network_signing_or_provider_code():
         "edge_os_api.execution.original_transaction.BALANCE_OF_SELECTOR",
         "edge_os_api.execution.original_transaction.DECIMALS_SELECTOR",
         "edge_os_api.execution.transaction_rpc_client.json_bytes"}
+
+
+# ---------------------------------------------------------------- review regressions (candidate 518f0af)
+
+@pytest.mark.parametrize("hidden", ['"status": "RPC_ERROR", "status": "RESULT"',
+                                    '"error": {"code": -32000}, "error": null',
+                                    '"result": "0xdeadbeef", "result": "0x8f"'])
+def test_a_repeated_key_cannot_hide_a_failed_read(hidden):
+    store = records()
+    first = store["operations"][0]
+    text = raw(store).decode()
+    key = hidden.split(":")[0]
+    original = {'"status"': '"status": "RESULT"', '"error"': '"error": null', '"result"': '"result": "0x8f"'}[key]
+    assert text.count(original) >= 1 and first["op_id"] == "binding.chain_id"
+    edited = text.replace(original, hidden, 1).encode()
+    with pytest.raises(bf.BindingFillRefused, match="READS_RECORDS_INVALID"):
+        bf.build_reads_artifact(authored(), fill(), edited)
+
+
+def test_a_repeated_key_in_a_proof_identity_or_profile_file_refuses(tmp_path, capsys):
+    digest = release_sha256(inapp.complete_release(authored(), fill()))
+    doubled = ('{"proof":"finality","proof":"market","release_sha256":"%s","schema":"x"}' % digest).encode()
+    with pytest.raises(bf.BindingFillRefused, match="PROOF_ARTIFACT_NOT_CANONICAL"):
+        assemble({**REQUIRED, "market": doubled})
+    text = json.dumps(identity())
+    path = write(tmp_path / "identity.json", (text[:-1] + ', "agent_id": "other"}').encode())
+    args = ["fragment", "--authored", str(AUTHORED_PATH), "--fill", write(tmp_path / "fill.json", fill()),
+            "--identity", path]
+    for slot, data in REQUIRED.items():
+        args += ["--proof", f"{slot}={write(tmp_path / (slot + '.json'), data)}"]
+    assert bf.main(args) == 2
+    assert json.loads(capsys.readouterr().out) == {"status": "REFUSED", "code": "INAPP_FILE_UNREADABLE"}
+
+
+def test_saved_params_that_differ_only_in_json_type_refuse():
+    store = records()
+    store["operations"][1]["params"] = ["finalized", 0]
+    refused("READS_RECORD_MISMATCH", store)
+
+
+@pytest.mark.parametrize("change", [lambda s: s["operations"][2].update(status=["RESULT"]),
+                                    lambda s: s["operations"][2].update(status=None)])
+def test_a_non_string_status_refuses_with_a_code(change):
+    store = records()
+    change(store)
+    refused("READS_RECORDS_INVALID", store)
+
+
+def test_an_out_of_range_block_timestamp_refuses_with_a_code():
+    block = {"number": hex(BLOCK), "hash": "0x" + "ab" * 32, "timestamp": hex(10**20)}
+    refused("READ_MALFORMED", records(results(**{"binding.finalized_block": block})))
+
+
+def test_deeply_nested_records_or_proofs_refuse_with_a_code():
+    with pytest.raises(bf.BindingFillRefused, match="READS_RECORDS_INVALID"):
+        bf.build_reads_artifact(authored(), fill(), b"[" * 100000 + b"]" * 100000)
+    with pytest.raises(bf.BindingFillRefused, match="PROOF_ARTIFACT_NOT_CANONICAL"):
+        assemble({**REQUIRED, "market": b"[" * 100000 + b"]" * 100000})
+
+
+def test_a_proof_that_is_not_bytes_refuses():
+    with pytest.raises(bf.BindingFillRefused, match="PROOF_ARTIFACT_NOT_CANONICAL"):
+        assemble({**REQUIRED, "market": REQUIRED["market"].decode()})
+
+
+@pytest.mark.parametrize("value", [
+    "0x" + "f" * 192,
+    "0x" + f"{2**112:064x}" + f"{1:064x}" + f"{BLOCK_TIME:064x}",
+    "0x" + f"{1:064x}" + f"{2**112:064x}" + f"{BLOCK_TIME:064x}",
+    "0x" + f"{1:064x}" + f"{1:064x}" + f"{BLOCK_TIME + 1:064x}"])
+def test_reserves_outside_the_pair_ranges_or_after_the_block_refuse(value):
+    refused("READ_MALFORMED", records(results(**{"binding.pool_reserves": value})))
+
+
+@pytest.mark.parametrize("op_id,value", [
+    ("binding.finalized_block", {"number": hex(BLOCK), "hash": "0x" + "AB" * 32, "timestamp": hex(BLOCK_TIME)}),
+    ("binding.wmon_balance", "0x" + f"{12 * 10**18:064X}")])
+def test_uppercase_hex_refuses_so_one_state_has_one_artifact(op_id, value):
+    refused("READ_MALFORMED", records(results(**{op_id: value})))
+
+
+def test_reads_at_or_after_the_release_signing_cutoff_are_stale():
+    late = fill(valid_until="2026-05-28T20:26:50Z", mandate_expires_at="2026-10-25T00:00:00Z")
+    refused("READ_BLOCK_STALE", release_fill=late)
+    build(release_fill=fill(valid_until="2026-05-28T20:26:51Z"))

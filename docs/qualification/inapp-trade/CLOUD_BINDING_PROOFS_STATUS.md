@@ -19,7 +19,8 @@ integration push). No network, RPC, key, wallet, signer or provider call was mad
     slot; the proofs would cite it.
   - `fragment`: the step-6 `binding.fill.json` assembler. It hashes the proof artifact files, checks each one names
     its slot and the completed release, binds with `bind_release`, and prints each `*_proof_sha256`, the fill and
-    `binding_sha256`.
+    `binding_sha256`. `derive_approval_slots_present` and `market_profile_present` only say which slots are
+    filled.
 - **Release blocker found.** The worker decides every action from a market observation and ends the job
   `OBSERVATIONS_UNAVAILABLE` without one (`execution/worker.py:380-383, 417-420`). No market source exists in `src`.
   So Q2 blocks the in-app trade even after the other proofs exist.
@@ -31,7 +32,9 @@ Each has options and a recommendation. The recommendation is not a decision.
 ### Q1. What does `position_inventory_proof_sha256` prove for a one-entry release?
 
 The repository's meaning is sale permission from attributed inventory (`CAPABILITY_MATRIX.md:38`, EXIT-CAP-Q01),
-which is `UNSUPPORTED` at the independent layer. This release has one ENTRY and no EXIT.
+which is `UNSUPPORTED` at the independent layer. This release has one ENTRY and no EXIT, and
+`controlled-action-feasibility/CONTROLLED_ACTION_FEASIBILITY.md:158` says the restriction "does not apply to one controlled qualification action that does not
+claim exit coverage". That supports a statement-type proof (A or C) rather than B.
 
 - **A. Start-state host proof (recommended).** Cites the binding reads artifact (WMON >= input, MOE baseline,
   WMON allowance to the entrypoint, native >= gas budget, all at finalized block `B`) and the saved ledger read
@@ -67,8 +70,10 @@ The runtime reads the RPC `finalized` tag (`current_holdings.py:78`). No documen
 - **A. Documented rule plus a consistency read (recommended).** Cite Monad's documented finality rule (read
   through Context7 or the official docs when the proof is written), and record at one time:
   `eth_getBlockByNumber("finalized")` → `F`, `eth_getBlockByNumber("latest")` → `L`, and
-  `eth_getBlockByNumber(hex(F.number))` from **both** relay endpoints (observer and broadcast). The proof shows both
-  endpoints return the same hash for `F` and `F <= L`. It does not show irreversibility beyond the cited rule.
+  a second `eth_getBlockByNumber(hex(F.number))` on the observer relay at least one minute later. The proof shows
+  the same hash for `F` both times and `F <= L`. Only the observer relay serves `eth_getBlockByNumber`
+  (`RPC_RELAY.md:116`; the broadcast relay refuses it), so a cross-relay check would need a relay change first.
+  It does not show irreversibility beyond the cited rule.
 - **B. Documented rule only.** Weaker; nothing ties the relays to it.
 - **C. A decision artifact `FINALITY_TAG_TRUSTED`.**
 
@@ -76,7 +81,8 @@ The runtime reads the RPC `finalized` tag (`current_holdings.py:78`). No documen
 
 - **A. A no-exit statement (recommended).** States that the release grants no EXIT (`accounting.py:114`,
   `limits.actions` 1, steps approve/swap/revoke), that the MOE stays in the wallet, and that the builder exits by
-  owner action outside the app. It claims no exit capacity.
+  owner action outside the app. It claims no exit capacity. Supported by `controlled-action-feasibility/CONTROLLED_ACTION_FEASIBILITY.md:158`
+  (this action "does not claim exit coverage").
 - **B. Qualify real exit capacity (EXIT-CAP-Q01).** Blocks this release.
 - **C. Change `derive_approval` to accept `None` for an entry-only release.** A code change outside this task.
 
@@ -116,8 +122,12 @@ All reads, in one pass against the observer relay, after the release fill (step 
 
 `python -m edge_os_api.execution.inapp_binding_fill plan --authored … --fill …` prints these exact params. Save
 them in `edge-os.inapp-binding-reads-records/1` (format in `BINDING_PROOFS.md`), then run `reads`. Additional
-reads per option: Q3 A adds `eth_getBlockByNumber("latest")` and `eth_getBlockByNumber(hex(F))` on both relays;
-Q1 A adds one PostgreSQL `positions` read. The other options need no further chain read.
+reads per option: Q3 A adds `eth_getBlockByNumber("latest", false)` and, at least one minute later,
+`eth_getBlockByNumber(hex(F), false)`, both on the observer relay. Q1 A adds one PostgreSQL `positions` read.
+Q2 A's source reads the pool's `getReserves()` (`0x0902f1ac` on `0x97199b34564911936bc850ac45ede785892b5aad`) at
+the finalized block of every five-minute bucket; those reads belong to that source's own implementation lane and
+are not run for the binding. Q4-Q6 option A need no further chain read (Q5 A uses read 11; Q6 A needs the
+builder's MON price).
 
 ## Commands
 
@@ -151,4 +161,8 @@ Not changed: `operating_release.py` registries, `release.authored.json`, the sea
 
 ## Tests and reviews
 
-Filled in below with the final candidate.
+RED first: before the module existed, `tests/execution/test_inapp_binding_fill.py` failed at collection
+(`ModuleNotFoundError: edge_os_api.execution.inapp_binding_fill`). The review-regression tests added for candidate
+2 were run against the candidate-1 module first: 18 failed, 95 passed.
+
+Final results, reviews and the final SHA are in the "Final candidate" section below.

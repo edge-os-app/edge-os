@@ -55,8 +55,8 @@ DOES_NOT_SHOW = (
 )
 
 _QUANTITY = re.compile(r"0x(?:0|[1-9a-f][0-9a-f]*)")
-_WORDS = re.compile(r"0x((?:[0-9a-fA-F]{64})+)")
-_HASH = re.compile(r"0x[0-9a-fA-F]{64}")
+_WORDS = re.compile(r"0x((?:[0-9a-f]{64})+)")
+_HASH = re.compile(r"0x[0-9a-f]{64}")
 _AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
 
@@ -71,6 +71,21 @@ class BindingFillRefused(Exception):
 def request_sha256(method: str, params: Any) -> str:
     """The rule of the committed chain store (`scripts/privy_unfunded_proof/chain_proof.request_sha256`)."""
     return hashlib.sha256(json_bytes({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})).hexdigest()
+
+
+def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """A JSON object whose keys are unique. A repeated key could hide one recorded value behind another."""
+    value = dict(pairs)
+    if len(value) != len(pairs):
+        raise ValueError("duplicate key")
+    return value
+
+
+def _strict_json(data: bytes) -> Any:
+    def refuse_constant(name: str) -> Any:
+        raise ValueError(name)
+
+    return json.loads(data.decode("utf-8"), object_pairs_hook=_unique, parse_constant=refuse_constant)
 
 
 def _word_of(address: str) -> str:
@@ -134,12 +149,9 @@ def _at(value: str) -> dt.datetime:
 
 
 def _records(data: bytes, content: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
-    def refuse_constant(name: str) -> Any:
-        raise ValueError(name)
-
     try:
-        store = json.loads(data.decode("utf-8"), parse_constant=refuse_constant)
-    except (UnicodeDecodeError, ValueError):
+        store = _strict_json(data)
+    except (UnicodeDecodeError, ValueError, RecursionError):
         raise BindingFillRefused("READS_RECORDS_INVALID") from None
     planned = _requests(content, BLOCK_PLACEHOLDER)
     operations = store.get("operations") if type(store) is dict else None
@@ -148,7 +160,8 @@ def _records(data: bytes, content: Mapping[str, Any]) -> dict[str, Mapping[str, 
         raise BindingFillRefused("READS_RECORDS_INVALID")
     for record, (op_id, method, _) in zip(operations, planned):
         if (type(record) is not dict or set(record) != RECORD_FIELDS or record["op_id"] != op_id
-                or record["method"] != method or record["expect"] != "RESULT" or record["status"] not in STATUSES
+                or record["method"] != method or record["expect"] != "RESULT"
+                or type(record["status"]) is not str or record["status"] not in STATUSES
                 or type(record["at"]) is not str or _AT.fullmatch(record["at"]) is None):
             raise BindingFillRefused("READS_RECORDS_INVALID")
         try:
@@ -173,22 +186,29 @@ def _checked_reads(authored: Mapping[str, Any], fill: Mapping[str, Any], data: b
     number, stamp = _quantity(block.get("number")), _quantity(block.get("timestamp"))
     if type(block.get("hash")) is not str or _HASH.fullmatch(block["hash"]) is None:
         raise BindingFillRefused("READ_MALFORMED")
-    # Every request must be the planned one at that exact block, and its saved hash must be the request's own.
+    # Every request must be the planned one at that exact block (compared as JSON bytes, so `0` is not `false`),
+    # and its saved hash must be the hash of its own saved params.
     for op_id, method, params in _requests(content, hex(number)):
         record = by_id[op_id]
-        if record["params"] != params or record["request_sha256"] != request_sha256(method, params):
+        if (json_bytes(record["params"]) != json_bytes(params)
+                or record["request_sha256"] != request_sha256(method, record["params"])):
             raise BindingFillRefused("READS_RECORD_MISMATCH")
     chain_id = by_id["binding.chain_id"]["result"]
     if _quantity(chain_id) != content["chain_id"]:
         raise BindingFillRefused("READ_WRONG_CHAIN")
     times = [_at(record["at"]) for record in by_id.values()]
-    block_time = dt.datetime.fromtimestamp(stamp, dt.timezone.utc)
+    try:
+        block_time = dt.datetime.fromtimestamp(stamp, dt.timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        raise BindingFillRefused("READ_MALFORMED") from None
     read_at = _at(by_id["binding.finalized_block"]["at"])
     if times != sorted(times) or block_time > read_at:
         raise BindingFillRefused("READ_MALFORMED")
     max_age = route["freshness"]["max_input_age_seconds"]
+    # Reads after the release's signing cutoff can no longer support it.
+    valid_until = dt.datetime.fromisoformat(content["valid_until"].replace("Z", "+00:00"))
     if (number < fill["reserves"]["block_number"] or (read_at - block_time).total_seconds() > max_age
-            or (times[-1] - times[0]).total_seconds() > max_age):
+            or (times[-1] - times[0]).total_seconds() > max_age or times[-1] >= valid_until):
         raise BindingFillRefused("READ_BLOCK_STALE")
     wmon_decimals = _words(by_id["binding.wmon_decimals"]["result"], 1)[0]
     moe_decimals = _words(by_id["binding.moe_decimals"]["result"], 1)[0]
@@ -196,7 +216,7 @@ def _checked_reads(authored: Mapping[str, Any], fill: Mapping[str, Any], data: b
         raise BindingFillRefused("READ_DECIMALS_MISMATCH")
     token0, token1 = _address(by_id["binding.pool_token0"]["result"]), _address(by_id["binding.pool_token1"]["result"])
     reserve0, reserve1, last = _words(by_id["binding.pool_reserves"]["result"], 3)
-    if reserve0 <= 0 or reserve1 <= 0:
+    if not (0 < reserve0 < 2**112 and 0 < reserve1 < 2**112 and last <= stamp):
         raise BindingFillRefused("READ_MALFORMED")
     if (token0, token1) != (quote["token0_address"].lower(), quote["token1_address"].lower()):
         raise BindingFillRefused("READ_POOL_MISMATCH")
@@ -243,9 +263,9 @@ def verify_reads_artifact(authored: Mapping[str, Any], fill: Mapping[str, Any], 
 def _proof_sha256(slot: str, data: bytes, release_digest: str) -> str:
     """The slot hash is the hash of the exact file. The file must say which slot and release it is for."""
     try:
-        value = json.loads(data.decode("utf-8"), parse_constant=lambda name: float("nan"))
-        canonical = json_bytes(value) == data
-    except (UnicodeDecodeError, ValueError):
+        value = _strict_json(data) if type(data) is bytes else None
+        canonical = type(data) is bytes and json_bytes(value) == data
+    except (UnicodeDecodeError, ValueError, RecursionError):
         canonical = False
     if not canonical:
         raise BindingFillRefused("PROOF_ARTIFACT_NOT_CANONICAL")
@@ -257,7 +277,7 @@ def _proof_sha256(slot: str, data: bytes, release_digest: str) -> str:
 
 def assemble_binding_fill(authored: Mapping[str, Any], fill: Mapping[str, Any], identity: Any,
                           proofs: Mapping[str, bytes], market_profile: Any) -> dict[str, Any]:
-    """The step-6 binding fill for these proof files, bound with `bind_release`, and what it is ready for."""
+    """The step-6 binding fill for these proof files, bound with `bind_release`, and which approval slots it has."""
     release = complete_release(authored, fill)
     digest = release_sha256(release)
     if not all(slot in SLOTS for slot in proofs):
@@ -270,12 +290,12 @@ def assemble_binding_fill(authored: Mapping[str, Any], fill: Mapping[str, Any], 
     bound = bind_release(release, binding_fill)
     missing = sorted(slot for slot in APPROVAL_SLOTS if slot not in hashes)
     return {"release_sha256": digest, "binding_sha256": bound.sha256, "proof_sha256": hashes,
-            "binding_fill": binding_fill, "derive_approval_ready": not missing,
-            "missing_for_derive_approval": missing, "market_observation_ready": market_profile is not None}
+            "binding_fill": binding_fill, "derive_approval_slots_present": not missing,
+            "missing_for_derive_approval": missing, "market_profile_present": market_profile is not None}
 
 
 def _json(path: str) -> Any:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    return _strict_json(Path(path).read_bytes())
 
 
 def _write_new(path: str, data: bytes) -> None:
@@ -337,7 +357,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         code = error.code if isinstance(error, BindingFillRefused) else str(error)
         print(json.dumps({"status": "REFUSED", "code": code}))
         return 2
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         print(json.dumps({"status": "REFUSED", "code": "INAPP_FILE_UNREADABLE"}))
         return 2
     print(json.dumps(result, sort_keys=True))

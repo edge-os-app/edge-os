@@ -17,7 +17,9 @@ none. Each proof key is a bare 64-character lowercase hex reference. `BoundRelea
 (`operating_release.py:260-261`) and hashes it into the binding (`operating_release.py:269-273`). Only the
 market proof is compared with anything at run time: it must equal the `qualification_proof_sha256` that the
 market source puts in its provenance (`core/provider_ports.py:519`, `execution/worker.py:101`). No market source
-exists in `src` (`MarketObservationPort` has no implementation, `core/provider_ports.py:99-100`). The other five
+exists in `src` other than the fixture `FixtureMarketObservations` (`core/provider_ports.py:99-108`); the worker's
+released runtime is built without a `market_source` (`execution/released_execution_bootstrap.py:284-286`), so
+`observe_market` always refuses (`core/provider_ports.py:493-496`). The other five
 references are carried into `ControlledApproval` or the binding hash and never read again. So no builder in this
 task may say "this file is the position-inventory proof" without a product decision. Phase B therefore builds only
 what the repository defines: (1) the step-6 binding-fill assembler and checker, and (2) a checked, hashed set of
@@ -74,7 +76,10 @@ including gas (`INAPP_TRADE_RELEASE.md`, "USD ceiling arithmetic").
   "inventory-based direction accepted; enforcement/capacity unqualified" (`EDGE_OS_RESEARCH_CONTRACTS.md:202-220`).
 - **Gap:** the meaning is about **sale** authority from attributed inventory. This release permits one ENTRY and no
   EXIT (`accounting.py:114`). Nothing says what an inventory proof for a one-entry release contains: the wallet's
-  starting balances, the absence of attributed positions, or a qualified inventory mechanism. → **Question Q1.**
+  starting balances, the absence of attributed positions, or a qualified inventory mechanism. The nearest statement
+  is `controlled-action-feasibility/CONTROLLED_ACTION_FEASIBILITY.md:158`: the position-inventory restriction "does not apply to one controlled qualification action
+  that does not claim exit coverage". It removes the restriction for this action but still does not say what the
+  required reference contains. → **Question Q1.**
 - **Defined input it would cite:** the checked binding reads (below): WMON, MOE and native balances, token
   decimals and WMON allowance to the entrypoint, all at one finalized block.
 
@@ -86,7 +91,7 @@ including gas (`INAPP_TRADE_RELEASE.md`, "USD ceiling arithmetic").
 - **Repository meaning:** "Current inputs require a frozen source, delivery profile, finalized boundary, warmup
   size and collection limit" (`implementation/CONTROLLED_EXECUTION_RUNTIME.md:13`). "Research history, Nansen
   context and delayed replay cannot become this feed through a label" (same file, "Read-only evidence").
-- **Gap:** no `MarketObservationPort` implementation exists, so nothing emits the provenance this hash must equal.
+- **Gap:** no non-fixture `MarketObservationPort` implementation exists, so nothing emits the provenance this hash must equal.
   The proof's content, and the source it qualifies, are undefined. → **Question Q2** (blocked on a missing component
   as well as on a decision).
 - **Consequence:** the worker decides every action from a market observation (`worker.py:380-383`). An unavailable
@@ -110,7 +115,8 @@ including gas (`INAPP_TRADE_RELEASE.md`, "USD ceiling arithmetic").
 - **Repository meaning:** EXIT-CAP-Q01 (`EDGE_OS_RESEARCH_CONTRACTS.md:178,202-220`): all attributable acquired
   inventory needs preapproved exit capacity; unqualified.
 - **Gap:** the release grants no exit. Whether the proof states "no exit authority; the builder exits by hand",
-  or must qualify real exit capacity, is undecided. → **Question Q4.**
+  or must qualify real exit capacity, is undecided. `controlled-action-feasibility/CONTROLLED_ACTION_FEASIBILITY.md:158` supports a statement: this one action
+  "does not claim exit coverage". → **Question Q4.**
 
 ### 6. `valuation_proof_sha256` — as 5; content NOT defined
 
@@ -167,14 +173,15 @@ exactly the keys of the existing chain store (`scripts/privy_unfunded_proof/chai
 | 8 | `binding.wmon_allowance` | `eth_call` | `[{"to": WMON, "data": "0xdd62ed3e" + wallet word + entrypoint word}, B]` | one word (recorded) |
 | 9 | `binding.pool_token0` | `eth_call` | `[{"to": POOL, "data": "0x0dfe1681"}, B]` | release `token0_address` |
 | 10 | `binding.pool_token1` | `eth_call` | `[{"to": POOL, "data": "0xd21220a7"}, B]` | release `token1_address` |
-| 11 | `binding.pool_reserves` | `eth_call` | `[{"to": POOL, "data": "0x0902f1ac"}, B]` | three words, both reserves `> 0` |
+| 11 | `binding.pool_reserves` | `eth_call` | `[{"to": POOL, "data": "0x0902f1ac"}, B]` | three words; both reserves `> 0` and `< 2**112`; `blockTimestampLast` at most the block timestamp |
 
-Addresses are the release's lowercase addresses; the wallet word is `"0"*24 + wallet[2:].lower()`, the form
+Every `to` address and ABI word is lowercase; `eth_getBalance` sends the release `wallet_address` exactly as the
+release spells it (checksum case). The wallet word is `"0"*24 + wallet[2:].lower()`, the form
 `current_holdings.read_rpc_holdings` sends (`current_holdings.py:96-97`). `python -m
 edge_os_api.execution.inapp_binding_fill plan …` prints these exact requests with `B` as `<FINALIZED_BLOCK>`.
 
 **Output** (`edge-os.inapp-binding-reads/1`): `release_sha256`, `reads_sha256` (SHA-256 of the exact records file
-bytes), `chain_id`, `block` (`number`, `hash`, `timestamp`), `wallet_address`, `findings` (each balance, allowance
+bytes), `chain_id`, `block` (`number`, `hash`, `timestamp`, `read_at`: the `at` of the finalized read), `wallet_address`, `findings` (each balance, allowance
 and decimals as raw decimal strings or ints; pool address, token0, token1, both reserves), `checks`
 (`wmon_balance_covers_input`, `native_balance_covers_gas_budget`, both `true`), `shows`, `does_not_show` and
 `fills_slot: null`. The artifact file is canonical JSON (sorted keys, no spaces) and its SHA-256 is the SHA-256 of
@@ -184,12 +191,12 @@ those bytes. `verify-reads` rebuilds the artifact from the records and compares 
 
 | Case | Code |
 | --- | --- |
-| Records file not the schema, missing/extra key, wrong order, wrong `expect`/`method` | `READS_RECORDS_INVALID` |
-| A record's params differ from the plan at `B`, or its `request_sha256` does not match (edited record) | `READS_RECORD_MISMATCH` |
+| Records file not the schema, missing/extra key, a repeated JSON key anywhere, wrong order, wrong `expect`/`method`, a status that is not one of `RESULT`, `RPC_ERROR`, `REPLY_LOST`, `SKIPPED` | `READS_RECORDS_INVALID` |
+| A record's params differ from the plan at `B` (compared as canonical JSON bytes, so `0` is not `false`), or its `request_sha256` is not the hash of its own params (edited record) | `READS_RECORD_MISMATCH` |
 | A status other than `RESULT`, a non-null `error`, or a missing result: never read as zero | `READ_UNAVAILABLE` |
-| A malformed block, word or `at` | `READ_MALFORMED` |
+| A malformed block, word or `at`; uppercase hex (one chain state has one artifact); `at` times out of order; a block timestamp after its own read or out of range | `READ_MALFORMED` |
 | Chain id other than `143` | `READ_WRONG_CHAIN` |
-| `B` below the release fill's `reserves.block_number`, or the finalized block older than the release's `max_input_age_seconds` at the time it was read | `READ_BLOCK_STALE` |
+| `B` below the release fill's `reserves.block_number`, or the finalized block older than the release's `max_input_age_seconds` at the time it was read, or a pass longer than that age, or a read at or after the release `valid_until` | `READ_BLOCK_STALE` |
 | Token decimals other than the release's | `READ_DECIMALS_MISMATCH` |
 | Pool token order other than the release's | `READ_POOL_MISMATCH` |
 | WMON balance below `approved_input_raw` | `BALANCE_BELOW_INPUT` |
@@ -212,14 +219,15 @@ rule as the control proofs (`tests/execution/test_inapp_trade_release.py:645`). 
 slot and release; it says nothing about content, which is still Q1-Q6.
 
 **Output:** `proof_sha256` per slot; the exact `binding.fill.json` object (all eight keys, `None` for an absent
-optional slot); `binding_sha256` from `bind_release`; `derive_approval_ready` and the missing slots;
-`market_observation_ready`.
+optional slot); `binding_sha256` from `bind_release`; `derive_approval_slots_present` and the missing slots;
+`market_profile_present`. These say only which slots are filled. They do not say the proofs are adequate
+(Q1-Q6) or that market observation can run (no market source exists).
 
 | Case | Code |
 | --- | --- |
 | Unknown slot, or a slot given twice | `FRAGMENT_SLOT_INVALID` |
 | `position_inventory`, `market` or `finality` absent | `FRAGMENT_REQUIRED_PROOF_MISSING` |
-| Artifact not canonical JSON | `PROOF_ARTIFACT_NOT_CANONICAL` |
+| Artifact not bytes, not canonical JSON, or with a repeated key | `PROOF_ARTIFACT_NOT_CANONICAL` |
 | Artifact `proof` or `release_sha256` differs, or no `schema` | `PROOF_ARTIFACT_MISMATCH` |
 | Identity or profile refused by `BoundRelease` | its own code: `EXECUTION_RELEASE_INVALID`, or `INAPP_BINDING_FILL_INVALID` for a non-object identity |
 
