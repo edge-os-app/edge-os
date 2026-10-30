@@ -27,7 +27,7 @@ function waitText(reason: string): string {
     const why = reason.slice(6);
     return `Ended: ${END_COPY[why] ?? "Unknown reason"}`;
   }
-  if (reason.startsWith("STOPPED:")) return `Stopped: ${reason.slice(8).replaceAll("_", " ").toLowerCase()} blocks matching work.`;
+  if (reason.startsWith("STOPPED:")) return "Stopped: a saved stop blocks matching work.";
   if (reason.startsWith("REMOVAL:")) return "Removal denies every new submission for this wallet.";
   return WAIT_COPY[reason] ?? "Unknown reason";
 }
@@ -143,7 +143,7 @@ export function AgentRecurring({ agentId }: { agentId: string }) {
             {item.outcome ? ` · ${plain(EVALUATION_OUTCOME, item.outcome, "Unknown state")}` : ""}{item.reason ? " · reason in Details" : ""}
             <p className="muted">
               {item.evaluation ? `Inputs observed ${item.evaluation.inputs_observed_at ?? "unknown"}, collected ${item.evaluation.inputs_collected_at ?? "unknown"}, evaluated ${item.evaluation.evaluated_at}. ` : ""}
-              {item.submission ? `Submission ${plain(SUBMISSION_STATE, item.submission.state, item.submission.state.replaceAll("_", " ").toLowerCase())}${item.submission.outcome ? ` ${item.submission.outcome}` : ""}, started ${item.submission.started_at}${item.submission.completed_at ? `, completed ${item.submission.completed_at}` : ", not completed"}.` : "No submission."}
+              {item.submission ? `Submission ${plain(SUBMISSION_STATE, item.submission.state, "Unknown state")}${item.submission.outcome ? ` · ${plain(EVALUATION_OUTCOME, item.submission.outcome, "Unknown state")}` : ""}, started ${item.submission.started_at}${item.submission.completed_at ? `, completed ${item.submission.completed_at}` : ", not completed"}.` : "No submission."}
             </p>
           </li>)}</ul>
           <Details summary="Details"><ul>

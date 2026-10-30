@@ -144,7 +144,7 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
             <dt>Minimum output (base units)</dt><dd>{controlled.minimum_output.raw} <span className="mono">{controlled.minimum_output.asset_id}</span></dd>
             <dt>Recipient</dt><dd className="mono">{controlled.recipient}</dd>
             <dt>Route</dt><dd className="mono">{controlled.entrypoint} · {controlled.method}</dd>
-            <dt>Allowance, raw</dt><dd>{controlled.allowance_raw}</dd>
+            <dt>Allowance (base units)</dt><dd>{controlled.allowance_raw}</dd>
             <dt>Gas limits</dt><dd>{controlled.gas.gas_limit} gas · maximum {controlled.gas.max_fee_per_gas} wei per gas · priority {controlled.gas.max_priority_fee_per_gas} wei per gas · budget {controlled.gas.budget_raw} wei</dd>
             <dt>Fees</dt><dd>{controlled.fees.fee_bps} basis points; referral {controlled.fees.referrer_fee_bps} basis points; input-token fee: {controlled.fees.is_in_token_fee ? "yes" : "no"}</dd>
             <dt>Fee collector</dt><dd className="mono">{controlled.fees.fee_collector_address}</dd>

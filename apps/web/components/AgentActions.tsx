@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
 import { Details } from "./Details";
-import { ACTION_JOB_STATE, ADMISSION_STATUS, DECISION_STATUS, EVIDENCE_CLASS, OPERATION, QUEUE_STATE, RECEIPT_OUTCOME, RECOVERY_STATE, REMOVAL_STATE, RESERVATION_STATE, STOP_MODE, STOP_SCOPE, plain } from "../lib/labels";
+import { ACTION_JOB_STATE, ADMISSION_STATUS, DECISION_STATUS, EVALUATION_OUTCOME, EVIDENCE_CLASS, OPERATION, QUEUE_STATE, RECEIPT_OUTCOME, RECOVERY_STATE, REMOVAL_STATE, RESERVATION_STATE, STOP_MODE, STOP_SCOPE, plain } from "../lib/labels";
 import { plural } from "../lib/plural";
 import { financial, formatRaw, heldKey, MONAD_EXPLORER_BASE, releaseKey, type ActionDetail, type AgentActions as AgentActionsView,
   type OriginalTransaction, type Removal, type Stop } from "../lib/financial";
@@ -120,7 +120,7 @@ export function AgentActions({ agentId }: { agentId: string }) {
         <h3>Checks</h3>
         {!view.jobs.length && <p className="muted">No checks yet.</p>}
         <ul data-testid="actions-jobs">{[...view.jobs].reverse().map((job) => <li key={job.job_id}>
-          <strong>{plain(ACTION_JOB_STATE, job.state, "Unknown state")}</strong>{job.outcome ? ` · ${job.outcome}` : ""}{job.reason ? " · reason in Details" : ""} · slot <time dateTime={job.decision_slot}>{job.decision_slot}</time>
+          <strong>{plain(ACTION_JOB_STATE, job.state, "Unknown state")}</strong>{job.outcome ? ` · ${plain(EVALUATION_OUTCOME, job.outcome, "Unknown state")}` : ""}{job.reason ? " · reason in Details" : ""} · slot <time dateTime={job.decision_slot}>{job.decision_slot}</time>
           <p className="muted">{JOB_COPY[job.state] ?? "Unknown state"}</p>
           {job.provenance?.observations ? <p className="muted">Observation saved. Data source and evidence are in Details.</p> : null}
           <Details summary="Details">

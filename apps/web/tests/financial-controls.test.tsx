@@ -423,6 +423,7 @@ describe("original transaction and observed holdings (ORIGINAL-LOCAL)", () => {
     render(<AgentFunding agentId="agent-a" />);
     expect(await screen.findByTestId("funding-holdings")).toHaveTextContent(
       "Current holdings are unavailable. No balance is shown or assumed.");
+    expect(document.body).toHaveTextContent("HOLDINGS_STALE");
   });
 });
 

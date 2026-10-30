@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { agentContextApi, formatAmount, type AccountViewRecord, type AgentContextRecord } from "../lib/account-views";
 import { PERMISSION_STATE, RECORD_STATUS, plain } from "../lib/labels";
+import { Details } from "./Details";
 import { AgentContext } from "./AgentContext";
 import { WalletSetup } from "./WalletSetup";
 import { plural } from "../lib/plural";
@@ -63,6 +64,7 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
             <dt>Limits and stop effects</dt><dd>{unmatchedSource.content.terms?.limits.map((limit) => `${limit.name}: ${formatAmount(limit.amount)} ${limit.amount.asset_id}`).join("; ") ?? "Not recorded"} · {unmatchedSource.content.terms?.stop_effects.join(", ") ?? "Not recorded"}</dd>
           </>}
         </dl>
+        <Details summary="Details"><p className="mono">status {unmatchedSource.content.status} · permission {unmatchedSource.content.permission_state ?? "none"}</p></Details>
         <p>Record ID: <code>{unmatchedSource.record_id}</code></p>
       </section>}
       {agents.map(({ record_id, owner_id, content }) => {
@@ -87,6 +89,7 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
           <p><strong>Network gas.</strong> {content.native_gas ? `${formatAmount(content.native_gas)} ${content.native_gas.asset_id}` : "Unknown"}</p>
           <p><strong>Permission.</strong> {plain(PERMISSION_STATE, content.permission_state, "Unknown")}. Account summaries do not pool balances or permission.</p>
           <p><strong>Updated.</strong> <time dateTime={content.updated_at}>{content.updated_at}</time></p>
+          <Details summary="Details"><p className="mono">status {content.status} · health {content.health ?? "none"} · permission {content.permission_state ?? "none"}</p></Details>
           <div className="btn-row">
             <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={() => setSelected(content.agent_id)}>
               Inspect agent context
@@ -113,6 +116,7 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
                 </summary>
                 <dl className="kv" style={{ gridTemplateColumns: "minmax(0, 1fr) minmax(0, 2fr)" }}>
                   <dt>Approval ID</dt><dd className="mono">{item.approval_id}</dd>
+                  <dt>Saved status codes</dt><dd className="mono">{item.status} · {item.activation_state ?? "none"}</dd>
                   <dt>Owner, agent, wallet and network</dt><dd>{snapshot.owner_id} · {item.agent_id} · {item.wallet_id} · {item.network_id}</dd>
                   <dt>Saved version and permission</dt><dd>{item.strategy_revision} · {item.mandate_id}</dd>
                   <dt>Earlier and later approval</dt><dd>{item.predecessor_approval_id ?? (item.status === "FAILED" || item.status === "CANCELLED" ? "No earlier approval (initial attempt)" : "No predecessor recorded")} · {item.successor_approval_id ?? "No successor recorded"}</dd>
@@ -141,6 +145,7 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
               {item.content.next_work && <p style={{ overflowWrap: "anywhere" }}>Next work: {item.content.next_work}</p>}
               {item.content.blocking_reason && <p style={{ overflowWrap: "anywhere" }}>Blocked: {item.content.blocking_reason}</p>}
               <p>Pending reconciliation: {item.content.pending_reconciliation == null ? "Unknown" : item.content.pending_reconciliation ? "Yes" : "No"}</p>
+              <Details summary="Details"><p className="mono">status {item.content.status} · health {item.content.health ?? "none"} · pending {String(item.content.pending_reconciliation)}</p></Details>
             </li>
           ))}</ul>
         </section>

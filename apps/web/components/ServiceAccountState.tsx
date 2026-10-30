@@ -65,7 +65,7 @@ export function ServiceAccountState({ agentId }: { agentId: string }) {
               <li key={record.record_id} className="card" data-kind={record.content.record_kind}>
                 <strong>{KIND_LABEL[record.content.record_kind] ?? "Unknown"}: {plain(RECORD_STATUS, record.content.status, "Unknown")}</strong>
                 <span>{detail(record)}</span>
-                <Details summary="Details"><span className="muted mono">saved from {record.source.table} · ID {record.source.id}</span></Details>
+                <Details summary="Details"><span className="muted mono">saved from {record.source.table} · ID {record.source.id} · status {record.content.status} · permission {record.content.permission_state ?? "none"}</span></Details>
               </li>
             ))}
           </ul>

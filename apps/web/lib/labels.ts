@@ -34,6 +34,7 @@ export const NANSEN_ANSWER_STATE: Record<string, string> = {
 
 /** Finding verdicts used by the Nansen and history report builders. */
 export const VERDICT: Record<string, string> = {
+  QUALIFIED: "Qualified",
   SUPPORTED: "Supported by the returned records",
   LIMITED: "Limited",
   UNRESOLVED: "Unresolved",
@@ -167,11 +168,18 @@ export const RECEIPT_OUTCOME: Record<string, string> = {
   SUBMISSION_UNKNOWN: "Outcome unknown",
 };
 
-/** `apps/api/src/edge_os_api/recovery/types.py:30-32` (recovery case states; OPEN is unsettled). */
+/** `apps/api/src/edge_os_api/recovery/models.py:83` (recovery case states). */
 export const RECOVERY_STATE: Record<string, string> = {
   OPEN: "Open",
-  SETTLED: "Settled",
-  BLOCKED: "Blocked",
+  CONFIRMED: "Confirmed",
+  REVERTED: "Reverted",
+  DENIED_UNSENT: "Refused, not sent",
+  UNKNOWN: "Unknown",
+  BREACHED: "Breached",
+  RECONCILE_MISMATCH: "Reconciliation mismatch",
+  DISCREPANCY: "Discrepancy",
+  NO_ADMISSION_DECISION: "No admission decision",
+  NO_SUBMISSION_ATTEMPT: "No submission attempt",
   NOT_OPENED: "Not opened",
 };
 
@@ -216,6 +224,10 @@ export const REPORT_OUTCOME: Record<string, string> = {
   UNRESOLVED: "Unresolved",
   UNAVAILABLE: "Unavailable",
   UNSUPPORTED: "Not supported",
+  SOURCE_LOSS: "Source lost",
+  LIMITED_DATA: "Limited data",
+  DESCRIBED: "Described",
+  INSUFFICIENT_DATA: "Not enough data",
   FAILED: "Failed",
   UNKNOWN: "Unknown",
 };
@@ -275,25 +287,33 @@ export const EVALUATION_OUTCOME: Record<string, string> = {
   INELIGIBLE: "Not eligible",
   UNAVAILABLE: "Unavailable",
   DENIED: "Denied",
-  NO_TRADE: "No trade",
+  ADMISSION_DENIED: "Refused by admission",
+  CONFIRMED: "Confirmed",
+  REVERTED: "Reverted",
   SUBMITTED_CONFIRMED: "submitted confirmed",
   SUBMITTED_REVERTED: "submitted reverted",
   SUBMITTED_UNKNOWN: "submitted, outcome unknown",
   DENIED_UNSENT: "refused, not sent",
 };
 
-/** `apps/api/src/edge_os_api/accounts/views.py` permission_state values. */
+/** `apps/api/src/edge_os_api/accounts/service_projection.py:91` permission_state values. */
 export const PERMISSION_STATE: Record<string, string> = {
-  NOT_APPROVED: "Not approved",
-  APPROVED: "Approved",
-  ACTIVE: "Active",
-  ENDED: "Ended",
-  UNKNOWN: "Unknown",
+  NO_REMOVAL_REQUESTED: "No removal requested",
+  REMOVAL_NOT_REQUESTED: "No removal requested",
+  REMOVAL_REQUESTED: "Removal requested",
+  REMOVAL_PENDING: "Removal pending",
+  REMOVAL_UNKNOWN: "Removal unknown",
+  REMOVAL_CONFIRMED: "Removal confirmed",
+  REMOVAL_FAILED: "Removal failed",
 };
 
-/** Account-record and service-projection status words used by `accounts/views.py`. */
+/** `apps/api/src/edge_os_api/accounts/views.py:175-181` record statuses. */
 export const RECORD_STATUS: Record<string, string> = {
-  RUNNING: "Running", STOPPED: "Stopped", BLOCKED: "Blocked", STALE: "Stale",
-  CONFIRMED: "Confirmed", FAILED: "Failed", ACTIVE: "Active", ENDED: "Ended",
-  UNKNOWN: "Unknown", NEVER_ACTIVE: "Never active",
+  REQUESTED: "Requested", PENDING: "Pending", UNKNOWN: "Unknown", CONFIRMED: "Confirmed", FAILED: "Failed",
+  RUNNING: "Running", STOPPED: "Stopped", STALE: "Stale", BLOCKED: "Blocked", OPEN: "Open", CLOSED: "Closed",
+  PROPOSED: "Proposed", QUEUED: "Queued", SUBMITTED: "Submitted", REVERTED: "Reverted", DENIED: "Denied",
+  CANCELLED: "Cancelled", SUBMISSION_UNKNOWN: "Outcome unknown", HYPOTHESIS: "Hypothesis",
+  DESCRIPTIVE_ONLY: "Descriptive only", UNRESOLVED: "Unresolved", SUPPORTED: "Supported", CONFLICTED: "Conflicted",
+  CURRENT: "Current", EARLIER: "Earlier", CHANGE_APPLIED: "Change applied", CHANGE_PENDING: "Change pending",
+  REMOVED: "Removed", ACTIVE: "Active", ENDED: "Ended", NEVER_ACTIVE: "Never active",
 };

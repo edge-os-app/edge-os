@@ -7,7 +7,7 @@ import { readNansenRelease } from "../lib/nansen-release-request";
 import type { NansenOperatingRelease, NansenReleaseState } from "../lib/nansen-release-request";
 import { Details } from "./Details";
 import { plural } from "../lib/plural";
-import { NANSEN_ANSWER_STATE, VERDICT, plain } from "../lib/labels";
+import { NANSEN_ANSWER_STATE, SETTLEMENT_STATE, VERDICT, plain } from "../lib/labels";
 
 const RUNNING = new Set(["QUEUED", "RESERVED", "COLLECTING"]);
 const STATE_COPY: Record<string, string> = {
@@ -36,11 +36,6 @@ const LINK_STYLE = { display: "inline-flex", alignItems: "center", minHeight: 44
 
 function evidenceCopy(evidenceClass: string): string {
   return EVIDENCE_COPY[evidenceClass] ?? "This report has an unknown data label. Do not treat it as provider data.";
-}
-
-function settlementState(state: string): string {
-  return plain({ KNOWN: "Known", MEASURED: "Measured", NOT_MEASURED: "Not measured", DEDUCTED: "Deducted",
-    RESERVED: "Reserved", RELEASED: "Released", UNKNOWN: "Unknown" }, state, "Unknown state");
 }
 
 function releaseLabel(state: NansenReleaseState | null): { text: string; proof: string | null } {
@@ -202,8 +197,8 @@ export function ResearchNansenReport({ intakeId }: { intakeId: string }) {
           <p><strong>Job {job.job_id.slice(0, 8)}</strong> · {(job.terminal_reason && REASON_COPY[job.terminal_reason]) || STATE_COPY[job.state] || "Unknown state"}</p>
           {job.nansen_report ? <>
             <p className="muted" data-testid="nansen-job-evidence">{evidenceCopy(job.nansen_report.evidence_class)}</p>
-            <p data-testid="nansen-job-answer">Answer: {plain(NANSEN_ANSWER_STATE, job.nansen_report.answer_state, "Unknown state")} · requests {settlementState(job.nansen_report.settlement.provider_requests.state)}
-              {" "}{job.nansen_report.settlement.provider_requests.measured} · credits {settlementState(job.nansen_report.settlement.nansen_credits.state)}
+            <p data-testid="nansen-job-answer">Answer: {plain(NANSEN_ANSWER_STATE, job.nansen_report.answer_state, "Unknown state")} · requests {plain(SETTLEMENT_STATE, job.nansen_report.settlement.provider_requests.state, "Unknown state")}
+              {" "}{job.nansen_report.settlement.provider_requests.measured} · credits {plain(SETTLEMENT_STATE, job.nansen_report.settlement.nansen_credits.state, "Unknown state")}
               {job.nansen_report.settlement.nansen_credits.deducted !== null ? ` ${job.nansen_report.settlement.nansen_credits.deducted}` : " (reserved amount held)"}</p>
             <button className="btn btn-secondary" type="button" style={{ minHeight: 44 }} onClick={() => void openReport(job.nansen_report!.report_id)}>
               Open saved report</button>
@@ -277,8 +272,8 @@ function NansenReportView({ record }: { record: NansenReportRecord }) {
       <p data-testid="nansen-answer-state">Answer: {plain(NANSEN_ANSWER_STATE, report.answer_state, "Unknown state")}</p>
       <EvidenceLabel evidenceClass={record.content.evidence_class} />
       <p className="muted">{record.content.notice}</p>
-      <p data-testid="nansen-settlement">Requests {settlementState(settlement.provider_requests.state)} {settlement.provider_requests.measured} ·
-        {" "}credits {settlementState(settlement.nansen_credits.state)}{settlement.nansen_credits.deducted !== null ? ` ${settlement.nansen_credits.deducted}` : " (reserved amount held)"}</p>
+      <p data-testid="nansen-settlement">Requests {plain(SETTLEMENT_STATE, settlement.provider_requests.state, "Unknown state")} {settlement.provider_requests.measured} ·
+        {" "}credits {plain(SETTLEMENT_STATE, settlement.nansen_credits.state, "Unknown state")}{settlement.nansen_credits.deducted !== null ? ` ${settlement.nansen_credits.deducted}` : " (reserved amount held)"}</p>
       <p className="muted" data-testid="nansen-hashes">{verified ? "Saved hashes recomputed and matched." : "A saved hash did not match. Do not rely on this report."}</p>
       <h4 style={{ fontSize: 15 }}>Findings</h4>
       <ul data-testid="nansen-findings">{report.findings.map((finding) => (

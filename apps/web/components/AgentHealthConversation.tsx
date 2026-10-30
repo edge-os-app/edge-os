@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { agentHealth, ApiError, type AgentHealth, type HealthExplanation, type HealthField, type HealthSourceRef } from "../lib/api";
 import { Details } from "./Details";
-import { EVALUATION_OUTCOME, REMOVAL_STATE, plain } from "../lib/labels";
+import { EVALUATION_OUTCOME, REMOVAL_STATE, SUBMISSION_STATE, plain } from "../lib/labels";
 
 /** P31 LOCAL. The direct view and the conversation read one dated, read-only health snapshot of the newest deployment. */
 
@@ -43,7 +43,7 @@ function Facts({ health }: { health: AgentHealth }) {
         : show(evaluation)}</dd>
       <dt>Last trade try</dt>
       <dd data-testid="health-last-attempt">{attempt.state === "KNOWN" && attempt.value.submission
-        ? `Action ${(attempt.value.action_id ?? "unknown").slice(0, 8)}: ${attempt.value.submission.state.replaceAll("_", " ").toLowerCase()}${attempt.value.submission.outcome ? ` ${attempt.value.submission.outcome}` : ""}, started ${show(attempt.value.submission.started_at)}, completed ${show(attempt.value.submission.completed_at)}`
+        ? `Action ${(attempt.value.action_id ?? "unknown").slice(0, 8)}: ${plain(SUBMISSION_STATE, attempt.value.submission.state, "Unknown state")}${attempt.value.submission.outcome ? ` · ${plain(EVALUATION_OUTCOME, attempt.value.submission.outcome, "Unknown state")}` : ""}, started ${show(attempt.value.submission.started_at)}, completed ${show(attempt.value.submission.completed_at)}`
         : show(attempt)}</dd>
       <dt>Next due slot</dt><dd data-testid="health-next">{show(health.producer.next_due_slot)}</dd>
       <dt>Last scheduled run</dt><dd>{show(health.producer.last_tick_at)}</dd>
@@ -51,7 +51,7 @@ function Facts({ health }: { health: AgentHealth }) {
       <dt>Pending reconciliation</dt>
       <dd data-testid="health-pending">{"action_ids" in canonical ? (canonical.action_ids.join(", ") || "None") + " (producer unsettled queue)" : "Unknown"}</dd>
       <dt>Separate warnings</dt>
-      <dd data-testid="health-warnings">{`${recovery.kind}: ${recovery.action_ids.join(", ") || "none"}; ${monitoring.kind}: ${monitoring.pending ? "present" : "not present"}`}</dd>
+      <dd data-testid="health-warnings">Separate warnings are listed in Details.</dd>
       <dt>Stops and removal</dt>
       <dd data-testid="health-controls">{[...health.controls.stops.map((s) => `${s.mode === "STOP_NEW_ENTRIES" ? "Stop new entries" : s.mode === "HALT_ALL_SWAPS" ? "Halt all swaps" : "Stop"} since ${s.created_at}`),
         ...health.controls.removals.map((r) => `Removal ${plain(REMOVAL_STATE, r.state, "Unknown")} (requested ${r.requested_at}, updated ${r.updated_at})`)].join("; ") || "None"}</dd>
