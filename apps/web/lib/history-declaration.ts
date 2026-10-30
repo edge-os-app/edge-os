@@ -100,7 +100,7 @@ export function deriveHistoryPlan(input: {
       return refusal(`This ${minutes}-minute source has no usable decision in the time it can read, with a `
         + `${HISTORY_HORIZON_MINUTES}-minute horizon and a 60-second response window.`);
     }
-    return refusal(`This ${minutes}-minute source supports at most ${Math.max(0, lastGrid)} usable decisions `
+    return refusal(`This ${minutes}-minute source supports at most ${plural(Math.max(0, lastGrid), "usable decision")} `
       + `in its training period for ${directionLabel(input.direction)}. Predictive work needs at least `
       + `${HISTORY_DECISION_FLOOR} decisions (1 triggered and 1 control). No lookback fits; describe only.`);
   }
@@ -115,7 +115,7 @@ export function deriveHistoryPlan(input: {
   const scheduleEnd = lastDecision + BUCKET_MS;
   const decisions = (lastDecision - scheduleStart) / BUCKET_MS + 1;
   if (decisions < required) {
-    return refusal(`This ${minutes}-minute source supports only ${decisions} usable decisions in the time it can read `
+    return refusal(`This ${minutes}-minute source supports only ${plural(decisions, "usable decision")} in the time it can read `
       + `for ${directionLabel(input.direction)}; use a lookback of at most ${plural(maxLookbackBuckets - 1, "period")}.`,
     maxLookbackBuckets - 1);
   }
@@ -131,8 +131,8 @@ export function deriveHistoryPlan(input: {
 /** The limits text the declaration declares. A synthetic recording measures no real pool; an actual source names it. */
 export function historyUnknowns(evidenceClass: string, releaseId: string | null): string[] {
   if (evidenceClass === "PROVIDER_ACTUAL") {
-    return ["Saved responses come from the named providers under the locked research setup. "
-      + "Costs are not modelled; the window is short."];
+    return [`Recorded responses come from the named providers under the approved release`
+      + `${releaseId ? ` ${releaseId}` : ""}. Costs are not modelled; the window is short.`];
   }
-  return ["Saved responses are example data; no real market behaviour is measured."];
+  return ["Recorded responses are synthetic; no real pool behaviour is measured."];
 }

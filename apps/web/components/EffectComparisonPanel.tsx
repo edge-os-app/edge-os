@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type { EffectRunBody, EffectRunResult, InvestigationSaveResult } from "../lib/types";
 import { Details } from "./Details";
+import { STATISTICAL_STATUS, plain } from "../lib/labels";
 import { plural } from "../lib/plural";
 
 const FIXTURE_START = "2026-01-01T00:00:00Z";
@@ -124,10 +125,10 @@ export function EffectComparisonPanel({ intakeId, saved }: { intakeId: string; s
       </button> : null}
 
       {body ? <div className="stack">
-        <p className="status stop" role="note">This example was written for the local example data. It is a new comparison, not a guess taken from the hypothesis text. Each planned test keeps one fixed rule across comparisons. Saving it does not read results.</p>
+        <p className="status stop" role="note">This example was written for the local example data. It is a new comparison, not a guess taken from the hypothesis text. Each planned test keeps one fixed rule across comparisons. A different rule needs its own test identity. Saving it does not read results.</p>
         <dl className="kv">
           <dt>Example data</dt><dd>logic only</dd>
-          <dt>Schedule</dt><dd>{body.schedule.start} to {body.schedule.end} · every {body.schedule.interval_seconds} seconds; four opportunities per evaluation, with two authored feature buckets and two intentionally unavailable buckets</dd>
+          <dt>Schedule</dt><dd>{body.schedule.start} to {body.schedule.end} · every {body.schedule.interval_seconds} seconds; four opportunities per evaluation, with two example feature periods and two intentionally unavailable periods</dd>
           <dt>Earlier rule</dt><dd className="mono">{saved.declaration.record_id.slice(0, 8)}</dd>
           <dt>Primary contrast</dt><dd>Both example variants split at 00:00 and 00:05: quote volume 3 yields −0.1; quote volume 8 yields +0.1 over the 15-minute outcome horizon. The 00:10 and 00:15 periods are absent and remain unavailable. Expected example difference: +0.2.</dd>
           <dt>Extra volume</dt><dd>Predeclared price-only versus quote-volume-only mapping, with price fixed at TRUE.</dd>
@@ -179,7 +180,7 @@ export function EffectComparisonPanel({ intakeId, saved }: { intakeId: string; s
             <dt>Chances found</dt><dd>{result.opportunity_count}</dd>
             <dt>Excluded</dt><dd>{result.excluded_count}</dd>
             <dt>Missing result</dt><dd>{result.missing_outcome_count}</dd>
-            <dt>Statistical status</dt><dd>{result.statistical_status} · {result.statistical_reasons.join(", ")}</dd>
+            <dt>Statistics</dt><dd>{plain(STATISTICAL_STATUS, result.statistical_status, "Unknown")} · {result.statistical_reasons.join(", ")}</dd>
           </dl>
           {result.variants.map((variant: {
             evaluation_id: string; variant_id: string;

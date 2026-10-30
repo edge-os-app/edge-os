@@ -1,5 +1,5 @@
 import { actionsForFlow, formatAmount, type AccountViewRecord } from "../lib/account-views";
-import { FLOW_KIND, FLOW_STATE, plain } from "../lib/labels";
+import { FLOW_KIND, FLOW_STATE, RECORD_STATUS, plain } from "../lib/labels";
 
 export function FundRecords({ records }: { records: AccountViewRecord[] }) {
   const wallets = records.filter((record) => record.content.record_kind === "AGENT");
@@ -38,17 +38,17 @@ export function FundRecords({ records }: { records: AccountViewRecord[] }) {
             <h3>Wallet actions for this flow</h3>
             {!actions.length && <p>No saved wallet actions for this flow.</p>}
             <ul>{actions.map((action) => <li id={`record-${action.record_id}`} key={action.record_id}>
-              {action.content.action_id} · {action.content.status} · {action.content.updated_at}
+              {action.content.action_id} · {plain(RECORD_STATUS, action.content.status, "Unknown")} · {action.content.updated_at}
               {action.content.reason && <p>{action.content.reason}</p>}
               {action.content.gas && <p>Native gas: {formatAmount(action.content.gas)} {action.content.gas.asset_id}</p>}
             </li>)}</ul>
           </li>
         );})}</ul>
         {actionsWithoutLoadedFlow.length > 0 && <>
-          <h2>Wallet actions whose flow is not loaded</h2>
+          <h2>Wallet actions with no loaded deposit or withdrawal</h2>
           <p>These exact action records are shown without a matching deposit or withdrawal because it is unavailable.</p>
           <ul>{actionsWithoutLoadedFlow.map(({ record_id, content }) => <li id={`record-${record_id}`} key={record_id}>
-            {content.agent_id} · {content.wallet_id} · {content.network_id} · {content.flow_id} · {content.action_id} · {content.status} · {content.updated_at}
+            {content.agent_id} · {content.wallet_id} · {content.network_id} · {content.flow_id} · {content.action_id} · {plain(RECORD_STATUS, content.status, "Unknown")} · {content.updated_at}
             {content.reason && <p>{content.reason}</p>}
             {content.gas && <p>Native gas: {formatAmount(content.gas)} {content.gas.asset_id}</p>}
           </li>)}</ul>

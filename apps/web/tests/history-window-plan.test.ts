@@ -103,6 +103,12 @@ describe("deriveHistoryPlan", () => {
     }
   });
 
+  it("uses a singular decision word when only one decision is possible", () => {
+    const result = refusal({ start: "2026-10-22T07:35:00Z", end: "2026-10-22T08:00:00Z" }, 1);
+    expect(result.reason).toContain("at most 1 usable decision");
+    expect(result.reason).not.toContain("1 usable decisions");
+  });
+
   it("refuses a window too short for the required three partitions", () => {
     const result = refusal({ start: "2026-10-22T07:35:00Z", end: "2026-10-22T07:45:00Z" }, 1);
     expect(result.reason).toContain("too short");
@@ -112,12 +118,13 @@ describe("deriveHistoryPlan", () => {
 describe("historyUnknowns", () => {
   it("keeps the synthetic limits text unchanged", () => {
     expect(historyUnknowns("RECORDED_RESPONSE", null))
-      .toEqual(["Saved responses are example data; no real market behaviour is measured."]);
+      .toEqual(["Recorded responses are synthetic; no real pool behaviour is measured."]);
   });
 
   it("names the providers and release for an actual source, and keeps the limits", () => {
     const text = historyUnknowns("PROVIDER_ACTUAL", "actual-moe-history2h-nansen-20261022/1")[0];
     expect(text).toContain("named providers");
+    expect(text).toContain("actual-moe-history2h-nansen-20261022/1");
     expect(text).toContain("Costs are not modelled");
     expect(text).toContain("window is short");
     expect(text).not.toContain("synthetic");

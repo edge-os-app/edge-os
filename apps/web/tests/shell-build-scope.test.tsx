@@ -67,7 +67,7 @@ describe("build-scope notice", () => {
     mocks.consent.mockResolvedValue({ provider_mode: "controlled" });
     await renderAt("#/agents?agent=agent-a");
     expect(await screen.findByTestId(CONTROLLED_NOTICE)).toHaveTextContent(
-      "Trading mode. Trades run from your agent wallet within the limits you signed. Every trade needs its own approval.");
+      "Trading mode. Trades run from your agent wallet within the limits you signed. Every trade must match its locked setup.");
     expect(screen.queryByTestId(NOTICE)).toBeNull();
     expect(mocks.consent).toHaveBeenCalledWith("agent-a");
   });

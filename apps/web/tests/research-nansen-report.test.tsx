@@ -171,6 +171,18 @@ describe("Nansen report under an operating release", () => {
     expect(mocks.start).toHaveBeenCalledTimes(1);
   });
 
+  it("maps a non-default holder label and order, with the raw values in Details", async () => {
+    mocks.list.mockResolvedValue({ jobs: [], operating_release: release({}, {
+      operations: ["holders"],
+      holder_query: { label_type: "whale", aggregate_by_entity: true, order_field: "value_usd", value_usd_min: 1000 },
+      flow_query: { label: "smart_money" },
+    }) });
+    render(<ResearchNansenReport intakeId="intake-1" />);
+    const request = await screen.findByTestId("nansen-release-request");
+    expect(request).toHaveTextContent("Holders: Whales. Ordered by USD value.");
+    expect(document.body).toHaveTextContent("value_usd");
+  });
+
   it("posts a holder-only stand-in release and labels it as not provider data", async () => {
     const holders = { operations: ["holders"], holder_query: { label_type: "all_holders", aggregate_by_entity: true,
       order_field: "token_amount", value_usd_min: 1000 } };

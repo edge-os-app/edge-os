@@ -7,7 +7,7 @@ import { readNansenRelease } from "../lib/nansen-release-request";
 import type { NansenOperatingRelease, NansenReleaseState } from "../lib/nansen-release-request";
 import { Details } from "./Details";
 import { plural } from "../lib/plural";
-import { NANSEN_ANSWER_STATE, SETTLEMENT_STATE, VERDICT, plain } from "../lib/labels";
+import { FLOW_LABEL, HOLDER_LABEL, HOLDER_ORDER, NANSEN_ANSWER_STATE, SETTLEMENT_STATE, VERDICT, plain } from "../lib/labels";
 
 const RUNNING = new Set(["QUEUED", "RESERVED", "COLLECTING"]);
 const STATE_COPY: Record<string, string> = {
@@ -229,8 +229,8 @@ function ReleasedRequest({ release }: { release: NansenOperatingRelease }) {
         <li>Token: {request.token_symbol} ({request.token_address})</li>
         <li>Window (UTC): {request.window.start_utc} to {request.window.end_utc}</li>
         <li>Records: {request.operations.map((item) => (item === "holders" ? "Holder records" : "Basic flow records")).join(" and ")}</li>
-        {request.operations.includes("holders") ? <li>Holders: all holders. Ordered by token amount. {request.holder_query.aggregate_by_entity ? "Grouped by entity" : "One row per address"}. {holderMin}.</li> : null}
-        {request.operations.includes("flows") ? <li>Flows: top 100 holders.</li> : null}
+        {request.operations.includes("holders") ? <li>Holders: {plain(HOLDER_LABEL, request.holder_query.label_type, "unknown holder type")}. Ordered by {plain(HOLDER_ORDER, request.holder_query.order_field, "unknown order")}. {request.holder_query.aggregate_by_entity ? "Grouped by entity" : "One row per address"}. {holderMin}.</li> : null}
+        {request.operations.includes("flows") ? <li>Flows: {plain(FLOW_LABEL, request.flow_query.label, "unknown flow type")}.</li> : null}
         <li>Cost limits: up to {plural(limits.max_requests, "provider request")}, {plural(limits.max_pages, "page")} of up to {limits.per_page} records,
           {" "}{limits.max_bytes} bytes and {limits.max_credits} credits</li>
         <li>Time limits: {request.deadline_seconds} seconds to finish, {request.compute_seconds} seconds of compute</li>

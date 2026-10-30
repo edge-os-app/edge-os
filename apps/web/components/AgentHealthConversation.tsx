@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { agentHealth, ApiError, type AgentHealth, type HealthExplanation, type HealthField, type HealthSourceRef } from "../lib/api";
 import { Details } from "./Details";
-import { EVALUATION_OUTCOME, REMOVAL_STATE, SUBMISSION_STATE, plain } from "../lib/labels";
+import { EVALUATION_OUTCOME, HEALTH_FIELD, HEALTH_WARNING_KIND, REMOVAL_STATE, SUBMISSION_STATE, plain } from "../lib/labels";
+import { plural } from "../lib/plural";
 
 /** P31 LOCAL. The direct view and the conversation read one dated, read-only health snapshot of the newest deployment. */
 
@@ -51,7 +52,7 @@ function Facts({ health }: { health: AgentHealth }) {
       <dt>Pending reconciliation</dt>
       <dd data-testid="health-pending">{"action_ids" in canonical ? (canonical.action_ids.join(", ") || "None") + " (producer unsettled queue)" : "Unknown"}</dd>
       <dt>Separate warnings</dt>
-      <dd data-testid="health-warnings">Separate warnings are listed in Details.</dd>
+      <dd data-testid="health-warnings">Recovery warning: {plain(HEALTH_WARNING_KIND, recovery.kind, "a warning is recorded")} ({plural(recovery.action_ids.length, "action")}); monitoring pending: {monitoring.pending ? "yes" : "no"}.</dd>
       <dt>Stops and removal</dt>
       <dd data-testid="health-controls">{[...health.controls.stops.map((s) => `${s.mode === "STOP_NEW_ENTRIES" ? "Stop new entries" : s.mode === "HALT_ALL_SWAPS" ? "Halt all swaps" : "Stop"} since ${s.created_at}`),
         ...health.controls.removals.map((r) => `Removal ${plain(REMOVAL_STATE, r.state, "Unknown")} (requested ${r.requested_at}, updated ${r.updated_at})`)].join("; ") || "None"}</dd>
@@ -59,7 +60,7 @@ function Facts({ health }: { health: AgentHealth }) {
       <dd data-testid="health-inventory">{health.residual_inventory.map((p) => `${p.position_id.slice(0, 8)} ${p.position_state === "OPEN" ? "open" : p.position_state === "CLOSED" ? "closed" : "unknown state"}: ${p.quantity.raw} raw ${p.quantity.asset_id}, last saved ${show(p.updated_at)}`).join("; ") || "No saved position"}</dd>
       <dt>Saved version changed</dt><dd>{show(health.identity.changed)}</dd>
       <dt>Unknown values</dt>
-      <dd data-testid="health-unknowns">Unknown values are listed in Details.</dd>
+      <dd data-testid="health-unknowns">{health.unknown_inputs.length === 0 ? "None" : health.unknown_inputs.map((u) => plain(HEALTH_FIELD, u.field, u.field.replaceAll("_", " "))).join(", ")}</dd>
       <dt>Snapshot</dt><dd className="mono" data-testid="health-digest">in Details</dd>
     </dl>
     <Details summary="Details"><pre className="mono" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify({

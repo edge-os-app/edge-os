@@ -390,8 +390,8 @@ const MOE_SOURCE = {
         deadline_seconds: 600 },
       client_bounds: {}, endpoint_hosts: {}, time_basis: {}, required_coverage: "" } },
 };
-const MOE_UNKNOWNS = ["Saved responses come from the named providers under the locked research setup. "
-  + "Costs are not modelled; the window is short."];
+const MOE_UNKNOWNS = ["Recorded responses come from the named providers under the approved release "
+  + "actual-moe-history-nansen-20261022/1. Costs are not modelled; the window is short."];
 const DECLARATION = {
   declaration: { record_id: "hist-decl-1", schema_version: "p08.investigation-declaration/3", created_at: "2026-10-12T00:00:00Z",
     content: { schema_version: "p08.investigation-declaration/3", original_request: "test request",

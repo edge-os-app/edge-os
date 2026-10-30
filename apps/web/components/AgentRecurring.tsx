@@ -19,7 +19,7 @@ const END_COPY: Record<string, string> = {
   CONSENT_CHANGED: "The adopted terms changed.",
   IDENTITY_CHANGED: "The agent's wallet or saved version changed.",
   REMOVAL_REQUESTED: "Agent removal was requested.",
-  ACTIVATION_UNAVAILABLE: "No qualified execution route exists in this build.",
+  ACTIVATION_UNAVAILABLE: "No approved trade route exists in this build.",
 };
 
 function waitText(reason: string): string {

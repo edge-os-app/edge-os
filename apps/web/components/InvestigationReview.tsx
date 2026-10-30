@@ -290,8 +290,6 @@ export function InvestigationReview({ intakeId, interpretationRevisionId }: { in
             ? "Saved before any result was read. No study started. This saved profile is an example; the real-MOE study on this page is the history investigation below."
             : "Saved before any result was read. No study started. This profile uses example data that is not approved for production research."}</p>
           <dl className="kv">
-            
-            
             <dt>Outcome labels read when saved</dt><dd>{selected.declaration.content.outcome_labels_read ? "Yes" : "No"}</dd>
             <dt>Provider queries</dt><dd>{selected.access_history[0]?.provider_queries ?? 0}</dd>
           </dl>

@@ -139,7 +139,7 @@ export function AgentRecords({ records, sourceRecordId }: { records: AccountView
           <ul>{monitoring.map((item) => (
             <li id={`record-${item.record_id}`} key={item.record_id}>
               <strong>{plain(RECORD_STATUS, item.content.status, "Unknown")}</strong> · {item.content.health ? "health recorded" : "health unknown"}
-              {` · ${plural(item.content.evaluation_attempts ?? 0, "attempt")}, ${item.content.evaluation_completions ?? 0} completed`}
+              {` · ${item.content.evaluation_attempts == null ? "Unknown attempts" : plural(item.content.evaluation_attempts, "attempt")}, ${item.content.evaluation_completions == null ? "Unknown completions" : plural(item.content.evaluation_completions, "completion")}`}
               {item.content.input_updated_at && <> · inputs updated <time dateTime={item.content.input_updated_at}>{item.content.input_updated_at}</time></>}
               {` · record updated ${item.content.updated_at}`}
               {item.content.next_work && <p style={{ overflowWrap: "anywhere" }}>Next work: {item.content.next_work}</p>}

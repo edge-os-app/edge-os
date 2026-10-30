@@ -32,7 +32,7 @@ export const NANSEN_ANSWER_STATE: Record<string, string> = {
   UNAVAILABLE: "Not answered: the data was not available",
 };
 
-/** Finding verdicts used by the Nansen and history report builders. */
+/** `apps/api/src/edge_os_api/research/history_dataset.py:315-327` and the report builders. */
 export const VERDICT: Record<string, string> = {
   QUALIFIED: "Qualified",
   SUPPORTED: "Supported by the returned records",
@@ -114,7 +114,7 @@ export const REMOVAL_STATE: Record<string, string> = {
   FAILED: "Failed",
 };
 
-/** `apps/api/src/edge_os_api/accounts/views.py` record kinds. */
+/** `apps/api/src/edge_os_api/accounts/views.py:175-181` record kinds. */
 export const RECORD_KIND: Record<string, string> = {
   AGENT: "Agent",
   POSITION: "Position",
@@ -125,7 +125,7 @@ export const RECORD_KIND: Record<string, string> = {
   PERMISSION_SNAPSHOT: "Permission",
 };
 
-/** `apps/web/lib/types.ts` payload binding states. */
+/** `apps/api/src/edge_os_api/research/history_payload_binding.py:12,63` payload binding states. */
 export const PAYLOAD_BINDING_STATUS: Record<string, string> = {
   PASS: "matches",
   MISMATCH: "does not match",
@@ -242,7 +242,7 @@ export const CLAIM_STATUS: Record<string, string> = {
   UNRESOLVED: "unresolved",
 };
 
-/** `apps/api/src/edge_os_api/nansen_research/report_builder.py:493` and the saved settlement summary. */
+/** `apps/api/src/edge_os_api/nansen_research/report_builder.py:493` (saved settlement summary). */
 export const SETTLEMENT_STATE: Record<string, string> = {
   KNOWN: "Known",
   MEASURED: "Measured",
@@ -265,7 +265,7 @@ export const SUBMISSION_STATE: Record<string, string> = {
   SUBMISSION_UNKNOWN: "Outcome unknown",
 };
 
-/** `apps/api/src/edge_os_api/research/history_dataset.py` provider-use states. */
+/** `apps/api/src/edge_os_api/research/history_dataset.py` (provider usage projection). */
 export const PROVIDER_USE: Record<string, string> = {
   MEASURED_CLIENT_CALLS: "measured from client calls",
   NOT_REQUIRED: "not required",
@@ -316,4 +316,41 @@ export const RECORD_STATUS: Record<string, string> = {
   DESCRIPTIVE_ONLY: "Descriptive only", UNRESOLVED: "Unresolved", SUPPORTED: "Supported", CONFLICTED: "Conflicted",
   CURRENT: "Current", EARLIER: "Earlier", CHANGE_APPLIED: "Change applied", CHANGE_PENDING: "Change pending",
   REMOVED: "Removed", ACTIVE: "Active", ENDED: "Ended", NEVER_ACTIVE: "Never active",
+};
+
+/** `apps/api/src/edge_os_api/agent_health/snapshot.py:43-50` unknown input fields. */
+export const HEALTH_FIELD: Record<string, string> = {
+  native_gas_aggregate: "native gas total",
+  dataset_qualification: "saved data approval",
+  revision_edge_evidence: "evidence for this version",
+  control_state_basis: "stop and removal basis",
+  selected_completion_outcome: "chosen completion outcome",
+  job_manifest_hash: "saved job manifest",
+};
+
+/** `apps/api/src/edge_os_api/agent_health/snapshot.py:213-224` warning kinds. */
+export const HEALTH_WARNING_KIND: Record<string, string> = {
+  ACCOUNT_RECOVERY_OPEN_OR_UNKNOWN: "an earlier action is unsettled",
+};
+
+/** `apps/api/src/edge_os_api/nansen_research/models.py:74-94` (holder and flow query values). */
+export const HOLDER_LABEL: Record<string, string> = {
+  all_holders: "All holders",
+  whale: "Whales",
+  public_figure: "Public figures",
+  smart_money: "Smart money",
+  exchange: "Exchanges",
+};
+export const HOLDER_ORDER: Record<string, string> = {
+  address: "address",
+  token_amount: "token amount",
+  ownership_percentage: "ownership percentage",
+  value_usd: "USD value",
+};
+export const FLOW_LABEL: Record<string, string> = {
+  top_100_holders: "top 100 holders",
+  whale: "Whales",
+  public_figure: "Public figures",
+  smart_money: "Smart money",
+  exchange: "Exchanges",
 };

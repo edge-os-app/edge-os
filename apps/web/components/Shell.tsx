@@ -98,7 +98,7 @@ export function Shell() {
         </nav>
         <div className="side-foot">
           {controlledMode ? <div className="notice" data-testid="controlled-scope-notice">
-            <strong>Trading mode.</strong> Trades run from your agent wallet within the limits you signed. Every trade needs its own approval.
+            <strong>Trading mode.</strong> Trades run from your agent wallet within the limits you signed. Every trade must match its locked setup.
           </div> : showsBuildScope ? <div className="notice" data-testid="build-scope-notice">
             <strong>Build scope.</strong> Account views show example records only, not live wallet data.
             Saving a Research rule grants no trading permission. This build does not connect a wallet or move funds.

@@ -150,7 +150,6 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
             <dt>Fee collector</dt><dd className="mono">{controlled.fees.fee_collector_address}</dd>
             <dt>Referrer</dt><dd className="mono">{controlled.fees.referrer_address}</dd>
             <dt>Expiry</dt><dd><time dateTime={controlled.expires_at}>{controlled.expires_at}</time></dd>
-                        <dt>Locked research setup</dt><dd>in Details</dd>
           </dl>
           <Details summary="Details"><dl className="kv">
             <dt>Setup ID and hash</dt><dd className="mono">{controlled.release_id} · {controlled.release_sha256}</dd>

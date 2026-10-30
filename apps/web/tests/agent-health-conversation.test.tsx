@@ -73,12 +73,12 @@ describe("direct agent health", () => {
     expect(facts.getByTestId("health-last-evaluation")).toHaveTextContent("collected Unknown");
     expect(facts.getByTestId("health-last-attempt")).toHaveTextContent("act-1");
     expect(facts.getByTestId("health-pending")).toHaveTextContent("act-9");
-    expect(facts.getByTestId("health-warnings")).toHaveTextContent("Separate warnings are listed in Details.");
+    expect(facts.getByTestId("health-warnings")).toHaveTextContent("an earlier action is unsettled");
     expect(document.body).toHaveTextContent("ACCOUNT_RECOVERY_OPEN_OR_UNKNOWN");
     expect(facts.getByTestId("health-controls")).toHaveTextContent("Stop new entries");
     expect(facts.getByTestId("health-inventory")).toHaveTextContent("50000000000000000000");
     expect(facts.getByTestId("health-inventory")).toHaveTextContent("last saved 2026-10-13T09:06:12Z");
-    expect(facts.getByTestId("health-unknowns")).toHaveTextContent("Unknown values are listed in Details.");
+    expect(facts.getByTestId("health-unknowns")).toHaveTextContent("native gas total");
     expect(document.body).toHaveTextContent("native_gas_aggregate");
     expect(document.body).toHaveTextContent("sha256:first");
     expect(mocks.read).toHaveBeenCalledWith("agent-a");

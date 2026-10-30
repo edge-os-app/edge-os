@@ -1,6 +1,6 @@
 # UI copy rules
 
-Status: draft for PLAIN-COPY-L1-20261030. Accepted wording changes only after controller ANSWER1.
+Status: accepted 2026-10-30 under PLAIN-COPY-L1-20261030 and controller ANSWER1.
 
 This file governs every user-visible string in `apps/web`. It keeps the product honest: plain words in the main text, proof data in a collapsed Details control, and no safety fact weakened.
 
@@ -31,7 +31,7 @@ This file governs every user-visible string in `apps/web`. It keeps the product 
 | A replay of saved price data | replay | run, comparison (except the effect comparison screen) |
 | The effect comparison screen | comparison | run, replay |
 | One check of a rule | check | evaluation, bounded evaluation |
-| Recorded or authored input data | saved data or example data | dataset, fixture, synthetic recording |
+| Recorded or authored input data | saved data, example data or recorded example responses | dataset, fixture, synthetic recording |
 | The group of provider responses | saved responses | recorded responses, payload |
 | A chain of saved steps | steps | events, event codes |
 | A five-minute market period | five-minute period | bucket, source bucket |
@@ -73,7 +73,7 @@ Addresses, transaction hashes and amounts are data, not jargon. They may stay in
 
 - Each panel that loses proof data gets one collapsed Details control.
 - Use the shared control. It wraps native `<details>` and `<summary>`. Do not add a dependency.
-- The summary label is plain: "Details", "Proof data" or "Saved proof". Choose one label per panel and keep it stable.
+- The summary label is "Details".
 - Details is collapsed by default. A proof value is findable, not hidden.
 - Nothing is deleted. Every value that the old text showed must be in the panel's main text or in its Details.
 - A safety statement stays in the main text. Limits, refusals, unknown costs, "not claimed", "no trading permission", "no study started", and the research-agent-unavailable state never move into Details only.
