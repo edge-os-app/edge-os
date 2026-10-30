@@ -9,13 +9,16 @@ from __future__ import annotations
 import hashlib
 import json
 import ssl
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 import relay_admission
 from edge_os_api.research import hermes_relay_composition as composition
+from guarded_turn_runner import INPUT_TOKEN_MARGIN
 from relay_admission import ActualReleaseUnapproved, ProviderDestination, load_actual_release
+from spend_ledger import TokenPrice
 
 REPO = Path(__file__).resolve().parents[2]
 DRAFT = REPO / "docs/qualification/orbio-release"
@@ -25,6 +28,7 @@ PRICES = DRAFT / "orbio_draft_prices.json"
 CA = DRAFT / "orbio_ca_isrg_root_x1.pem"
 ADOPTED = REPO / "docs/qualification/hermes-actual-operation/release"
 ADOPTED_SHA = "3fa94dd73e53a72ca8af6cda9c8633770de89c262fa5303756c1965bb92fed8f"
+WORST_CASE_MULTIPLIER = Decimal("1.05")  # no Liquidity Book discount, then the 5% platform fee (CLOUD-ORBIO-01)
 ISRG_ROOT_X1_DER_SHA256 = "96bcec06264976f37460779acf28c5a7cfe8a3c0aae11a8ffcee05c0bddf08c6"
 # A test-only stand-in. Whether Orbio forwards OpenRouter's routing object is UNKNOWN; the draft names none.
 SYNTHETIC_ROUTING = {"only": ["synthetic"], "allow_fallbacks": False, "require_parameters": True,
@@ -90,13 +94,39 @@ def test_the_draft_hash_chain_names_its_packet_prices_and_ca_bundle() -> None:
     assert packet["status"] == "DRAFT_NOT_APPROVED"
     assert packet["record_values_except_approval"] == {k: v for k, v in value.items() if k != "approval"}
     assert value["price_snapshot_sha256"] == sha(PRICES.read_bytes())
-    assert json.loads(PRICES.read_bytes()) == {"completion_usd_per_million": "10", "model": "openai/gpt-6.1-sol",
-                                               "prompt_usd_per_million": "2", "provider": "orbio"}
-    adopted_prices = json.loads((ADOPTED / "hermes_first_call_prices.json").read_bytes())
-    assert {k: v for k, v in adopted_prices.items() if k != "provider"} == {
-        k: v for k, v in json.loads(PRICES.read_bytes()).items() if k != "provider"}
+    assert json.loads(PRICES.read_bytes()) == {"completion_usd_per_million": "10.5", "model": "openai/gpt-6.1-sol",
+                                               "prompt_usd_per_million": "2.1", "provider": "orbio"}
+    assert raw_is_canonical(PRICES.read_bytes())
     assert value["response_format_sha256"] == json.loads(
         (ADOPTED / "hermes_first_call_record.json").read_bytes())["response_format_sha256"]
+
+
+def test_the_draft_price_is_the_worst_case_a_buyer_pays_for_the_pinned_model() -> None:
+    # The 0% Liquidity Book tier plus the 5% platform fee on the discounted price: 1.05 x the list rate. The list rate
+    # is the adopted OpenRouter rate (Orbio's catalogue mirrors OpenRouter's). No discount tier is assumed.
+    draft_prices = json.loads(PRICES.read_bytes())
+    adopted_prices = json.loads((ADOPTED / "hermes_first_call_prices.json").read_bytes())
+    assert draft_prices["model"] == adopted_prices["model"] == "openai/gpt-6.1-sol"
+    for rate in ("prompt_usd_per_million", "completion_usd_per_million"):
+        assert Decimal(draft_prices[rate]) == Decimal(adopted_prices[rate]) * WORST_CASE_MULTIPLIER
+    price = TokenPrice(Decimal(draft_prices["prompt_usd_per_million"]),
+                       Decimal(draft_prices["completion_usd_per_million"]))
+    _, value = draft()
+    worst = price.nano_usd(value["max_request_bytes"] + INPUT_TOKEN_MARGIN, value["max_tokens"])
+    assert worst == 180_768_000  # USD 0.180768 per request, never below what the buyer is charged
+    adopted = TokenPrice(Decimal(adopted_prices["prompt_usd_per_million"]),
+                         Decimal(adopted_prices["completion_usd_per_million"]))
+    assert worst > adopted.nano_usd(value["max_request_bytes"] + INPUT_TOKEN_MARGIN, value["max_tokens"])
+
+
+def test_the_draft_cites_orbios_public_pages_and_no_look_alike() -> None:
+    text = (DRAFT / "ORBIO_RELEASE_DRAFT.md").read_text()
+    for source in ("https://www.orbio.so", "https://www.orbio.so/developers", "https://www.orbio.so/llms.txt",
+                   "https://www.orbio.so/api/v1/models"):
+        assert f"<{source}>" in text
+    assert "2026-10-30" in text and "CLOUD-ORBIO-01" in text
+    for look_alike in ("orbioagent.world", "orbio-proposals.xyz"):
+        assert f"https://{look_alike}" not in text and f"<{look_alike}" not in text
 
 
 def test_the_ca_bundle_is_only_isrg_root_x1() -> None:

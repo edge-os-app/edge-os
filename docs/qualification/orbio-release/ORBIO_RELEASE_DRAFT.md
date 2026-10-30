@@ -1,8 +1,8 @@
 # Orbio release draft: one record and one price table (prepared, NOT approved, NOT active)
 
-Task `CLOUD-ORBIO-RELEASE`, builder-approved normal cloud session, 2026-10-22. Base `617b9e2add99305b3da1a94f80b8ca7ca1924c9d` (CLOUD-02, relay contract A8). Status: DRAFT FOR BUILDER REVIEW.
+Task `CLOUD-ORBIO-RELEASE`, builder-approved normal cloud session, 2026-10-22, base `617b9e2add99305b3da1a94f80b8ca7ca1924c9d` (CLOUD-02, relay contract A8). Updated by `CLOUD-ORBIO-01`, builder-approved normal cloud session, 2026-10-30, on branch `cloud/orbio-01-route` after merging `integration/edge-os-mvp` at `275b399`. Status: DRAFT FOR BUILDER REVIEW.
 
-This draft approves nothing. No key was read, no request was sent to Orbio (not even a public catalogue read or a TLS handshake), and nothing was bought. The one approved ACTUAL release stays `hermes-first-call-1` on OpenRouter. Nothing selects the Orbio draft:
+This draft approves nothing. No key was read, no request was sent to Orbio's API (no TLS handshake to `api.orbio.so`, no key-using read), and nothing was bought. CLOUD-ORBIO-01 attempted plain public `GET`s of the four pages in section 1; the session's network policy refused them (section 1.1), so nothing was received from Orbio. The one approved ACTUAL release stays `hermes-first-call-1` on OpenRouter. Nothing selects the Orbio draft:
 
 - its record SHA256 is not in `relay_admission.APPROVED_ACTUAL_RELEASES`, so `load_actual_release` refuses it with `ActualReleaseUnapproved`;
 - it has no entry in `hermes_relay_composition.RELEASE_DEFINITIONS`, whose docstring makes adding one a reviewed code change together with the registry entry, so the draft is a docs-only record;
@@ -10,9 +10,24 @@ This draft approves nothing. No key was read, no request was sent to Orbio (not 
 
 No relay, gateway, supervisor, operator, admission or application code changed. The OpenRouter record, approval packet, price snapshot and the CLOUD-02 golden bytes are unchanged.
 
-## 1. Source facts (public Orbio documentation, read by the builder 2026-10-22)
+## 1. Source facts (public Orbio documentation)
 
-The facts below were given by the builder from Orbio's public documentation on `orbio.so`, read 2026-10-22. This session did not fetch them. Look-alike sites `orbioagent.world` and `orbio-proposals.xyz` are not Orbio and are not sources.
+Sources, all on Orbio's own domain `orbio.so`:
+
+- <https://www.orbio.so> (home page and pricing)
+- <https://www.orbio.so/developers> (API documentation)
+- <https://www.orbio.so/llms.txt> (agent guide)
+- <https://www.orbio.so/api/v1/models> (public model list and prices; no key)
+
+Look-alike sites `orbioagent.world` and `orbio-proposals.xyz` are not Orbio and are not sources.
+
+### 1.1 How these facts were obtained
+
+- 2026-10-22: the builder read Orbio's public documentation and gave the facts in the first table below. The CLOUD-ORBIO-RELEASE session did not fetch them.
+- 2026-10-30 (CLOUD-ORBIO-01): the builder read the four pages above and gave the pricing facts in the second table in the ticket. This session tried to read the same four URLs at 2026-10-30 09:47 UTC. `curl` through the session proxy got `CONNECT tunnel failed, response 403` for all four. The fetch tool got `getaddrinfo ENOTFOUND www.orbio.so`, which means the host is outside this session's allowed network domains. No byte was received from Orbio. A web search restricted to `orbio.so` returned only model-written summaries of cached pages, and those summaries disagree with each other (one gives a top discount of 50%, another 55%). They are not used as sources.
+- So every 2026-10-30 fact below is **given by the builder, read 2026-10-30, not verified by this session**. Nothing from `/api/v1/models` was read. The pinned model's catalogue entry is UNKNOWN (1.6).
+
+### 1.2 Facts given 2026-10-22
 
 | Fact | Status |
 |---|---|
@@ -26,17 +41,33 @@ The facts below were given by the builder from Orbio's public documentation on `
 | 78 models have price overrides by token count or by UTC time of day, for example `claude-haiku-5.5` and `deepseek-v4.1-flash-1017` | documented |
 | TLS: Let's Encrypt. `api.orbio.so` is issued by YR1, `www.orbio.so` by YR2. Both chain to ISRG Root YR, which ISRG Root X1 cross-signs | documented |
 
+### 1.3 Pricing facts given 2026-10-30 (from <https://www.orbio.so>, read 2026-10-30)
+
+| Fact | Status |
+|---|---|
+| Pricing is a "Liquidity Book": credits are sold in discount tiers from 0% to 50% off; the top tier is about 47.5% | given by the builder, read 2026-10-30 |
+| A 5% platform fee is charged on the discounted price | given by the builder, read 2026-10-30 |
+| Minimum purchase USD 5 | given by the builder, read 2026-10-30 |
+| "Requests use Orbio's managed OpenRouter account" | given by the builder, read 2026-10-30 (quoted) |
+| The model list and prices are public at <https://www.orbio.so/api/v1/models>, with no key | given by the builder; not read by this session |
+
+Worst case for a buyer. A buyer at the 0% tier pays the list price plus 5% of it: 1.05 × list. Any discount lowers the cash paid, so 1.05 × list is the most a buyer can pay per token, as long as the list rate itself is right. The section 4 snapshot uses it.
+
+Is the cost returned in usage data? **UNKNOWN.** No public Orbio page that this session or the builder's 2026-10-22 reading covered documents a `usage.cost` field, a cost header or a cost lookup endpoint. This session could not read <https://www.orbio.so/developers> or <https://www.orbio.so/llms.txt> on 2026-10-30, so it does not claim the field is absent either.
+
 UNKNOWN (not documented, not tested, not assumed below):
 
-1. Whether replies include `usage.cost`, and what it means: Orbio's charge, OpenRouter's upstream charge, or something else.
+1. Whether replies include `usage.cost` in their usage data, and what it means: Orbio's charge (discounted, with the fee), OpenRouter's upstream charge at list price, or something else. Not documented in any public page read so far (1.3).
 2. Whether a cost lookup endpoint exists, like OpenRouter's `GET /api/v1/generation?id=`.
 3. Whether OpenRouter's `provider` routing object is forwarded, dropped or rejected.
 4. The exact reply `model` field and any provider fields in the reply.
 5. Orbio's terms of service and privacy policy, including data retention and whether the upstream data-collection setting can be controlled.
-6. Whether `openai/gpt-6.1-sol` is listed now, at what price, and whether it is one of the 78 override models. The catalogue rule (identical to OpenRouter) implies USD 2 / 10 per million only if it has no override. This session did not read the catalogue.
+6. Whether `openai/gpt-6.1-sol` is listed now in <https://www.orbio.so/api/v1/models>, at what list price, and whether it is one of the 78 override models. The catalogue rule (identical to OpenRouter) implies a list rate of USD 2 / 10 per million only if it has no override. Neither CLOUD-ORBIO session read the catalogue.
 7. Whether `reasoning`, `response_format`, `max_tokens` and `prompt_cache_options` are forwarded or dropped. Only "sampling parameters" are documented as dropped.
 8. Whether `api.orbio.so` serves the ISRG Root YR cross-certificate signed by X1, which a trust store holding only X1 needs.
 9. Whether the `X-Orbio-Balance` value on a reply is read before or after that reply's charge, and its precision.
+10. Whether the Liquidity Book discount and the 5% platform fee apply only when credits are bought, so that each request then draws list-price face value from the balance, or whether they change what each request is charged. Either way the cash paid per token is at most 1.05 × list.
+11. Whether the balance is denominated in USD cash or in inference face value.
 
 ## 2. The draft record
 
@@ -44,9 +75,9 @@ Files in this folder:
 
 | File | SHA256 | Meaning |
 |---|---|---|
-| `orbio_draft_record.json` | `8c39196ef2214ee74c42989f03eccbd9be72d4a6d1421c9f845582f427db2d78` | the draft ACTUAL record, canonical JSON in the CLOUD-02 shape |
-| `orbio_draft_packet.json` | `992323624c97bb858d8259005b24893ea1277c19eb1cd6ffb71366ce90fc75ea` | status `DRAFT_NOT_APPROVED`; the record's `approval` names it. The record values, inputs and open facts |
-| `orbio_draft_prices.json` | `eaa1ad5580c7b1a0296d8830fdbeaeb28ba0d39fb483144e1108ad6db71ae16f` | the draft price snapshot |
+| `orbio_draft_record.json` | `ce309bbd2600f61b65c04fb282e76e54712704b8b30b04ad570c514a00ed1241` | the draft ACTUAL record, canonical JSON in the CLOUD-02 shape |
+| `orbio_draft_packet.json` | `db33f21b65affd6676594f1bbf546acd15bc22858f99dcfb4395c9926f6c55eb` | status `DRAFT_NOT_APPROVED`; the record's `approval` names it. The record values, inputs and open facts |
+| `orbio_draft_prices.json` | `4f83b00bd51b0614f1da551c762ce8969f27c5bb26bf5edf8a3f6e3412f982dc` | the draft price snapshot |
 | `orbio_ca_isrg_root_x1.pem` | `22b557a27055b33606b6559f37703928d3e4ad79f110b407d04986e1843543d1` | the CA bundle: ISRG Root X1 only |
 
 The record is the adopted OpenRouter record (`hermes-first-call-1`) with these differences only:
@@ -60,7 +91,7 @@ The record is the adopted OpenRouter record (`hermes-first-call-1`) with these d
 | `provider` (routing) | `only: [openai]`, no fallbacks, required parameters, `data_collection: deny`, `max_price` 2/10 | `null` (no routing fields) | forwarding of the routing object is UNKNOWN (1.3). Naming it would claim a provider pin, a privacy setting and a price ceiling that nothing shows Orbio applies |
 | `allowed_fields` | includes `provider` | no `provider` | follows from no routing |
 | `ca_bundle_sha256` | `7cef540c…` (OpenRouter's bundle) | `22b557a2…` (the ISRG Root X1 PEM above) | pin the root only |
-| `price_snapshot_sha256` | `e53259b2…` | `eaa1ad55…` | snapshot names seller `orbio` (section 4) |
+| `price_snapshot_sha256` | `e53259b2…` | `4f83b00b…` | snapshot names seller `orbio` at the worst-case rates USD 2.1 / 10.5 (section 4) |
 | `approval` | the adopted packet | the draft packet (`DRAFT_NOT_APPROVED`) | |
 
 Unchanged: `kind` ACTUAL, `stream` false, `model` `openai/gpt-6.1-sol`, `max_tokens` 4096, `reasoning` `{"effort": "low"}`, `response_format_sha256` `cdffe6fd…`, `prompt_cache_options` `{"mode": "explicit"}`, `max_request_bytes` 65,536, `max_reply_bytes` 262,144, `timeout_seconds` 90.
@@ -79,34 +110,47 @@ Checked by `tests/hermes_provider_relay/test_orbio_release_draft.py`:
    - `_price` and `_rate` (`hermes_relay_composition.py`) cap the snapshot rates by `provider.max_price`;
    - `bind_release` builds `LiveRelease(provider=actual.provider["only"][0])`;
    - `ActualRelease.body_refusal` compares the request's `provider` field with the record's.
+   The `max_price` cap matters for Orbio. The worst-case snapshot (USD 2.1 / 10.5) is above OpenRouter's list rate. A future Orbio record whose routing object named `max_price` 2 / 10 would therefore be refused by `_rate` at binding. That record would have to name a `max_price` of at least the snapshot rates, and only if Orbio forwards the object (UNKNOWN 1.3).
    This draft does not relax any of these rules. An Orbio release that names no routing needs a separately reviewed code change. That change must keep these rules unchanged for the OpenRouter record and keep its golden bytes.
 3. Every other field meets the loader as written. The test swaps only the routing object for a synthetic one and loads the result under a test-only registry: destination `api.orbio.so:443/api/v1/chat/completions`, CA pin, release settings, reasoning, cache options and timeout all parse.
-4. The adopted record, approval packet and price bytes keep their SHA256 values. `APPROVED_ACTUAL_RELEASES` is exactly `{3fa94dd7…}`, and `RELEASE_DEFINITIONS` has exactly that one definition. The CLOUD-02 golden test (`test_release_destination_golden.py`) still passes unchanged.
+4. The snapshot is the worst case a buyer pays (section 4): each rate is 1.05 × the adopted OpenRouter rate, and the worst-case reservation is 180,768,000 nano-USD.
+5. The adopted record, approval packet and price bytes keep their SHA256 values. `APPROVED_ACTUAL_RELEASES` is exactly `{3fa94dd7…}`, and `RELEASE_DEFINITIONS` has exactly that one definition. The CLOUD-02 golden test (`test_release_destination_golden.py`) still passes unchanged.
 
 ## 4. Price table rule
 
-The draft price snapshot is:
+The draft price snapshot (CLOUD-ORBIO-01) is:
 
 ```json
-{"completion_usd_per_million":"10","model":"openai/gpt-6.1-sol","prompt_usd_per_million":"2","provider":"orbio"}
+{"completion_usd_per_million":"10.5","model":"openai/gpt-6.1-sol","prompt_usd_per_million":"2.1","provider":"orbio"}
 ```
 
-Rule. An Orbio snapshot may be adopted only with these rates, and only when all of these hold:
+Why these rates. The snapshot is the worst case the buyer can pay for the pinned model, so the reservation is never below the real charge:
 
-1. Orbio's public catalogue, read on the approval date from `orbio.so` itself, lists `openai/gpt-6.1-sol`.
-2. It lists the same prompt and completion USD-per-million rates as OpenRouter's public price for that model on the same date.
-3. Those rates equal the snapshot: USD 2 prompt, USD 10 completion.
-4. The model has no token-count or time-of-day override, and no cache, reasoning, request or other fee.
+- list rate: USD 2 prompt, USD 10 completion per million. This is OpenRouter's rate for `openai/gpt-6.1-sol`, which Orbio's catalogue mirrors (1.2). It is not yet read from <https://www.orbio.so/api/v1/models> (UNKNOWN 1.6);
+- no Liquidity Book discount: the 0% tier. A buyer who gets any discount pays less (1.3);
+- plus the 5% platform fee on the discounted price, which is the list price at the 0% tier (1.3);
+- so 1.05 × list: USD 2.1 prompt, USD 10.5 completion per million.
 
-Otherwise no Orbio release is drafted for that model. In particular, no rate is averaged, and no rate is picked as "the usual one" for an override model.
+The 2026-10-22 draft used USD 2 / 10, the list rate with no fee. That is below what a 0%-tier buyer pays, so it was raised.
 
-`provider` names the seller, `orbio`, because the upstream endpoint is not pinned. The ledger's two-rate `TokenPrice(2, 10)` is the same object for reservation, settlement and the relay cost check (E1-COST1). The worst-case reservation is the same as OpenRouter's: (65,600 × 2 + 4,096 × 10) / 1,000,000 = USD 0.17216 per request.
+Rule. An Orbio snapshot may be adopted only with rates at or above the worst case, and only when all of these hold:
+
+1. Orbio's public catalogue <https://www.orbio.so/api/v1/models>, read on the approval date from `orbio.so` itself, lists `openai/gpt-6.1-sol`.
+2. Its list prompt and completion rates are USD 2 and USD 10 per million (the same as OpenRouter's public price on that date). If they are higher, the snapshot becomes 1.05 × the listed rates, and the record is re-hashed.
+3. The model has no token-count or time-of-day override, and no cache, reasoning, request or other fee.
+4. The platform fee is still 5% of the discounted price, and no tier costs more than the list price.
+
+Otherwise no Orbio release is drafted for that model. In particular, no rate is averaged, no discount tier is assumed, and no rate is picked as "the usual one" for an override model.
+
+`provider` names the seller, `orbio`, because the upstream endpoint is not pinned. The ledger's two-rate `TokenPrice(2.1, 10.5)` is the same object for reservation, settlement and the relay cost check (E1-COST1). The worst-case reservation is (65,600 × 2.1 + 4,096 × 10.5) / 1,000,000 = USD 0.180768 per request (180,768,000 nano-USD), above OpenRouter's USD 0.17216. 65,600 is `max_request_bytes` 65,536 plus the input token margin of 64.
+
+Minimum purchase. Orbio's minimum purchase is USD 5 (1.3). That is above the shared USD 2.00 model and data ceiling. Buying credits is a separate financial decision (section 7 step 6); the ledger ceiling still bounds what the application may spend, but the purchase itself exceeds it.
 
 ## 5. Settlement question
 
 The application settles a counted reply only when (`relay_turn_runner._cost_equals_charge`, E1-COST1):
 
-`ceil(usage.cost × 10^9)` nano-USD == `TokenPrice.nano_usd(prompt_tokens, completion_tokens)` = `prompt_tokens × 2,000 + completion_tokens × 10,000` nano-USD, and that charge is at most the held reservation.
+`ceil(usage.cost × 10^9)` nano-USD == `TokenPrice.nano_usd(prompt_tokens, completion_tokens)` = `prompt_tokens × 2,100 + completion_tokens × 10,500` nano-USD, and that charge is at most the held reservation.
 
 The relay also requires these for a counted reply (`ActualRelease.reply_check`):
 
@@ -116,12 +160,13 @@ The relay also requires these for a counted reply (`ActualRelease.reply_check`):
 - integer `prompt_tokens`, `completion_tokens` and `total_tokens`;
 - a finite, non-negative numeric `usage.cost`.
 
-Otherwise the attempt is UNKNOWN. The text is withheld, nothing is resent, and the full USD 0.17216 stays as liability.
+Otherwise the attempt is UNKNOWN. The text is withheld, nothing is resent, and the full USD 0.180768 stays as liability.
 
-The open question is whether Orbio's `usage.cost` exists and equals Orbio's own token-priced charge for this request. If it is OpenRouter's upstream cost, Orbio's markup or another figure, then equality with the token charge is a coincidence, not a settlement. One counted reply proves only one request.
+The open question is whether Orbio's `usage.cost` exists in its usage data (UNKNOWN 1.1) and equals the buyer's own token-priced charge for this request. Because the snapshot is the worst case, a `usage.cost` at OpenRouter's list rate (2 / 10), or at a discounted rate, does not equal the snapshot charge. The attempt then stays UNKNOWN with full liability: the ledger over-reserves and never settles low. Settling exactly at a discount tier would need a snapshot for that tier, which is a separate builder decision that must still keep the reservation at or above the real charge. If `usage.cost` is OpenRouter's upstream cost, Orbio's markup or another figure, then equality with the token charge is a coincidence, not a settlement. One counted reply proves only one request.
 
 ## 6. Variable-price risk
 
+- Discount and fee. The snapshot is the 0%-tier price plus the 5% fee. If Orbio raised the fee, or priced a tier above list, the real charge could exceed the reservation. Section 4 rule 4 is re-checked on the approval date.
 - Override models. 78 models carry token-count or UTC time-of-day overrides. If `openai/gpt-6.1-sol` has one, or gains one after approval, the two-rate price is wrong at some times or sizes. A higher rate can make the real charge exceed the reservation. The ledger's liability then understates real spending against the shared USD 2.00 ceiling, which the relay cost check cannot see before the request is sent.
 - No price ceiling on the wire. OpenRouter's `max_price` routing limit is what makes the provider refuse a pricier endpoint. With no forwarded routing object, nothing on the request bounds the price. Only the catalogue reading and the after-the-fact cost check remain.
 - No provider pin. Without `only` and `allow_fallbacks: false`, Orbio's OpenRouter account may route to any endpoint for the model, at that endpoint's price and data policy. `data_collection: deny` is not applied.
@@ -133,14 +178,14 @@ The open question is whether Orbio's `usage.cost` exists and equals Orbio's own 
 None of these are done. Each step is a separate builder decision.
 
 1. Read Orbio's terms of service and privacy policy on `orbio.so` and accept or reject them (UNKNOWN 1.5).
-2. Read the public catalogue on `orbio.so` for `openai/gpt-6.1-sol`. Record the date, the rates and whether it has any override. Compare it with OpenRouter's public price. Apply the section 4 rule. If it fails, stop.
+2. Read the public catalogue <https://www.orbio.so/api/v1/models> for `openai/gpt-6.1-sol` (CLOUD-ORBIO-01 could not; section 1.1). Record the date, the rates and whether it has any override. Compare it with OpenRouter's public price. Re-read the pricing on <https://www.orbio.so>. Apply the section 4 rule. If it fails, stop. A cloud session needs `www.orbio.so` allowed in its network settings to read these pages.
 3. Decide the routing question. Either:
    - (a) obtain Orbio's documented or tested behavior for the `provider` object, then redraft the record with the proved fields; or
    - (b) authorize a separately reviewed code change that admits a release naming no routing, without relaxing any OpenRouter check. It must cover every routing use in section 3.2, including the snapshot `provider` and `max_price` rules.
    Either way the record bytes, and so the SHA256, change.
 4. Authorize a handshake-only TLS check of `api.orbio.so:443` with SNI `api.orbio.so` against this bundle, with no HTTP request. It must verify to ISRG Root X1 (UNKNOWN 1.8). If it does not, the pin must be redrafted.
 5. Decide how the paid call observes `X-Orbio-Ignored-Parameters` and `X-Orbio-Balance`. The relay records no response header today. Either authorize a reviewed relay change that records those two named headers, or a separate builder-run observation.
-6. Obtain an Orbio key, held only by the relay, and fund it. This is a paid purchase that needs explicit financial authorization. Decide its share of the shared USD 2.00 model and data ceiling.
+6. Obtain an Orbio key, held only by the relay, and fund it. This is a paid purchase that needs explicit financial authorization. The minimum purchase is USD 5, above the shared USD 2.00 model and data ceiling. Decide the purchase, the discount tier bought (any tier is at or below the snapshot price) and the key's share of that ceiling.
 7. Change the draft packet into an approval (`status`, final values, date and base). Re-hash the packet and then the record. Add the record's SHA256 to `APPROVED_ACTUAL_RELEASES` and its definition to `RELEASE_DEFINITIONS` in one reviewed change. The registries may hold at most one approved release. Decide explicitly whether Orbio replaces the OpenRouter release; it is never added beside it.
 8. Authorize exactly one paid test call under the section 8 checklist. Integrate and merge only under the recorded main authorization.
 
@@ -148,9 +193,9 @@ None of these are done. Each step is a separate builder decision.
 
 Before the call:
 
-- [ ] Steps 1 to 7 are done and recorded, the operator `check` passes, and the remaining-budget reconciliation shows room for USD 0.17216.
+- [ ] Steps 1 to 7 are done and recorded, the operator `check` passes, and the remaining-budget reconciliation shows room for USD 0.180768.
 - [ ] `GET /api/v1/key` is read with the key (a separately approved key-using read). Record the balance B0, the usage and the rate limits.
-- [ ] Record the call's UTC time, and confirm the catalogue rates for that model at that time are still USD 2 / 10 with no override.
+- [ ] Record the call's UTC time, and confirm the catalogue list rates for that model at that time are still USD 2 / 10 with no override, and the fee is still 5%.
 
 The one call must observe all of these:
 
@@ -158,7 +203,7 @@ The one call must observe all of these:
 2. `X-Orbio-Ignored-Parameters` absent or empty. If it names `reasoning`, `response_format`, `max_tokens`, `prompt_cache_options` or any other sent field, the release shape is not honored.
 3. One choice with `finish_reason` `stop`, and reply `model` exactly `openai/gpt-6.1-sol`. Record any provider field in the reply (UNKNOWN 1.4).
 4. Integer `usage.prompt_tokens`, `completion_tokens` and `total_tokens`, equal to the job's counts.
-5. `usage.cost` present and numeric, with `ceil(cost × 10^9) == prompt_tokens × 2,000 + completion_tokens × 10,000` nano-USD and at most 172,160,000 nano-USD (USD 0.17216). Example: 9,511 prompt and 1,957 completion tokens must cost exactly USD 0.038592.
+5. `usage.cost` present and numeric, with `ceil(cost × 10^9) == prompt_tokens × 2,100 + completion_tokens × 10,500` nano-USD and at most 180,768,000 nano-USD (USD 0.180768). Example: 9,511 prompt and 1,957 completion tokens must cost exactly USD 0.0405216. A cost at a discounted rate or at the list rate does not settle (section 5).
 6. No cached-token discount or separately priced reasoning tokens, for example `prompt_tokens_details.cached_tokens` absent or 0. Record any such field.
 7. Balance after: `GET /api/v1/key` after the call, with no other use of the key in between, gives B1. B0 − B1 equals `usage.cost` exactly. This is what shows that `usage.cost` is Orbio's own charge (UNKNOWN 1.1). Record `X-Orbio-Balance` from the reply too, but do not use it as B1 until its timing and precision are known (UNKNOWN 1.9). If the balance's precision is coarser than `usage.cost`, exact equality cannot be shown, and this item fails.
 8. Record the generation `id`. If a cost lookup endpoint exists (UNKNOWN 1.2), its cost for that id equals `usage.cost`.

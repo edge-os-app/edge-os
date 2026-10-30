@@ -2,8 +2,8 @@
   "format": "edge-os.hermes-release-approval/1",
   "status": "DRAFT_NOT_APPROVED",
   "meaning": "A DRAFT of one Orbio relay release (orbio-draft-1), prepared for builder review. It approves nothing: no registry entry, provider, key, request, price or spending. Its SHA256 is not in relay_admission.APPROVED_ACTUAL_RELEASES and it has no RELEASE_DEFINITIONS entry. The current code refuses this record even if its hash were approved, because it names no routing object. See docs/qualification/orbio-release/ORBIO_RELEASE_DRAFT.md.",
-  "prepared_utc": "2026-10-22",
-  "base": "617b9e2add99305b3da1a94f80b8ca7ca1924c9d",
+  "prepared_utc": "2026-10-30",
+  "base": "275b399 (integration/edge-os-mvp, merged into cloud/orbio-01-route); first drafted 2026-10-22 on 617b9e2",
   "record_values_except_approval": {
     "release_id": "orbio-draft-1",
     "route_id": "orbio-openrouter-managed",
@@ -38,12 +38,13 @@
     "max_reply_bytes": 262144,
     "timeout_seconds": 90,
     "ca_bundle_sha256": "22b557a27055b33606b6559f37703928d3e4ad79f110b407d04986e1843543d1",
-    "price_snapshot_sha256": "eaa1ad5580c7b1a0296d8830fdbeaeb28ba0d39fb483144e1108ad6db71ae16f"
+    "price_snapshot_sha256": "4f83b00bd51b0614f1da551c762ce8969f27c5bb26bf5edf8a3f6e3412f982dc"
   },
   "inputs": {
     "price_snapshot": {
       "path": "docs/qualification/orbio-release/orbio_draft_prices.json",
-      "sha256": "eaa1ad5580c7b1a0296d8830fdbeaeb28ba0d39fb483144e1108ad6db71ae16f"
+      "sha256": "4f83b00bd51b0614f1da551c762ce8969f27c5bb26bf5edf8a3f6e3412f982dc",
+      "rule": "worst case a buyer pays: the list rate (USD 2 / 10 per million, assumed equal to OpenRouter's) at the 0% Liquidity Book tier plus the 5% platform fee on the discounted price, so 1.05 x list = USD 2.1 / 10.5"
     },
     "ca_bundle": {
       "path": "docs/qualification/orbio-release/orbio_ca_isrg_root_x1.pem",
@@ -53,12 +54,14 @@
     "response_format_sha256": "cdffe6fd07f14b796cae3f97268148f6ad8893100b8080e1bc652c7d3e9cbc60"
   },
   "open": [
-    "Orbio's catalogue entry for openai/gpt-6.1-sol: listed, at USD 2 / 10 per million, with no override",
+    "Orbio's /api/v1/models entry for openai/gpt-6.1-sol: listed, its list rates, and whether it has a token-count or time-of-day override (not read by CLOUD-ORBIO-01: the session network denied orbio.so)",
+    "whether the 5% platform fee and the Liquidity Book discount apply at credit purchase only, or also change the per-request charge",
     "routing: whether Orbio forwards, drops or rejects OpenRouter's provider object",
-    "usage.cost: present in Orbio replies, and its meaning",
+    "usage.cost: whether Orbio returns it in usage data, and its meaning (UNKNOWN from public docs)",
     "the reply model field and provider fields",
     "a cost lookup endpoint",
     "terms of service and privacy policy",
-    "the served TLS chain reaching ISRG Root X1"
+    "the served TLS chain reaching ISRG Root X1",
+    "the USD 5 minimum purchase is above the shared USD 2.00 model and data ceiling"
   ]
 }
