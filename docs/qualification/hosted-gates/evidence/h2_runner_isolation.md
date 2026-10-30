@@ -49,10 +49,23 @@ only through the relay channel (`docs/qualification/hermes-actual-operation/READ
 Source: `.scratch/vps-live-20261026/RELAY-START-EVIDENCE.md` SHA-256
 `bdb833c1cfa9920705754b2c6330811a73a3e2d7ba89e6f02d79549f3f9cc2f4`, section HOST-SHARE-L4.
 
-As `edge-os-research` with the share group: `key_read=1`, `config_read=1`, `provider_read=1`, `state_write=1`,
-`admission_read=0`, `grants_write=0` (all as expected). The relay container runs as user `995:985`, with a read-only
-root, `cap_drop ALL`, and `network none`. A third user (`nobody`) is denied. The relay unit holds the provider key; the
-research side never reads `/etc/edge-os/relay`.
+Each value is the exit code of one `test` access attempt: `0` means allowed, `1` means denied. As
+`edge-os-research` with the share group, the deployed identity gives:
+
+| Item | Value | Meaning | Expected |
+|---|---|---|---|
+| provider key `/etc/edge-os/relay/provider-key` read | 1 | denied | denied |
+| relay config read | 1 | denied | denied |
+| provider config read | 1 | denied | denied |
+| relay state write | 1 | denied | denied |
+| admission key read | 0 | allowed | allowed |
+| grants write | 0 | allowed | allowed |
+| `/etc/edge-os/relay/relay.json` read (extra) | 1 | denied | denied |
+| handoff read (extra) | 0 | allowed | allowed |
+
+A third user (`nobody`) is denied: `admission read=1` (denied), `grants write=1` (denied). The relay container runs as
+user `995:985`, with a read-only root, `cap_drop ALL`, and `network none`. The relay unit holds the provider key; the
+research side cannot read the relay config, provider config or provider key under `/etc/edge-os/relay`.
 
 ### Row 7 evidence (PASS)
 

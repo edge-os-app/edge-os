@@ -34,7 +34,7 @@ IMAGE = "sha256:" + "1" * 64
 GATE_SHA = "2" * 64
 DEPLOYMENT = "hosted-demo-1"
 REGISTERED_ID = "edgeos-fun-vps1"
-REGISTERED_SHA = "e7a483e5b0d9a213c4bd4a6cd8447d6bfb66cf3c23f87126b4fd68e0ceaa39d7"
+REGISTERED_SHA = "1b169e7b794150a161b2e59fd8184e7d2af6cb3eb90396da6ea8909807e7d0d9"
 RECORD_PATH = (Path(__file__).resolve().parents[3]
                / "docs/qualification/hosted-gates/records/edgeos-fun-vps1.json")
 

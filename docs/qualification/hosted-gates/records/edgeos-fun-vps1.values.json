@@ -7,7 +7,7 @@
   "research_release": {"release_id": "actual-moe-history2h-nansen-20261022/1", "sha256": "45c8cfbf5d61eb519ee3140e02e50b2b7091669dc28cbef224bdc6a0e77ca877"},
   "host_gates": {
     "h1_egress": {"path": "docs/qualification/hosted-gates/evidence/h1_egress.md", "sha256": "d709c98bf266f954c347758db11a817287792e5b2e59442e31711027a2d4f0cc"},
-    "h2_runner_isolation": {"path": "docs/qualification/hosted-gates/evidence/h2_runner_isolation.md", "sha256": "7e9a324d2e6d0e7cd710c0c4050bb36075f11327f24038d2de55114552b54427"},
+    "h2_runner_isolation": {"path": "docs/qualification/hosted-gates/evidence/h2_runner_isolation.md", "sha256": "e26fb9e260c0ef33081ccab27e888d24b2698ef278f2ec3c7144a8c0530486ba"},
     "h8_provider_spend_cap": {"path": "docs/qualification/hosted-gates/evidence/h8_provider_spend_cap.md", "sha256": "ba057eeb3d31355fb7f0fc2dafe3600e77452d25e11348aae89877032c7c76e7"},
     "h10_backup_restore": {"path": "docs/qualification/hosted-gates/evidence/h10_backup_restore.md", "sha256": "de7bde06f7d94c797327b99e9601215424b4ed39207762e12a3a1d13a64e95b7"}
   },

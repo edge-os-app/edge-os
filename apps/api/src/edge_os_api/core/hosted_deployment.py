@@ -2,9 +2,9 @@
 
 A deployment record names the exact releases, origins, database TLS mode, host-gate references, image digests and
 validity window of one hosted deployment. `APPROVED_HOSTED_DEPLOYMENTS` maps a deployment id to the canonical SHA-256
-of its record. The map is empty in this candidate. Adding an entry is a reviewed code change with a recorded builder
-approval of that exact record. No setting, environment value, file or request adds one: a record file is read only to
-compare it with the code-owned hash, and only after the id is registered.
+of its record. The map names the one registered deployment. Adding, changing or removing an entry is a reviewed code
+change with a recorded builder approval of that exact record. No setting, environment value, file or request adds one:
+a record file is read only to compare it with the code-owned hash, and only after the id is registered.
 
 Production admits the Hermes relay application, the `hermes_local` interpreter and the approved research release only
 when the running configuration names a registered record whose canonical hash and bound origins and TLS mode match.
@@ -54,9 +54,10 @@ IMAGE_NAME = re.compile(r"[a-z][a-z0-9._-]{0,63}")
 TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 MAX_PATH = 400
 
-# Approved hosted deployment id -> the canonical SHA-256 of its record. Empty in this candidate. Adding, changing or
-# removing an entry is a reviewed code change that cites the builder's recorded approval of that exact record.
-APPROVED_HOSTED_DEPLOYMENTS: Mapping[str, str] = {"edgeos-fun-vps1": "e7a483e5b0d9a213c4bd4a6cd8447d6bfb66cf3c23f87126b4fd68e0ceaa39d7"}
+# Approved hosted deployment id -> the canonical SHA-256 of its record. It names the one registered deployment.
+# Adding, changing or removing an entry is a reviewed code change that cites the builder's recorded approval of that
+# exact record.
+APPROVED_HOSTED_DEPLOYMENTS: Mapping[str, str] = {"edgeos-fun-vps1": "1b169e7b794150a161b2e59fd8184e7d2af6cb3eb90396da6ea8909807e7d0d9"}
 
 
 class HostedDeploymentRefused(RuntimeError):
