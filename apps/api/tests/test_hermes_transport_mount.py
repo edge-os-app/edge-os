@@ -21,7 +21,7 @@ from edge_os_api.main import create_app
 from edge_os_api.research import hermes_transport_mount as mount_module
 from edge_os_api.research.hermes_interpreter import HermesTurn, HermesTurnResult
 from edge_os_api.research.hermes_transport_mount import AUTHORED_ROUTE, DEFAULT_POLICY, open_transport_mount
-from edge_os_api.research.provider_spend_ledger import SpendLimits, TokenPrice
+from edge_os_api.research.provider_spend_ledger import SpendLimits, TokenPrice, spend_view
 from hermes_cases import case, intake_body, turn_result
 from test_hermes_research_flow import create, retry, rows
 from test_provider_spend_ledger import empty_spend_ledger
@@ -65,7 +65,7 @@ def mounted(env, migrated, client, tmp_path: Path):
         mount = open_transport_mount(settings, limits=limits, image="unused:stand-in", run_id="mount-unit",
                                      evidence_dir=tmp_path / "turns", script_for=lambda turn: {})
         mount.supervision.run_turn = boundary.run_turn  # the job only; guard, identity check and ledger stay real
-        app_client = TestClient(create_app(settings, hermes_runner=mount.runner))
+        app_client = TestClient(create_app(settings, hermes_runner=mount.runner, spend_view=spend_view))
         app_client.__enter__()
         opened.append((mount, app_client))
         return mount, app_client
@@ -238,18 +238,43 @@ def test_the_saved_result_shows_each_attempts_spend_and_the_study_model_cost(mou
 
     settled = saved(create(app_client, owner_a, "concrete-thesis").json())
     assert [a["spend"] for a in settled["attempts"]] == [{"state": "SETTLED", "charge_usd": str(EXACT_CHARGE)}]
-    assert settled["model_cost"] == {"settled_usd": str(EXACT_CHARGE), "settled_calls": 1, "unknown_calls": 0}
+    assert settled["model_cost"] == {"settled_usd": str(EXACT_CHARGE), "settled_calls": 1, "unknown_calls": 0,
+                                     "unit": "CREDIT", "settled_credit": str(EXACT_CHARGE), "held_credit": None}
 
     released = create(app_client, owner_a, "concrete-thesis").json()
     retry(app_client, owner_a, released, released["attempts"][0]["attempt_id"])
     lower_bound = saved(released)  # a released attempt is not settled, so the settled retry is only a lower bound
     assert [a["spend"]["state"] for a in lower_bound["attempts"]] == ["RELEASED", "SETTLED"]
-    assert lower_bound["model_cost"] == {"settled_usd": str(EXACT_CHARGE), "settled_calls": 1, "unknown_calls": 1}
+    assert lower_bound["model_cost"] == {"settled_usd": str(EXACT_CHARGE), "settled_calls": 1, "unknown_calls": 1,
+                                         "unit": "CREDIT", "settled_credit": str(EXACT_CHARGE), "held_credit": None}
 
     held = create(app_client, owner_a, "concrete-thesis").json()
     retry(app_client, owner_a, held, held["attempts"][0]["attempt_id"])  # refused before the ledger: no spend record
     unknown = saved(held)
     assert [a["spend"] for a in unknown["attempts"]] == [{"state": "UNKNOWN", "charge_usd": str(RESERVATION)},
                                                         {"state": None, "charge_usd": None}]
-    assert unknown["model_cost"] == {"settled_usd": None, "settled_calls": 0, "unknown_calls": 2}
+    assert unknown["model_cost"] == {"settled_usd": None, "settled_calls": 0, "unknown_calls": 2,
+                                     "unit": "CREDIT", "settled_credit": None, "held_credit": str(RESERVATION)}
     assert len(boundary.turns) == 4
+
+
+
+def test_the_saved_result_shows_the_owners_shared_budget_in_credit_with_held_liability_as_used(mounted, owner_a) -> None:
+    returned = turn_result(case("concrete-thesis")["provider"])
+    failed = turn_result({"kind": "http_error"})  # one request, usage unknown: the reservation stays UNKNOWN
+    _mount, app_client = mounted(Boundary(job_report(returned), job_report(failed)))
+
+    settled = create(app_client, owner_a, "concrete-thesis").json()
+    # owner cap 0.12 and global cap 0.20; 0.12 - 0.0074285 = 0.1125715 is the smaller headroom
+    assert settled["model_budget"] == {"unit": "CREDIT", "owner_cap_credit": "0.12", "global_cap_credit": "0.2",
+                                       "settled_credit": "0.0074285", "held_credit": "0", "held_calls": 0,
+                                       "available_credit": "0.1125715"}
+
+    held = create(app_client, owner_a, "concrete-thesis").json()
+    saved = app_client.get(f"/v1/research/requests/{held['intake']['record_id']}", headers=owner_a).json()
+    # the UNKNOWN call's whole reservation counts as used: 0.12 - 0.0074285 - 0.054848 = 0.0577235
+    assert saved["model_budget"] == {"unit": "CREDIT", "owner_cap_credit": "0.12", "global_cap_credit": "0.2",
+                                     "settled_credit": "0.0074285", "held_credit": "0.054848", "held_calls": 1,
+                                     "available_credit": "0.0577235"}
+    assert saved["model_cost"]["settled_credit"] is None and saved["model_cost"]["held_credit"] == "0.054848"
+

@@ -1,5 +1,5 @@
 import { OUTCOME_COPY } from "./describe";
-import type { Attempt, AttemptSpend, AttemptStatus, AttemptUsage, Bundle, Finding, ModelCost, ReplyState, RequestSummary } from "./types";
+import type { Attempt, AttemptSpend, AttemptStatus, AttemptUsage, Bundle, Finding, ModelBudget, ModelCost, ReplyState, RequestSummary } from "./types";
 
 /** The three ways the interpreter can fail to give a usable answer. None is a verdict on the user's idea. */
 export type FailureKind = "MALFORMED_OUTPUT" | "UNAVAILABLE" | "OUTCOME_UNKNOWN";
@@ -83,6 +83,32 @@ export function describeModelCost(cost: ModelCost): string {
   if (cost.unknown_calls === 0 && total !== null) return total;
   const unknown = `${cost.unknown_calls} call${cost.unknown_calls === 1 ? "" : "s"} unknown`;
   return total === null ? `unknown, ${unknown}` : `at least ${total}, ${unknown}`;
+}
+
+/** An amount in CREDIT (Orbio's unit, exactly USD 1): the same exact decimal as `usd()`, labelled CREDIT. */
+export function describeCredit(amount: string | null): string | null {
+  const dollars = usd(amount);
+  return dollars === null ? null : `${dollars.slice(1)} CREDIT`;
+}
+
+/** The request's model spend in CREDIT. With any unknown call it is a lower bound; with no settled call it is unknown. */
+export function describeCreditSpend(cost: ModelCost): string {
+  const total = cost.settled_calls > 0 ? describeCredit(cost.settled_credit) : null;
+  const dollars = cost.settled_calls > 0 ? usd(cost.settled_usd) : null;
+  if (cost.unknown_calls === 0 && total !== null && dollars !== null) return `spent ${total} (USD ${dollars.slice(1)})`;
+  const unknown = `${cost.unknown_calls} call${cost.unknown_calls === 1 ? "" : "s"} unknown`;
+  return total === null ? `unknown, ${unknown}` : `at least ${total}, ${unknown}`;
+}
+
+/** The owner's shared model budget. Held calls are used budget. No budget from the API means it is not set, not 0. */
+export function describeModelBudget(budget: ModelBudget | null): string {
+  if (budget === null) return "budget not set";
+  const available = usd(budget.available_credit), cap = describeCredit(budget.owner_cap_credit);
+  const held = describeCredit(budget.held_credit);
+  if (available === null || cap === null || held === null) return "unknown";
+  const shared = `available ${available.slice(1)} of ${cap}, shared by all your studies`;
+  if (budget.held_calls === 0) return shared;
+  return `${shared}; ${held} held by ${budget.held_calls} call${budget.held_calls === 1 ? "" : "s"} of unknown cost`;
 }
 
 export function describeLatency(ms: number | null): string {

@@ -45,12 +45,35 @@ from spend_ledger import (  # noqa: E402
     Settlement, TokenPrice, Unresolved, _check_smallest_limit, _usd, _valid_tokens, _valid_usage, fitted_output_tokens,
 )
 
-__all__ = ["AttemptNotSaved", "PostgresSpendLedger", "SpendLimits"]
+__all__ = ["AttemptNotSaved", "PostgresSpendLedger", "SpendLimits", "spend_view"]
 
 SCHEMA = "usage_local"
 OPERATOR_SOURCE = "operator:"
 LIABILITY = ("coalesce(sum(CASE WHEN state = 'SETTLED' THEN charged_nano_usd "
              "WHEN state IN ('RESERVED', 'UNKNOWN') THEN reserved_nano_usd ELSE 0 END), 0)")
+
+
+def spend_view(session: Session, owner_id: uuid.UUID | str) -> dict[str, int] | None:
+    """The owner's model budget as the ledger holds it now, in integer nano-USD. Read only: it takes no lock, writes
+    nothing and does not freeze the settings.
+
+    None when the settings row does not exist yet (the ledger was never used): the budget is not set, which is not 0.
+    Otherwise `owner_cap` and `global_cap` (the frozen caps), the owner's `settled` charges, `held` (RESERVED and UNKNOWN
+    reservations, which are used budget until settled) and `held_calls`, and `available`: the smaller of the owner's and
+    the global headroom, the most the next reservation could hold. One statement, so one consistent snapshot."""
+    row = session.execute(text(
+        f"SELECT s.global_cap_nano_usd, s.owner_cap_nano_usd, a.settled, a.held, a.held_calls, a.total "
+        f"FROM {SCHEMA}.provider_spend_settings s CROSS JOIN ("
+        "SELECT coalesce(sum(CASE WHEN owner_id = :o AND state = 'SETTLED' THEN charged_nano_usd END), 0) AS settled, "
+        "coalesce(sum(CASE WHEN owner_id = :o AND state IN ('RESERVED', 'UNKNOWN') THEN reserved_nano_usd END), 0) AS held, "
+        "count(*) FILTER (WHERE owner_id = :o AND state IN ('RESERVED', 'UNKNOWN')) AS held_calls, "
+        f"{LIABILITY} AS total FROM {SCHEMA}.provider_spend_reservations) a WHERE s.settings_id = 1"),
+        {"o": uuid.UUID(str(owner_id))}).first()
+    if row is None:
+        return None
+    global_cap, owner_cap, settled, held, held_calls, total = (int(value) for value in row)
+    return {"owner_cap": owner_cap, "global_cap": global_cap, "settled": settled, "held": held, "held_calls": held_calls,
+            "available": min(owner_cap - settled - held, global_cap - total)}
 
 
 class AttemptNotSaved(LookupError):

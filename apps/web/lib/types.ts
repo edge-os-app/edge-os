@@ -83,8 +83,20 @@ export interface Question {
 export type AttemptStatus = "STARTED" | "COMPLETED" | "TRUNCATED" | "PROVIDER_FAILED" | "TIMED_OUT" | "INTERRUPTED" | "UNKNOWN";
 /** One attempt's spend as the ledger recorded it. Only a SETTLED charge is a cost; any other charge is a held reservation. */
 export interface AttemptSpend { state: string | null; charge_usd: string | null }
-/** The request's model cost from the API: the exact sum of settled charges, and how many attempts have no known cost. */
-export interface ModelCost { settled_usd: string | null; settled_calls: number; unknown_calls: number }
+/**
+ * The request's model cost from the API: the exact sum of settled charges, and how many attempts have no known cost.
+ * CREDIT is Orbio's unit, exactly USD 1 of usage: `settled_credit` is the same amount as `settled_usd`. `held_credit` is
+ * a lower bound of what RESERVED and UNKNOWN calls hold; it is liability, not a cost.
+ */
+export interface ModelCost {
+  settled_usd: string | null; settled_calls: number; unknown_calls: number;
+  unit: "CREDIT"; settled_credit: string | null; held_credit: string | null;
+}
+/** The owner's model budget from the spend ledger, in CREDIT. Shared by all the owner's studies; held calls count as used. */
+export interface ModelBudget {
+  unit: "CREDIT"; owner_cap_credit: string; global_cap_credit: string; settled_credit: string; held_credit: string;
+  held_calls: number; available_credit: string;
+}
 export interface AttemptUsage { source: "PROVIDER_REPORTED" | "UNKNOWN"; input_tokens: number | null; output_tokens: number | null; total_tokens: number | null }
 
 /** One recorded interpreter attempt. It holds structured values and hashes, never the generated text. */
@@ -145,6 +157,8 @@ export interface Bundle {
   outcomes: { interpretation_revision_id: string | null; record: Envelope<Outcome> }[];
   attempts: Attempt[];
   model_cost: ModelCost | null;
+  /** Null when no spend ledger serves this interpreter: the budget is not set, which is not 0. */
+  model_budget?: ModelBudget | null;
   late_results: LateResult[];
   drafts: Envelope<{ draft_id: string; strategy_id: string; source_syntax: Strategy; interpretation_revision_id: string }>[];
   publications: Envelope<Record<string, unknown>>[];

@@ -126,13 +126,18 @@ def enforce_write_limit(request: Request, principal: Principal, settings: Settin
 
 def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner | None = None,
                research_runtime: ReleasedSourceRuntime | None = None,
-               hermes_config: HermesInterpreterConfig | None = None) -> FastAPI:
+               hermes_config: HermesInterpreterConfig | None = None,
+               spend_view: Callable[[Session, uuid.UUID], dict[str, int] | None] | None = None) -> FastAPI:
     """Compose the application. `hermes_runner` is the process boundary of the local Hermes interpreter.
 
     Only the `hermes_local` setting uses it, and that setting needs it. `hermes_config` is the interpreter configuration
     of the release that runner serves (`research/hermes_relay_composition.py`); without one the runner serves the local
     fake provider configuration. A configuration needs its runner. In production it also needs an approved hosted
     deployment record that names its relay release, and a production `hermes_local` without a configuration is refused.
+
+    `spend_view` is the read of the ledger the Hermes runner reserves through (`research/provider_spend_ledger.py`).
+    With it, each saved result shows the owner's shared model budget in CREDIT; without it the budget is not set (None,
+    never 0). It needs `hermes_local` and its runner. The factory itself never imports the ledger.
 
     `research_runtime` is a composed operating release (`core/research/released_source_runtime.py`). Without one, the
     server bootstrap composes the approved code-owned release, the same one the worker composes; exactly one is
@@ -151,6 +156,8 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     if settings.env == "production" and settings.interpreter == "hermes_local" and hermes_config is None:
         raise ConfigError("invalid configuration: interpreter: production hermes_local needs the approved relay "
                           "release configuration")
+    if spend_view is not None and (settings.interpreter != "hermes_local" or hermes_runner is None):
+        raise ConfigError("invalid configuration: interpreter: a spend view needs hermes_local and its Hermes runner")
     if hermes_config is not None and (settings.interpreter != "hermes_local" or hermes_runner is None):
         raise ConfigError("invalid configuration: interpreter: a Hermes release configuration needs hermes_local "
                           "and its Hermes runner")
@@ -191,7 +198,7 @@ def create_app(settings: Settings | None = None, hermes_runner: HermesTurnRunner
     session_factory = make_session_factory(engine)
     started_at = service.utcnow().isoformat()
     hermes = (HermesResearch(hermes_runner, session_factory, AdvisoryLockGuard(engine), time.monotonic,
-                             hermes_config or LOCAL_FAKE_CONFIG)
+                             hermes_config or LOCAL_FAKE_CONFIG, spend_view=spend_view)
               if settings.interpreter == "hermes_local" and hermes_runner is not None else None)
 
     @asynccontextmanager
