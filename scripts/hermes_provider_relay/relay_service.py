@@ -386,7 +386,7 @@ class Relay:
             decision = ProviderRequestGuard(policy, logical, None).admit(body, GUARD_HEADERS)
             refusal = None if decision.admitted else f"guard:{decision.reason}"
         if refusal is None and self.actual is not None:  # the frozen record, not only the host's policy (A6)
-            refusal = self.actual.body_refusal(body, attempt)
+            refusal = self.actual.body_refusal(body, attempt, granted_max_tokens=grant["policy"]["max_output_tokens"])
         if refusal is not None:
             return self._refuse(attempt, grant, refusal)
         with self.lock:

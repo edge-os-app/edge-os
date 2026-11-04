@@ -86,9 +86,10 @@ class Rig:
     def relay(self) -> relay_service.Relay:
         return relay_service.Relay(json.loads(json.dumps(self.config)))
 
-    def run(self, attempt: str, wire: bytes, *, extra: dict[str, Any] = EXTRA) -> relay_service.Relay:
+    def run(self, attempt: str, wire: bytes, *, extra: dict[str, Any] = EXTRA,
+            max_output_tokens: int = 4096) -> relay_service.Relay:
         relay = self.relay()
-        policy = asdict(GuardPolicy(model="fixture-model/1", max_output_tokens=4096, max_request_bytes=12_000,
+        policy = asdict(GuardPolicy(model="fixture-model/1", max_output_tokens=max_output_tokens, max_request_bytes=12_000,
                                     max_envelope_chars=2_500, required_extra=extra))
         grant = issue_grant(release=relay.release, run_id="run-1", channel_root="jobs", owner_id="owner-a",
                             request_id="intake-1", attempt_id=attempt, scope="intake:intake-1", policy=policy,
@@ -196,3 +197,26 @@ def test_an_authored_relay_also_refuses_an_encoded_reply(tmp_path: Path, monkeyp
     finished = rig.record_of("a4", "finished")
     assert (finished["outcome"], finished["refusal"]) == ("refused_reply", "reply_encoded_refused")
     assert rig.sends[0]["gateway_socket"] is None
+
+
+# --- The per-call output limit (ORBIO_CREDIT_DESIGN 2b) ----------------------------------------------------------------
+
+def test_a_request_at_its_grants_lowered_limit_is_sent_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rig = Rig(tmp_path, monkeypatch)
+    rig.run("a5", actual_body("a5", max_tokens=1880), max_output_tokens=1880)
+    [send] = rig.sends
+    assert json.loads(send["body"])["max_tokens"] == 1880 and rig.record_of("a5", "started") is not None
+    assert rig.record_of("a5", "finished")["outcome"] == "reply"
+
+
+@pytest.mark.parametrize("granted, sent", [(1880, 4096), (1880, 1879), (4097, 4097)],
+                         ids=["release-limit-under-lowered-grant", "below-grant", "grant-above-release"])
+def test_a_body_whose_limit_is_not_the_granted_one_is_refused_before_any_start(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, granted: int, sent: int) -> None:
+    rig = Rig(tmp_path, monkeypatch)
+    rig.run("a6", actual_body("a6", max_tokens=sent), max_output_tokens=granted)
+    assert rig.sends == [] and rig.record_of("a6", "started") is None  # no start record and no provider request
+    closed = rig.record_of("a6", "closed")
+    assert closed["started"] is False and closed["why"].startswith("refused:")
+    if granted > 4096:
+        assert closed["why"] == "refused:grant_release_mismatch"

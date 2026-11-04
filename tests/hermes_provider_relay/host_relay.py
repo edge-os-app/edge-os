@@ -106,9 +106,10 @@ class HostRelay:
     # --- driving ------------------------------------------------------------------------------------------------------
 
     def grant(self, attempt: str, *, key: bytes | None = None, release: RelayRelease | None = None,
-              timeout_seconds: float = 10.0, issued_at: float | None = None, **changes: Any) -> dict[str, Any]:
+              timeout_seconds: float = 10.0, issued_at: float | None = None, policy: dict[str, Any] | None = None,
+              **changes: Any) -> dict[str, Any]:
         grant = issue_grant(release=release or self.release, run_id="run-1", channel_root="jobs", owner_id="owner-a",
-                            request_id="intake-1", attempt_id=attempt, scope="intake:intake-1", policy=POLICY,
+                            request_id="intake-1", attempt_id=attempt, scope="intake:intake-1", policy=policy or POLICY,
                             system_prompt=SYSTEM, user_message=TASK, issued_at=issued_at or time.time(),
                             timeout_seconds=timeout_seconds, key=key or self.admission_key)
         grant.update(changes)

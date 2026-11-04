@@ -1140,7 +1140,14 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
     def run_turn(self, turn: HermesTurn) -> HermesTurnResult:
         """One turn. Recovery of earlier pending cleanup runs first, on its own budget; while any stays unconfirmed, no
         new work starts (CleanupPending, nothing sent). The turn is registered as pending cleanup before the job starts,
-        and the record is removed only when the turn ends cleanly."""
+        and the record is removed only when the turn ends cleanly.
+
+        The job's guard enforces the turn's own output limit, which the spend reservation may have lowered. A turn whose
+        limit is outside 1 to the policy's is refused before anything else (RequestNotAdmitted, nothing sent)."""
+        limit = turn.max_output_tokens
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= self.policy.max_output_tokens:
+            return HermesTurnResult(status="PROVIDER_FAILED", text=None, usage=Usage(), request_count=0,
+                                    observed={"guard_admitted": 0}, error_class="RequestNotAdmitted")
         self.recover_pending(self.recovery_budget_seconds)
         if self._blocking_records() or self._unremovable_temporaries() or not self._storage_writable():
             return HermesTurnResult(status="PROVIDER_FAILED", text=None, usage=Usage(), request_count=0,
@@ -1229,6 +1236,8 @@ class GuardedDockerTurnRunner(DockerHermesTurnRunner):
 
     def _run_container(self, turn: HermesTurn, task_dir: Path, plan: _TurnPlan, private: Path, launch: _Launch) -> HermesTurnResult:
         output, policy = task_dir / "output", plan.policy
+        if turn.max_output_tokens != policy.max_output_tokens:  # the call's own limit, checked at the start of the turn
+            policy = replace(policy, max_output_tokens=turn.max_output_tokens)
         job = {"attempt_id": turn.attempt_id, "system_prompt": turn.system_prompt, "user_message": turn.user_message,
                "model": turn.model, "route": turn.route, "max_output_tokens": turn.max_output_tokens,
                "run_budget_seconds": plan.run_budget, "provider_script": dict(self.script_for(turn)),

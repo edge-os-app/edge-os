@@ -100,6 +100,9 @@ class RelayApplicationDefinition:
     channel_root: str  # this application's job channel under the relay
     global_cap_usd: Decimal  # every owner together
     owner_cap_usd: Decimal  # each owner on their own
+    # The smallest output limit worth a call (relay CONTRACT A9). None, the default: every call reserves and grants the
+    # record's full limit. A value lets a reservation lower one call's limit to the remaining budget, never below it.
+    min_output_tokens: int | None = None
 
 
 # The one approved release, hermes-first-call-1. Its record and price bytes are the frozen files in
@@ -145,6 +148,7 @@ class HermesApplicationRelease:
     channel_root: str
     limits: SpendLimits
     required_extra_sha256: str  # the policy's request shape when bound; checked again before anything is built
+    min_output_tokens: int | None = None  # the definition's, checked against the record's limit (CONTRACT A9)
 
     def unchanged(self) -> bool:
         """The owned request shape is still exactly the bound one and still the record's."""
@@ -287,6 +291,10 @@ def bind_release(definition: RelayApplicationDefinition) -> HermesApplicationRel
     if not isinstance(channel, str) or not relay_admission.IDENTIFIER.fullmatch(channel):
         raise _Refused("the channel root must be 1-64 letters, digits or ._:-")
     release = actual.release
+    smallest = definition.min_output_tokens
+    if smallest is not None and (isinstance(smallest, bool) or not isinstance(smallest, int)
+                                 or not 1 <= smallest <= release.max_output_tokens):
+        raise _Refused("min_output_tokens must be a whole number from 1 to the record's max_tokens")
     limits = SpendLimits(global_cap_usd=definition.global_cap_usd, owner_cap_usd=definition.owner_cap_usd, price=price)
     approval = record["approval"]
     config = HermesInterpreterConfig(
@@ -301,7 +309,7 @@ def bind_release(definition: RelayApplicationDefinition) -> HermesApplicationRel
                            max_request_bytes=release.max_request_bytes,
                            max_envelope_chars=DEFAULT_POLICY.max_envelope_chars, required_extra=extra),
         config=config, image=image, channel_root=definition.channel_root, limits=limits,
-        required_extra_sha256=hashlib.sha256(_canonical(extra)).hexdigest())
+        required_extra_sha256=hashlib.sha256(_canonical(extra)).hexdigest(), min_output_tokens=smallest)
 
 
 @dataclass
@@ -366,7 +374,8 @@ def compose_application(release: HermesApplicationRelease, engine: Engine, *, en
                           evidence_dir=evidence_dir, script_for=lambda turn: {},
                           timeout_seconds=release.actual.timeout_seconds, run_budget_seconds=run_budget_seconds,
                           seal_grace_seconds=seal_grace_seconds, recovery_budget_seconds=recovery_budget_seconds,
-                          close_budget_seconds=close_budget_seconds, actual=release.actual, price=release.price)
+                          close_budget_seconds=close_budget_seconds, actual=release.actual, price=release.price,
+                          min_output_tokens=release.min_output_tokens)
     return HermesApplication(release, job.runner, job.supervision, spend, engine)
 
 

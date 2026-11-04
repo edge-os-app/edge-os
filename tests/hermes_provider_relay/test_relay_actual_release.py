@@ -180,3 +180,21 @@ def test_a_record_timeout_within_the_gateways_tunnel_limit_is_accepted(seconds: 
 def test_a_record_timeout_beyond_the_gateways_tunnel_limit_or_not_a_whole_number_is_refused(seconds: object) -> None:
     with pytest.raises(ValueError, match="timeout_seconds"):
         load(record(timeout_seconds=seconds))
+
+
+# --- The per-call output limit (ORBIO_CREDIT_DESIGN 2b) ----------------------------------------------------------------
+
+def test_a_body_at_the_grants_lowered_limit_passes() -> None:
+    assert load(record()).body_refusal(body(max_tokens=1880), "att-1", granted_max_tokens=1880) is None
+
+
+@pytest.mark.parametrize("raw, granted", [
+    (body(), 1880),  # the release's limit, but the grant lowered it
+    (body(max_tokens=1879), 1880),
+    (body(max_tokens=4097), 4097),  # a granted limit above the release is never admitted
+    (body(max_tokens=1), True),
+    (body(max_tokens=1880), None),  # without a granted limit the body must carry the release's
+], ids=["release-limit-under-lowered-grant", "one-below-grant", "grant-above-release", "grant-not-a-number",
+        "no-grant-limit"])
+def test_a_body_whose_max_tokens_differs_from_the_granted_limit_is_refused(raw: bytes, granted: Any) -> None:
+    assert load(record()).body_refusal(raw, "att-1", granted_max_tokens=granted) == "body_max_tokens_mismatch"

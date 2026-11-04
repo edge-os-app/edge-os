@@ -1,6 +1,9 @@
 """Wraps a Hermes turn runner with the request policy and the spend ledger. Support code, not wired into the app.
 
 Order for one turn: check the turn against the policy, reserve the worst-case cost, run the wrapped runner, settle.
+With `min_output_tokens`, the reservation may lower the call's output limit to what the remaining budget covers (never
+below `min_output_tokens`), and the wrapped runner gets the turn with exactly that reserved limit. Without it (the
+default) the turn and the reservation are exactly the policy's.
 The wrapped runner is never called when the check or the reservation fails. After the run, only provable facts free
 or fix a reservation: a counted single request with usable usage is charged exactly, and a run that admitted no
 request is released. Anything else keeps the full reservation as liability and blocks the next attempt in its scope.
@@ -19,7 +22,7 @@ from dataclasses import replace
 from edge_os_api.research.hermes_interpreter import HermesTurn, HermesTurnResult, HermesTurnRunner
 from edge_os_api.research.interpretation_attempts import Usage
 from provider_guard import GuardPolicy
-from spend_ledger import CapExceeded, ReservationExists, ScopeBlocked, SpendLedger
+from spend_ledger import CapExceeded, ReservationExists, ScopeBlocked, SpendLedger, _check_smallest_limit
 
 __all__ = ["GuardedTurnRunner", "INPUT_TOKEN_MARGIN"]
 
@@ -37,18 +40,23 @@ def _refused(turn: HermesTurn, error_class: str) -> HermesTurnResult:
 
 class GuardedTurnRunner:
     def __init__(self, delegate: HermesTurnRunner, ledger: SpendLedger, policy: GuardPolicy,
-                 scope_for: Callable[[HermesTurn], str]) -> None:
+                 scope_for: Callable[[HermesTurn], str], *, min_output_tokens: int | None = None) -> None:
+        if min_output_tokens is not None:  # refused here, so no reservation can record a limit the relay would refuse
+            _check_smallest_limit(min_output_tokens, policy.max_output_tokens)
         self._delegate, self._ledger, self._policy, self._scope_for = delegate, ledger, policy, scope_for
+        self._min_output_tokens = min_output_tokens
 
     def run_turn(self, turn: HermesTurn) -> HermesTurnResult:
         policy = self._policy
         logical = len(turn.system_prompt.encode("utf-8")) + len(turn.user_message.encode("utf-8"))
         if turn.model != policy.model or turn.max_output_tokens != policy.max_output_tokens or logical > policy.max_request_bytes:
             return _refused(turn, "RequestNotAdmitted")
+        smallest = {} if self._min_output_tokens is None else {"min_output_tokens": self._min_output_tokens}
         try:
-            self._ledger.reserve(turn.attempt_id, scope=self._scope_for(turn),
-                                 max_input_tokens=policy.max_request_bytes + INPUT_TOKEN_MARGIN,
-                                 max_output_tokens=policy.max_output_tokens)
+            reservation = self._ledger.reserve(turn.attempt_id, scope=self._scope_for(turn),
+                                               max_input_tokens=policy.max_request_bytes + INPUT_TOKEN_MARGIN,
+                                               max_output_tokens=policy.max_output_tokens, **smallest)
+            limit = reservation.max_output_tokens
         except CapExceeded:
             return _refused(turn, "SpendCapReached")
         except ScopeBlocked:
@@ -59,7 +67,7 @@ class GuardedTurnRunner:
             log.error("spend reservation failed: %s", type(error).__name__)
             return _refused(turn, "SpendLedgerUnavailable")
         try:
-            result = self._delegate.run_turn(turn)
+            result = self._delegate.run_turn(turn if limit == turn.max_output_tokens else replace(turn, max_output_tokens=limit))
         except BaseException as error:
             self._keep_liability(turn, type(error).__name__)
             raise
