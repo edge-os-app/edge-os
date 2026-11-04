@@ -92,11 +92,14 @@ export interface ModelCost {
   settled_usd: string | null; settled_calls: number; unknown_calls: number;
   unit: "CREDIT"; settled_credit: string | null; held_credit: string | null;
 }
-/** The owner's model budget from the spend ledger, in CREDIT. Shared by all the owner's studies; held calls count as used. */
-export interface ModelBudget {
-  unit: "CREDIT"; owner_cap_credit: string; global_cap_credit: string; settled_credit: string; held_credit: string;
-  held_calls: number; available_credit: string;
-}
+/**
+ * The owner's model budget from the spend ledger, in CREDIT. Shared by all the owner's studies and limited by the global
+ * ceiling; held calls count as used. UNKNOWN: the ledger could not be read, which is neither "not set" nor zero.
+ */
+export type ModelBudget =
+  | { unit: "CREDIT"; state: "SET"; owner_cap_credit: string; global_cap_credit: string; settled_credit: string;
+      held_credit: string; held_calls: number; available_credit: string }
+  | { unit: "CREDIT"; state: "UNKNOWN" };
 export interface AttemptUsage { source: "PROVIDER_REPORTED" | "UNKNOWN"; input_tokens: number | null; output_tokens: number | null; total_tokens: number | null }
 
 /** One recorded interpreter attempt. It holds structured values and hashes, never the generated text. */

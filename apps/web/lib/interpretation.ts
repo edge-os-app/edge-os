@@ -77,12 +77,16 @@ export function describeAttemptCost(spend: AttemptSpend): string {
   return (spend.state === "SETTLED" ? usd(spend.charge_usd) : null) ?? "Unknown";
 }
 
+/** A total with its unknown calls: complete, a lower bound ("at least"), or unknown. Never a zero for unknown. */
+function describeTotal(total: string | null, unknownCalls: number, complete: (total: string) => string): string {
+  if (unknownCalls === 0 && total !== null) return complete(total);
+  const unknown = `${unknownCalls} call${unknownCalls === 1 ? "" : "s"} unknown`;
+  return total === null ? `unknown, ${unknown}` : `at least ${total}, ${unknown}`;
+}
+
 /** The request's total model cost. With any unknown call it is a lower bound, and with no settled call it is unknown. */
 export function describeModelCost(cost: ModelCost): string {
-  const total = cost.settled_calls > 0 ? usd(cost.settled_usd) : null;
-  if (cost.unknown_calls === 0 && total !== null) return total;
-  const unknown = `${cost.unknown_calls} call${cost.unknown_calls === 1 ? "" : "s"} unknown`;
-  return total === null ? `unknown, ${unknown}` : `at least ${total}, ${unknown}`;
+  return describeTotal(cost.settled_calls > 0 ? usd(cost.settled_usd) : null, cost.unknown_calls, (total) => total);
 }
 
 /** An amount in CREDIT (Orbio's unit, exactly USD 1): the same exact decimal as `usd()`, labelled CREDIT. */
@@ -93,20 +97,20 @@ export function describeCredit(amount: string | null): string | null {
 
 /** The request's model spend in CREDIT. With any unknown call it is a lower bound; with no settled call it is unknown. */
 export function describeCreditSpend(cost: ModelCost): string {
-  const total = cost.settled_calls > 0 ? describeCredit(cost.settled_credit) : null;
   const dollars = cost.settled_calls > 0 ? usd(cost.settled_usd) : null;
-  if (cost.unknown_calls === 0 && total !== null && dollars !== null) return `spent ${total} (USD ${dollars.slice(1)})`;
-  const unknown = `${cost.unknown_calls} call${cost.unknown_calls === 1 ? "" : "s"} unknown`;
-  return total === null ? `unknown, ${unknown}` : `at least ${total}, ${unknown}`;
+  const total = dollars === null ? null : describeCredit(cost.settled_credit);
+  return describeTotal(total, cost.unknown_calls, (credit) => `spent ${credit} (USD ${dollars!.slice(1)})`);
 }
 
 /** The owner's shared model budget. Held calls are used budget. No budget from the API means it is not set, not 0. */
 export function describeModelBudget(budget: ModelBudget | null): string {
   if (budget === null) return "budget not set";
+  if (budget.state !== "SET") return "unknown";
   const available = usd(budget.available_credit), cap = describeCredit(budget.owner_cap_credit);
-  const held = describeCredit(budget.held_credit);
-  if (available === null || cap === null || held === null) return "unknown";
-  const shared = `available ${available.slice(1)} of ${cap}, shared by all your studies`;
+  const ceiling = describeCredit(budget.global_cap_credit), held = describeCredit(budget.held_credit);
+  if (available === null || cap === null || ceiling === null || held === null || !Number.isInteger(budget.held_calls)
+      || budget.held_calls < 0) return "unknown";
+  const shared = `available ${available.slice(1)} of ${cap}, shared by all your studies and limited by the global ceiling of ${ceiling}`;
   if (budget.held_calls === 0) return shared;
   return `${shared}; ${held} held by ${budget.held_calls} call${budget.held_calls === 1 ? "" : "s"} of unknown cost`;
 }

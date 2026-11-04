@@ -694,7 +694,7 @@ def test_a_reservation_that_no_longer_names_the_saved_owner_gets_no_grant_and_is
 # --- The per-call output limit (ORBIO_CREDIT_DESIGN 2b) ----------------------------------------------------------------
 
 def test_no_registered_release_sets_a_smallest_output_limit() -> None:
-    # The release value is an open builder question (Q3): the mechanism exists, but every call keeps the full limit.
+    # The release value is an open builder question (design Q2, status-file item 3): the mechanism exists, but every call keeps the full limit.
     assert [d.min_output_tokens for d in composition.RELEASE_DEFINITIONS] == [None] * len(composition.RELEASE_DEFINITIONS)
 
 

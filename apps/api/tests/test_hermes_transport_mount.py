@@ -266,14 +266,14 @@ def test_the_saved_result_shows_the_owners_shared_budget_in_credit_with_held_lia
 
     settled = create(app_client, owner_a, "concrete-thesis").json()
     # owner cap 0.12 and global cap 0.20; 0.12 - 0.0074285 = 0.1125715 is the smaller headroom
-    assert settled["model_budget"] == {"unit": "CREDIT", "owner_cap_credit": "0.12", "global_cap_credit": "0.2",
+    assert settled["model_budget"] == {"unit": "CREDIT", "state": "SET", "owner_cap_credit": "0.12", "global_cap_credit": "0.2",
                                        "settled_credit": "0.0074285", "held_credit": "0", "held_calls": 0,
                                        "available_credit": "0.1125715"}
 
     held = create(app_client, owner_a, "concrete-thesis").json()
     saved = app_client.get(f"/v1/research/requests/{held['intake']['record_id']}", headers=owner_a).json()
     # the UNKNOWN call's whole reservation counts as used: 0.12 - 0.0074285 - 0.054848 = 0.0577235
-    assert saved["model_budget"] == {"unit": "CREDIT", "owner_cap_credit": "0.12", "global_cap_credit": "0.2",
+    assert saved["model_budget"] == {"unit": "CREDIT", "state": "SET", "owner_cap_credit": "0.12", "global_cap_credit": "0.2",
                                      "settled_credit": "0.0074285", "held_credit": "0.054848", "held_calls": 1,
                                      "available_credit": "0.0577235"}
     assert saved["model_cost"]["settled_credit"] is None and saved["model_cost"]["held_credit"] == "0.054848"

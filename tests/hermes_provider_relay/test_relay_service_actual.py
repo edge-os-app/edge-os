@@ -209,14 +209,18 @@ def test_a_request_at_its_grants_lowered_limit_is_sent_once(tmp_path: Path, monk
     assert rig.record_of("a5", "finished")["outcome"] == "reply"
 
 
-@pytest.mark.parametrize("granted, sent", [(1880, 4096), (1880, 1879), (4097, 4097)],
-                         ids=["release-limit-under-lowered-grant", "below-grant", "grant-above-release"])
+# The relay's own guard checks the body against the grant's policy first, so a body off the granted limit is refused
+# there; the record check (`body_refusal`) uses the same granted limit, and the test above shows it receives it: without
+# it, the record check would refuse the lowered body as off the release's 4,096.
+@pytest.mark.parametrize("granted, sent, why", [
+    (1880, 4096, "refused:guard:output_limit_not_as_configured"),
+    (1880, 1879, "refused:guard:output_limit_not_as_configured"),
+    (4097, 4097, "refused:grant_release_mismatch"),
+], ids=["release-limit-under-lowered-grant", "below-grant", "grant-above-release"])
 def test_a_body_whose_limit_is_not_the_granted_one_is_refused_before_any_start(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, granted: int, sent: int) -> None:
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, granted: int, sent: int, why: str) -> None:
     rig = Rig(tmp_path, monkeypatch)
     rig.run("a6", actual_body("a6", max_tokens=sent), max_output_tokens=granted)
     assert rig.sends == [] and rig.record_of("a6", "started") is None  # no start record and no provider request
     closed = rig.record_of("a6", "closed")
-    assert closed["started"] is False and closed["why"].startswith("refused:")
-    if granted > 4096:
-        assert closed["why"] == "refused:grant_release_mismatch"
+    assert (closed["started"], closed["why"]) == (False, why)

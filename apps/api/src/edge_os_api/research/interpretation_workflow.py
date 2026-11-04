@@ -205,14 +205,18 @@ def _credit(nano: int) -> str:
         return format(Decimal(nano).scaleb(-9).normalize(), "f")
 
 
+UNKNOWN_BUDGET = {"unit": "CREDIT", "state": "UNKNOWN"}
+
+
 def model_budget(view: dict[str, int] | None) -> dict[str, Any] | None:
     """The owner's shared model budget (`provider_spend_ledger.spend_view`) in CREDIT, or None when it is not set.
 
     The budget is the owner's cap shared by all their studies and bounded by the global ceiling; there is no per-study
-    cap. Held liability (RESERVED and UNKNOWN calls) is used budget. A ledger past its cap has nothing available."""
+    cap. Held liability (RESERVED and UNKNOWN calls) is used budget. A ledger past its cap has nothing available.
+    A budget the ledger could not report is `UNKNOWN_BUDGET`, which is neither "not set" nor zero."""
     if view is None:
         return None
-    return {"unit": "CREDIT", "owner_cap_credit": _credit(view["owner_cap"]), "global_cap_credit": _credit(view["global_cap"]),
+    return {"unit": "CREDIT", "state": "SET", "owner_cap_credit": _credit(view["owner_cap"]), "global_cap_credit": _credit(view["global_cap"]),
             "settled_credit": _credit(view["settled"]), "held_credit": _credit(view["held"]),
             "held_calls": view["held_calls"], "available_credit": _credit(max(0, view["available"]))}
 
@@ -590,8 +594,12 @@ class HermesResearch:
         attempts = [public_attempt(v) for v in history]
         budget = None
         if self._spend_view is not None:
-            with self._session_factory() as session:
-                budget = model_budget(self._spend_view(session, principal.user_id))
+            try:
+                with self._session_factory() as session:
+                    budget = model_budget(self._spend_view(session, principal.user_id))
+            except Exception as error:  # noqa: BLE001 - the saved result still loads; its budget is unknown, not 0
+                log.error("model budget not read: %s", type(error).__name__)
+                budget = dict(UNKNOWN_BUDGET)
         return {"attempts": attempts, "model_cost": study_model_cost(attempts), "model_budget": budget,
                 "late_results": [self._public_late(o) for o in self.ledger.late_results(owner, iid)],
                 "retry": {"allowed": state.allowed, "retry_of": state.retry_of, "reason": state.reason},

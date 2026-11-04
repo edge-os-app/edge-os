@@ -6,7 +6,6 @@ it is counted, never added as zero, so the total is then only a lower bound. Amo
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 from edge_os_api.research.interpretation_workflow import model_budget, study_model_cost
@@ -104,58 +103,9 @@ def test_an_attempt_without_a_recorded_charge_is_unknown_and_not_in_the_held_low
     assert study_model_cost([attempt("SETTLEMENT_NOT_RECORDED", None)])["held_credit"] is None
 
 
-# --- The owner's budget from the ledger: `spend_view` (PostgreSQL) and its CREDIT form -----------------------------------
-# TEST prices 2.00 / 7.50 USD per million: a reservation is 54,848,000 nano-USD and 1,423 + 611 tokens settle at 7,428,500.
-
-from test_provider_spend_ledger import BOUNDS, attempts, clean_spend, factory, limits  # noqa: E402,F401 - fixtures
-
-
-def owner_of(client, headers) -> uuid.UUID:
-    return uuid.UUID(client.get("/v1/me", headers=headers).json()["user_id"])
-
-
-def test_a_ledger_that_was_never_used_has_no_budget_rather_than_a_zero_one(clean_spend, client, owner_a) -> None:
-    from sqlalchemy import text
-
-    from edge_os_api.research.provider_spend_ledger import spend_view
-    with clean_spend() as session:
-        assert spend_view(session, owner_of(client, owner_a)) is None
-        assert session.execute(text("SELECT count(*) FROM usage_local.provider_spend_settings")).scalar_one() == 0
-    assert model_budget(None) is None
-
-
-def test_held_liability_is_used_budget_and_the_smaller_headroom_is_what_is_available(
-        clean_spend, attempts, client, owner_a, owner_b) -> None:
-    from edge_os_api.research.provider_spend_ledger import PostgresSpendLedger, spend_view
-    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.20", owner_cap="0.12"))
-    settled, lost, released, other = (attempts.new(owner_a), attempts.new(owner_a), attempts.new(owner_a),
-                                      attempts.new(owner_b))
-    spend.reserve(settled, scope="s1", **BOUNDS)
-    spend.settle(settled, input_tokens=1_423, output_tokens=611)
-    spend.reserve(lost, scope="s2", **BOUNDS)
-    spend.mark_unknown(lost, reason="the outcome is not known")
-    spend.reserve(released, scope="s3", **BOUNDS)
-    spend.release_unsent(released, reason="no request was admitted")
-    spend.reserve(other, scope="s4", **BOUNDS)  # owner B's call, still RESERVED
-
-    with clean_spend() as session:
-        mine, theirs = spend_view(session, owner_of(client, owner_a)), spend_view(session, owner_of(client, owner_b))
-        nobody = spend_view(session, uuid.uuid4())
-
-    # owner A: 120,000,000 - (7,428,500 + 54,848,000) = 57,723,500; everyone: 200,000,000 - 117,124,500 = 82,875,500
-    assert mine == {"owner_cap": 120_000_000, "global_cap": 200_000_000, "settled": 7_428_500, "held": 54_848_000,
-                    "held_calls": 1, "available": 57_723_500}
-    assert theirs == {"owner_cap": 120_000_000, "global_cap": 200_000_000, "settled": 0, "held": 54_848_000,
-                      "held_calls": 1, "available": 65_152_000}
-    assert nobody["available"] == 82_875_500 and (nobody["settled"], nobody["held"], nobody["held_calls"]) == (0, 0, 0)
-    assert model_budget(mine) == {"unit": "CREDIT", "owner_cap_credit": "0.12", "global_cap_credit": "0.2",
-                                  "settled_credit": "0.0074285", "held_credit": "0.054848", "held_calls": 1,
-                                  "available_credit": "0.0577235"}
-
-
 def test_a_budget_past_its_cap_shows_nothing_available_and_exact_amounts() -> None:
     view = {"owner_cap": 2_000_000_000, "global_cap": 2_000_000_000, "settled": 2_000_000_001, "held": 0,
             "held_calls": 0, "available": -1}  # an OVERRUN charge passed the cap
-    assert model_budget(view) == {"unit": "CREDIT", "owner_cap_credit": "2", "global_cap_credit": "2",
+    assert model_budget(view) == {"unit": "CREDIT", "state": "SET", "owner_cap_credit": "2", "global_cap_credit": "2",
                                   "settled_credit": "2.000000001", "held_credit": "0", "held_calls": 0,
                                   "available_credit": "0"}

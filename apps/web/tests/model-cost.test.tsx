@@ -104,7 +104,7 @@ describe("the saved request page", () => {
 // UNKNOWN is never shown as zero, and a budget that is not set is not 0.
 
 const heldUnknown: AttemptSpend = { state: "UNKNOWN", charge_usd: "0.17216" };
-const budget: ModelBudget = { unit: "CREDIT", owner_cap_credit: "2", global_cap_credit: "2", settled_credit: "0.02784",
+const budget: ModelBudget = { unit: "CREDIT", state: "SET", owner_cap_credit: "2", global_cap_credit: "2", settled_credit: "0.02784",
   held_credit: "0.17216", held_calls: 1, available_credit: "1.8" };
 
 describe("CREDIT amounts", () => {
@@ -126,13 +126,15 @@ describe("CREDIT amounts", () => {
 
   it("shows the owner's shared budget with held calls as used, and a missing budget as not set", () => {
     expect(describeModelBudget(budget)).toBe(
-      "available 1.8 of 2 CREDIT, shared by all your studies; 0.17216 CREDIT held by 1 call of unknown cost");
+      "available 1.8 of 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT; 0.17216 CREDIT held by 1 call of unknown cost");
     expect(describeModelBudget({ ...budget, held_credit: "0", held_calls: 0, available_credit: "1.97216" })).toBe(
-      "available 1.97216 of 2 CREDIT, shared by all your studies");
-    expect(describeModelBudget({ ...budget, held_credit: "0.34432", held_calls: 2 })).toBe(
-      "available 1.8 of 2 CREDIT, shared by all your studies; 0.34432 CREDIT held by 2 calls of unknown cost");
+      "available 1.97216 of 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT");
+    expect(describeModelBudget({ ...budget, held_credit: "0.34432", held_calls: 2, available_credit: "1.62784" })).toBe(
+      "available 1.62784 of 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT; 0.34432 CREDIT held by 2 calls of unknown cost");
     expect(describeModelBudget(null)).toBe("budget not set");
     expect(describeModelBudget({ ...budget, available_credit: "not-a-number" })).toBe("unknown");
+    expect(describeModelBudget({ ...budget, held_calls: 1.5 })).toBe("unknown");
+    expect(describeModelBudget({ unit: "CREDIT", state: "UNKNOWN" })).toBe("unknown"); // could not be read: not 0, not "not set"
   });
 });
 
@@ -142,7 +144,7 @@ describe("CREDIT on the attempts list", () => {
       modelBudget={budget} lateResults={[]} open />);
     expect(screen.getByTestId("model-credit")).toHaveTextContent("Model spend: unknown, 1 call unknown");
     expect(screen.getByTestId("model-budget")).toHaveTextContent(
-      "Model budget: available 1.8 of 2 CREDIT, shared by all your studies; 0.17216 CREDIT held by 1 call of unknown cost");
+      "Model budget: available 1.8 of 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT; 0.17216 CREDIT held by 1 call of unknown cost");
     expect(document.body.textContent).not.toMatch(/\b0 CREDIT/);
   });
 

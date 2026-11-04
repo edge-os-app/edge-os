@@ -364,3 +364,65 @@ def test_two_processes_racing_for_the_last_headroom_with_lowered_limits_never_pa
         [("RESERVED", 4_096), ("RESERVED", 4_096), ("RESERVED", 2_156)] + [("CapExceeded", None)] * 3)
     spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.15", owner_cap="0.20"))
     assert spend.committed_usd() == Decimal("0.149994") <= Decimal("0.15")
+
+
+# --- The owner's budget from the ledger: `spend_view` and its CREDIT form (ORBIO_CREDIT_DESIGN 2a) -----------------------------------
+# TEST prices 2.00 / 7.50 USD per million: a reservation is 54,848,000 nano-USD and 1,423 + 611 tokens settle at 7,428,500.
+
+def owner_of(client, headers) -> uuid.UUID:
+    return uuid.UUID(client.get("/v1/me", headers=headers).json()["user_id"])
+
+
+def test_a_ledger_that_was_never_used_has_no_budget_rather_than_a_zero_one(clean_spend, client, owner_a) -> None:
+    from sqlalchemy import text
+
+    from edge_os_api.research.provider_spend_ledger import spend_view
+    with clean_spend() as session:
+        assert spend_view(session, owner_of(client, owner_a)) is None
+        assert session.execute(text("SELECT count(*) FROM usage_local.provider_spend_settings")).scalar_one() == 0
+    from edge_os_api.research.interpretation_workflow import model_budget
+    assert model_budget(None) is None
+
+
+def test_held_liability_is_used_budget_and_the_smaller_headroom_is_what_is_available(
+        clean_spend, attempts, client, owner_a, owner_b) -> None:
+    from edge_os_api.research.provider_spend_ledger import PostgresSpendLedger, spend_view
+    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.20", owner_cap="0.12"))
+    settled, lost, released, other = (attempts.new(owner_a), attempts.new(owner_a), attempts.new(owner_a),
+                                      attempts.new(owner_b))
+    spend.reserve(settled, scope="s1", **BOUNDS)
+    spend.settle(settled, input_tokens=1_423, output_tokens=611)
+    spend.reserve(lost, scope="s2", **BOUNDS)
+    spend.mark_unknown(lost, reason="the outcome is not known")
+    spend.reserve(released, scope="s3", **BOUNDS)
+    spend.release_unsent(released, reason="no request was admitted")
+    spend.reserve(other, scope="s4", **BOUNDS)  # owner B's call, still RESERVED
+
+    with clean_spend() as session:
+        mine, theirs = spend_view(session, owner_of(client, owner_a)), spend_view(session, owner_of(client, owner_b))
+        nobody = spend_view(session, uuid.uuid4())
+
+    # owner A: 120,000,000 - (7,428,500 + 54,848,000) = 57,723,500; everyone: 200,000,000 - 117,124,500 = 82,875,500
+    assert mine == {"owner_cap": 120_000_000, "global_cap": 200_000_000, "settled": 7_428_500, "held": 54_848_000,
+                    "held_calls": 1, "available": 57_723_500}
+    assert theirs == {"owner_cap": 120_000_000, "global_cap": 200_000_000, "settled": 0, "held": 54_848_000,
+                      "held_calls": 1, "available": 65_152_000}
+    assert nobody["available"] == 82_875_500 and (nobody["settled"], nobody["held"], nobody["held_calls"]) == (0, 0, 0)
+    from edge_os_api.research.interpretation_workflow import model_budget
+    assert model_budget(mine) == {"unit": "CREDIT", "state": "SET", "owner_cap_credit": "0.12", "global_cap_credit": "0.2",
+                                  "settled_credit": "0.0074285", "held_credit": "0.054848", "held_calls": 1,
+                                  "available_credit": "0.0577235"}
+
+
+
+def test_a_call_over_the_global_headroom_is_refused_against_the_global_cap(clean_spend, attempts, owner_a, owner_b) -> None:
+    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.07", owner_cap="0.20"))
+    spend.reserve(attempts.new(owner_b), scope="b1", **BOUNDS)  # 0.054848 of the 0.07 everyone shares
+    attempt = attempts.new(owner_a)
+
+    with pytest.raises(CapExceeded) as refused:  # 15,152,000 left, but the input alone costs 24,128,000
+        spend.reserve(attempt, scope="a1", **BOUNDS, min_output_tokens=1)
+
+    assert (refused.value.committed_usd, refused.value.requested_usd, refused.value.cap_usd) == (
+        RESERVATION, Decimal("0.0241355"), Decimal("0.07"))
+    assert recorded(clean_spend, attempt) == ([], [])

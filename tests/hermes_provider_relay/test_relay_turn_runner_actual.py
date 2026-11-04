@@ -287,7 +287,7 @@ def test_a_turn_whose_limit_is_not_the_one_reserved_gets_no_grant(tmp_path: Path
     assert list((tmp_path / "grants").iterdir()) == [] and rig.calls == 0
 
 
-def test_a_started_call_with_a_lowered_limit_is_never_resent_after_a_host_restart_with_more_headroom(
+def test_a_started_call_with_a_lowered_limit_is_never_resent_by_a_restarted_runner_with_another_limit_choice(
         tmp_path: Path, actual: ActualRelease) -> None:
     rig = Rig(tmp_path, actual, reply_record(), cap=Decimal("0.04"), min_output_tokens=1)
     receipts: list[str] = []

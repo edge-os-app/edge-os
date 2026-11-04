@@ -56,7 +56,6 @@ class GuardedTurnRunner:
             reservation = self._ledger.reserve(turn.attempt_id, scope=self._scope_for(turn),
                                                max_input_tokens=policy.max_request_bytes + INPUT_TOKEN_MARGIN,
                                                max_output_tokens=policy.max_output_tokens, **smallest)
-            limit = reservation.max_output_tokens
         except CapExceeded:
             return _refused(turn, "SpendCapReached")
         except ScopeBlocked:
@@ -66,12 +65,24 @@ class GuardedTurnRunner:
         except Exception as error:  # noqa: BLE001 - without a recorded reservation no request may start
             log.error("spend reservation failed: %s", type(error).__name__)
             return _refused(turn, "SpendLedgerUnavailable")
+        limit = getattr(reservation, "max_output_tokens", None)
+        lowest = policy.max_output_tokens if self._min_output_tokens is None else self._min_output_tokens
+        if type(limit) is not int or not lowest <= limit <= policy.max_output_tokens:  # noqa: E721
+            log.error("spend reservation returned no usable output limit")
+            self._release_unsent(turn, "SpendLedgerUnavailable")  # nothing was sent: free what was reserved
+            return _refused(turn, "SpendLedgerUnavailable")
         try:
             result = self._delegate.run_turn(turn if limit == turn.max_output_tokens else replace(turn, max_output_tokens=limit))
         except BaseException as error:
             self._keep_liability(turn, type(error).__name__)
             raise
         return self._account(turn, result)
+
+    def _release_unsent(self, turn: HermesTurn, reason: str) -> None:
+        try:
+            self._ledger.release_unsent(turn.attempt_id, reason=reason)
+        except Exception as error:  # noqa: BLE001 - the reservation stays RESERVED, which is liability, never a loss
+            log.error("unsent reservation not released: %s", type(error).__name__)
 
     def _keep_liability(self, turn: HermesTurn, reason: str) -> str:
         try:

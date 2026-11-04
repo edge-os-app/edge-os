@@ -326,3 +326,32 @@ def test_a_smallest_limit_outside_one_to_the_policy_limit_is_refused_when_the_ru
     with pytest.raises(ValueError, match="min_output_tokens"):
         GuardedTurnRunner(Recording(ledger), ledger, POLICY, scope_for=lambda t: "case-a",
                           min_output_tokens=smallest)  # type: ignore[arg-type]
+
+
+
+MISSING = object()
+
+
+@pytest.mark.parametrize("limit", [MISSING, None, 0, 4097, True, "720"])
+def test_a_reservation_without_a_usable_output_limit_is_released_and_nothing_is_sent(tmp_path: Path, limit: object) -> None:
+    spend = small_ledger(tmp_path)
+
+    class OddLedger:
+        """The real ledger, except that `reserve` returns an object whose output limit the runner cannot use."""
+
+        def __getattr__(self, name: str):
+            return getattr(spend, name)
+
+        def reserve(self, attempt_id: str, **kwargs):
+            spend.reserve(attempt_id, **kwargs)
+            return object() if limit is MISSING else type("Odd", (), {"max_output_tokens": limit})()
+
+    delegate = Recording(spend, returned())
+    guarded = GuardedTurnRunner(delegate, OddLedger(), POLICY, scope_for=lambda t: "case-a",  # type: ignore[arg-type]
+                                min_output_tokens=1)
+
+    result = guarded.run_turn(turn())
+
+    assert (result.status, result.request_count, result.error_class) == ("PROVIDER_FAILED", 0, "SpendLedgerUnavailable")
+    assert delegate.calls == 0
+    assert spend.state("attempt-1") == "RELEASED" and spend.committed_usd() == 0  # the scope is not left blocked

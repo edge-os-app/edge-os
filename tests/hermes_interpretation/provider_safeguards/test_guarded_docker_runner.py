@@ -3734,7 +3734,7 @@ def test_a_turn_at_the_policy_limit_gives_the_job_exactly_the_policy(tmp_path: P
     assert _job_input(tmp_path)["guard"]["policy"] == {**asdict(POLICY), "required_extra": {}}
 
 
-@pytest.mark.parametrize("limit", [4097, 0, -1])
+@pytest.mark.parametrize("limit", [4097, 0, -1, True])
 def test_a_turn_outside_one_to_the_policy_limit_is_refused_before_any_launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                                                              limit: int) -> None:
     from dataclasses import replace

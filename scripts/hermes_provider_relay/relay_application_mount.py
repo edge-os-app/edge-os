@@ -5,7 +5,8 @@ startup recovery pass) and swaps the accepted transport job for `build_relay_job
 the relay's. The owner and saved request of each grant are read from the saved attempt row and must equal the owner and
 saved request the reservation copied from it; anything else gets no grant.
 
-Give `mount.runner` to `create_app(settings, hermes_runner=...)` with `EDGE_OS_INTERPRETER=hermes_local`. The relay
+Give `mount.runner` to `create_app(settings, hermes_runner=..., spend_view=provider_spend_ledger.spend_view)` with
+`EDGE_OS_INTERPRETER=hermes_local`; `spend_view` lets each saved result show the owner's model budget. The relay
 itself is started separately (`RelaySupervisor`); the mount reads no key and starts nothing but its one recovery pass.
 """
 
