@@ -122,6 +122,7 @@ describe("CREDIT amounts", () => {
     expect(describeCreditSpend(cost("0.0074285", 1, 2, "0.17216"))).toBe("at least 0.0074285 CREDIT, 2 calls unknown");
     expect(describeCreditSpend(cost(null, 0, 1, "0.17216"))).toBe("unknown, 1 call unknown");
     expect(describeCreditSpend(cost(null, 0, 2))).not.toMatch(/\b0 CREDIT/);
+    expect(describeCreditSpend({ ...cost("0.0074285", 1, 0), settled_credit: "0.0074284" })).toBe("unknown");
   });
 
   it("shows the owner's shared budget with held calls as used, and a missing budget as not set", () => {

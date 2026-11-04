@@ -131,6 +131,7 @@ class RelayTurnRunner:
             return _refused("RelaySubjectUnavailable")
         try:  # the grant may carry only the output limit this attempt's reservation covers
             reserved = (self._ledger.state(turn.attempt_id) == "RESERVED"
+                        and type(turn.max_output_tokens) is int  # noqa: E721 - a bool is not a limit
                         and 1 <= turn.max_output_tokens <= self._policy.max_output_tokens
                         and self._ledger.reserved_output_tokens(turn.attempt_id) == turn.max_output_tokens)
         except Exception:  # noqa: BLE001 - without a readable reservation nothing may start

@@ -199,7 +199,7 @@ def study_model_cost(attempts: Sequence[dict[str, Any]]) -> dict[str, Any]:
             "held_credit": _exact_sum([h for h in (held_charge(a["spend"]) for a in attempts) if h is not None])}
 
 
-def _credit(nano: int) -> str:
+def _nano_usd_as_credit(nano: int) -> str:
     """Integer nano-USD as an exact plain decimal string of CREDIT (1 CREDIT = USD 1, so 1 nano-CREDIT = 1 nano-USD)."""
     with localcontext(prec=len(str(abs(nano))) + 1, Emax=MAX_EMAX, Emin=MIN_EMIN, traps=[Inexact]):
         return format(Decimal(nano).scaleb(-9).normalize(), "f")
@@ -216,9 +216,11 @@ def model_budget(view: dict[str, int] | None) -> dict[str, Any] | None:
     A budget the ledger could not report is `UNKNOWN_BUDGET`, which is neither "not set" nor zero."""
     if view is None:
         return None
-    return {"unit": "CREDIT", "state": "SET", "owner_cap_credit": _credit(view["owner_cap"]), "global_cap_credit": _credit(view["global_cap"]),
-            "settled_credit": _credit(view["settled"]), "held_credit": _credit(view["held"]),
-            "held_calls": view["held_calls"], "available_credit": _credit(max(0, view["available"]))}
+    credit = _nano_usd_as_credit
+    return {"unit": "CREDIT", "state": "SET", "owner_cap_credit": credit(view["owner_cap"]),
+            "global_cap_credit": credit(view["global_cap"]), "settled_credit": credit(view["settled"]),
+            "held_credit": credit(view["held"]), "held_calls": view["held_calls"],
+            "available_credit": credit(max(0, view["available"]))}
 
 
 class HermesResearch:

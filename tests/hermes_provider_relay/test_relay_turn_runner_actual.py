@@ -218,7 +218,6 @@ def test_invalid_or_different_usage_keeps_the_full_reservation(tmp_path: Path, a
     assert rig.spend.state("att-1") == "UNKNOWN" and rig.spend.liability_usd("att-1") == RESERVATION
 
 
-
 @pytest.mark.parametrize("timeout", [60, 89.9, 120, True])  # the record's grant life is 90 s
 def test_an_actual_job_timeout_other_than_the_records_is_refused_before_any_io(tmp_path: Path, actual: ActualRelease,
                                                                               timeout: Any) -> None:
@@ -316,3 +315,17 @@ def test_a_started_call_with_a_lowered_limit_is_never_resent_by_a_restarted_runn
     assert rig.spend.reserved_output_tokens("att-1") == LOWERED and rig.spend.liability_usd("att-1") == LOWERED_RESERVATION
     assert len(list((tmp_path / "grants").iterdir())) == 1 and len(list((tmp_path / "state" / "att-1").glob("started.json"))) == 1
     assert receipts == ["att-1"] and rig.calls == 1
+
+
+@pytest.mark.parametrize("limit", [5_000, True])
+def test_a_turn_limit_above_the_policy_or_not_a_number_gets_no_grant_even_when_the_ledger_row_matches(
+        tmp_path: Path, actual: ActualRelease, limit: Any) -> None:
+    from dataclasses import replace
+    rig = Rig(tmp_path, actual, reply_record())
+    rig.spend.reserve("att-1", scope="scope-1", max_input_tokens=1, max_output_tokens=int(limit))  # the row matches
+    relay = rig.job.runner._delegate  # the RelayTurnRunner the accepted runner wraps
+
+    result = relay.run_turn(replace(TURN, max_output_tokens=limit))
+
+    assert (result.request_count, result.error_class) == (0, "RelayReservationMissing")
+    assert list((tmp_path / "grants").iterdir()) == [] and rig.calls == 0

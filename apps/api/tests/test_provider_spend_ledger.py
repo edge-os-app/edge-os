@@ -414,7 +414,6 @@ def test_held_liability_is_used_budget_and_the_smaller_headroom_is_what_is_avail
                                   "available_credit": "0.0577235"}
 
 
-
 def test_a_call_over_the_global_headroom_is_refused_against_the_global_cap(clean_spend, attempts, owner_a, owner_b) -> None:
     spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.07", owner_cap="0.20"))
     spend.reserve(attempts.new(owner_b), scope="b1", **BOUNDS)  # 0.054848 of the 0.07 everyone shares

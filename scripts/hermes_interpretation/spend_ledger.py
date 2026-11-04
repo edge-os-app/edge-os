@@ -23,7 +23,8 @@ from decimal import ROUND_CEILING, Context, Decimal
 from pathlib import Path
 
 __all__ = ["CapExceeded", "Event", "LedgerConfigMismatch", "NotReserved", "Reservation", "ReservationExists",
-           "ScopeBlocked", "Settlement", "SpendLedger", "TokenPrice", "Unresolved", "fitted_output_tokens"]
+           "ScopeBlocked", "Settlement", "SpendLedger", "TokenPrice", "Unresolved", "check_smallest_limit",
+           "fitted_output_tokens"]
 
 NANO = Decimal(10) ** 9
 MAX_TOKENS = 10 ** 12
@@ -125,7 +126,7 @@ def _valid_usage(input_tokens: object, output_tokens: object) -> bool:
     return _valid_tokens(input_tokens, output_tokens) and input_tokens >= 1  # type: ignore[operator]
 
 
-def _check_smallest_limit(min_output_tokens: object, max_output_tokens: int) -> None:
+def check_smallest_limit(min_output_tokens: object, max_output_tokens: int) -> None:
     """A smallest useful output limit is a whole number from 1 to the full limit: a call never asks for 0 tokens."""
     if (isinstance(min_output_tokens, bool) or not isinstance(min_output_tokens, int)
             or not 1 <= min_output_tokens <= max_output_tokens):
@@ -242,7 +243,7 @@ class SpendLedger:
         if not _valid_tokens(max_input_tokens, max_output_tokens):
             raise ValueError("token bounds must be whole numbers within range")
         if min_output_tokens is not None:
-            _check_smallest_limit(min_output_tokens, max_output_tokens)
+            check_smallest_limit(min_output_tokens, max_output_tokens)
         amount, limit = self._price.nano_usd(max_input_tokens, max_output_tokens), max_output_tokens
         with self._write() as connection:
             if connection.execute("select 1 from reservation where attempt_id = ?", (attempt_id,)).fetchone():

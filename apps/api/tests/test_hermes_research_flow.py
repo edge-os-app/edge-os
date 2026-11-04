@@ -992,7 +992,6 @@ def test_a_spend_view_without_the_hermes_interpreter_and_its_runner_is_refused(e
         create_app(load_settings(env), spend_view=lambda session, owner: None)
 
 
-
 def test_a_budget_that_cannot_be_read_is_unknown_and_the_saved_result_still_loads(env, migrated, owner_a) -> None:
     def broken(session, owner):
         raise RuntimeError("the ledger tables cannot be read")

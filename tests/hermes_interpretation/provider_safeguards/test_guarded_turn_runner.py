@@ -328,7 +328,6 @@ def test_a_smallest_limit_outside_one_to_the_policy_limit_is_refused_when_the_ru
                           min_output_tokens=smallest)  # type: ignore[arg-type]
 
 
-
 MISSING = object()
 
 
@@ -355,3 +354,25 @@ def test_a_reservation_without_a_usable_output_limit_is_released_and_nothing_is_
     assert (result.status, result.request_count, result.error_class) == ("PROVIDER_FAILED", 0, "SpendLedgerUnavailable")
     assert delegate.calls == 0
     assert spend.state("attempt-1") == "RELEASED" and spend.committed_usd() == 0  # the scope is not left blocked
+
+
+def test_an_unusable_reservation_that_cannot_be_released_stays_liability_and_nothing_is_sent(tmp_path: Path) -> None:
+    spend = small_ledger(tmp_path)
+
+    class StuckLedger:
+        def __getattr__(self, name: str):
+            return getattr(spend, name)
+
+        def reserve(self, attempt_id: str, **kwargs):
+            spend.reserve(attempt_id, **kwargs)
+            return object()  # no output limit
+
+        def release_unsent(self, attempt_id: str, *, reason: str) -> None:
+            raise OSError("the ledger file cannot be written")
+
+    delegate = Recording(spend, returned())
+    result = GuardedTurnRunner(delegate, StuckLedger(), POLICY, scope_for=lambda t: "case-a",  # type: ignore[arg-type]
+                               min_output_tokens=1).run_turn(turn())
+
+    assert (result.request_count, result.error_class) == (0, "SpendLedgerUnavailable") and delegate.calls == 0
+    assert spend.state("attempt-1") == "RESERVED" and spend.committed_usd() == Decimal("0.02")  # kept, never lost

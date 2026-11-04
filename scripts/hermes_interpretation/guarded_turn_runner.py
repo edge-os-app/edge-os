@@ -22,7 +22,7 @@ from dataclasses import replace
 from edge_os_api.research.hermes_interpreter import HermesTurn, HermesTurnResult, HermesTurnRunner
 from edge_os_api.research.interpretation_attempts import Usage
 from provider_guard import GuardPolicy
-from spend_ledger import CapExceeded, ReservationExists, ScopeBlocked, SpendLedger, _check_smallest_limit
+from spend_ledger import CapExceeded, ReservationExists, ScopeBlocked, SpendLedger, check_smallest_limit
 
 __all__ = ["GuardedTurnRunner", "INPUT_TOKEN_MARGIN"]
 
@@ -42,7 +42,7 @@ class GuardedTurnRunner:
     def __init__(self, delegate: HermesTurnRunner, ledger: SpendLedger, policy: GuardPolicy,
                  scope_for: Callable[[HermesTurn], str], *, min_output_tokens: int | None = None) -> None:
         if min_output_tokens is not None:  # refused here, so no reservation can record a limit the relay would refuse
-            _check_smallest_limit(min_output_tokens, policy.max_output_tokens)
+            check_smallest_limit(min_output_tokens, policy.max_output_tokens)
         self._delegate, self._ledger, self._policy, self._scope_for = delegate, ledger, policy, scope_for
         self._min_output_tokens = min_output_tokens
 

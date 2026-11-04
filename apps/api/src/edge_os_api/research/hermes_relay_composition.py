@@ -21,8 +21,9 @@ request of each grant are read from the saved attempt row and must equal those t
 anything else gets no grant.
 
 Give `app.runner` and `app.config` to `create_app(settings, hermes_runner=..., hermes_config=...,
-spend_view=provider_spend_ledger.spend_view)` with `EDGE_OS_INTERPRETER=hermes_local`. The lane-1 relay operator starts the relay and owns its shutdown; its one-time
-handoff file names the endpoint and evidence folder and approves nothing. LOCAL only: the accepted job
+spend_view=provider_spend_ledger.spend_view)` with `EDGE_OS_INTERPRETER=hermes_local`. The lane-1 relay operator
+starts the relay and owns its shutdown; its one-time handoff file names the endpoint and evidence folder and approves
+nothing. LOCAL only: the accepted job
 code lives under `scripts/`, which this module adds to the import path; the application factory does not import it.
 See `docs/qualification/hermes-application-release/CONTRACT.md`.
 """
@@ -65,7 +66,7 @@ from provider_guard import GuardPolicy  # noqa: E402
 from provider_transport import TransportRoute  # noqa: E402
 from relay_admission import ActualRelease, RelaySubject, load_actual_release  # noqa: E402
 from relay_turn_runner import RelayEndpoint, build_relay_job  # noqa: E402
-from spend_ledger import _check_smallest_limit  # noqa: E402 - the ledgers' own range rule for min_output_tokens
+from spend_ledger import check_smallest_limit  # noqa: E402 - the ledgers' own range rule for min_output_tokens
 
 __all__ = ["HermesApplication", "HermesApplicationRelease", "RELEASE_DEFINITIONS", "RelayApplicationDefinition",
            "bind_release", "compose_application", "image_for_platform", "open_hermes_application"]
@@ -295,7 +296,7 @@ def bind_release(definition: RelayApplicationDefinition) -> HermesApplicationRel
     smallest = definition.min_output_tokens
     if smallest is not None:
         try:
-            _check_smallest_limit(smallest, release.max_output_tokens)  # the ledgers' own rule
+            check_smallest_limit(smallest, release.max_output_tokens)  # the ledgers' own rule
         except ValueError as error:
             raise _Refused(f"{error} (the record's max_tokens)") from error
     limits = SpendLimits(global_cap_usd=definition.global_cap_usd, owner_cap_usd=definition.owner_cap_usd, price=price)

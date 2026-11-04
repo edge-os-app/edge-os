@@ -79,7 +79,7 @@ export function describeAttemptCost(spend: AttemptSpend): string {
 
 /** A total with its unknown calls: complete, a lower bound ("at least"), or unknown. Never a zero for unknown. */
 function describeTotal(total: string | null, unknownCalls: number, complete: (total: string) => string): string {
-  if (unknownCalls === 0 && total !== null) return complete(total);
+  if (unknownCalls === 0) return total === null ? "unknown" : complete(total);
   const unknown = `${unknownCalls} call${unknownCalls === 1 ? "" : "s"} unknown`;
   return total === null ? `unknown, ${unknown}` : `at least ${total}, ${unknown}`;
 }
@@ -97,9 +97,11 @@ export function describeCredit(amount: string | null): string | null {
 
 /** The request's model spend in CREDIT. With any unknown call it is a lower bound; with no settled call it is unknown. */
 export function describeCreditSpend(cost: ModelCost): string {
-  const dollars = cost.settled_calls > 0 ? usd(cost.settled_usd) : null;
-  const total = dollars === null ? null : describeCredit(cost.settled_credit);
-  return describeTotal(total, cost.unknown_calls, (credit) => `spent ${credit} (USD ${dollars!.slice(1)})`);
+  // 1 CREDIT is exactly USD 1, so both labels print the one settled amount; two different strings are not a known amount.
+  const same = cost.settled_calls > 0 && cost.settled_credit === cost.settled_usd;
+  const amount = same ? usd(cost.settled_usd) : null;
+  const total = amount === null ? null : `${amount.slice(1)} CREDIT`;
+  return describeTotal(total, cost.unknown_calls, (credit) => `spent ${credit} (USD ${amount!.slice(1)})`);
 }
 
 /** The owner's shared model budget. Held calls are used budget. No budget from the API means it is not set, not 0. */

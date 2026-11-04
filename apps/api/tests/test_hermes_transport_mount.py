@@ -258,7 +258,6 @@ def test_the_saved_result_shows_each_attempts_spend_and_the_study_model_cost(mou
     assert len(boundary.turns) == 4
 
 
-
 def test_the_saved_result_shows_the_owners_shared_budget_in_credit_with_held_liability_as_used(mounted, owner_a) -> None:
     returned = turn_result(case("concrete-thesis")["provider"])
     failed = turn_result({"kind": "http_error"})  # one request, usage unknown: the reservation stays UNKNOWN
@@ -277,4 +276,3 @@ def test_the_saved_result_shows_the_owners_shared_budget_in_credit_with_held_lia
                                      "settled_credit": "0.0074285", "held_credit": "0.054848", "held_calls": 1,
                                      "available_credit": "0.0577235"}
     assert saved["model_cost"]["settled_credit"] is None and saved["model_cost"]["held_credit"] == "0.054848"
-

@@ -42,7 +42,7 @@ if str(SUPPORT) not in sys.path:
 # The accepted ledger's types, and its own usage checks, so both ledgers apply exactly the same rules.
 from spend_ledger import (  # noqa: E402
     NANO, CapExceeded, Event, LedgerConfigMismatch, NotReserved, Reservation, ReservationExists, ScopeBlocked,
-    Settlement, TokenPrice, Unresolved, _check_smallest_limit, _usd, _valid_tokens, _valid_usage, fitted_output_tokens,
+    Settlement, TokenPrice, Unresolved, _usd, _valid_tokens, _valid_usage, check_smallest_limit, fitted_output_tokens,
 )
 
 __all__ = ["AttemptNotSaved", "PostgresSpendLedger", "SpendLimits", "spend_view"]
@@ -216,7 +216,7 @@ class PostgresSpendLedger:
         if not _valid_tokens(max_input_tokens, max_output_tokens):
             raise ValueError("token bounds must be whole numbers within range")
         if min_output_tokens is not None:
-            _check_smallest_limit(min_output_tokens, max_output_tokens)
+            check_smallest_limit(min_output_tokens, max_output_tokens)
         attempt = _attempt(attempt_id)
         if attempt is None:
             raise AttemptNotSaved("a reservation needs the id of a saved interpretation attempt")
