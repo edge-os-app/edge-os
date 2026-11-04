@@ -20,7 +20,7 @@ import pytest
 
 import egress_gateway
 from egress_gateway import ESTABLISHED, Gateway, Receipts
-from test_egress_gateway import FakeSocket, Network, answer, live_head
+from test_egress_gateway import OPENROUTER, FakeSocket, Network, answer, live_head
 
 JOIN_SECONDS = 10.0
 
@@ -47,7 +47,7 @@ def owned_pair(tmp_path: Path, network: Network, upstream: FakeSocket) -> Iterat
     before = set(threading.enumerate())
     client, far = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
     result: dict[str, Any] = {}
-    gateway = Gateway(Receipts(tmp_path), resolve=network.resolve, connect=network.connect)
+    gateway = Gateway(Receipts(tmp_path), allowed=OPENROUTER, resolve=network.resolve, connect=network.connect)
     worker = threading.Thread(target=lambda: result.update(gateway.handle(far)), name="gateway-handler", daemon=True)
     try:
         yield client, result, worker
