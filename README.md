@@ -28,7 +28,7 @@ The cost is a trade on a false edge, a round trip, or a wallet emptied by a rule
 2. **It turns an idea that holds into exact rules.** Supported rules compile into a strategy revision that cannot change after you save it. You can replay it on past prices and see trades, costs, gains, losses and drawdown, with every assumed fill labelled.
 3. **It trades only inside the limits you approve.** Each agent gets its own Privy wallet, linked to yours. You approve one strategy revision with its tokens, size, spending limit, expiry and stop rules. The agent trades on Kuru inside that permission, and you can stop it at any time. A good report or a good backtest never grants trading permission by itself.
 
-Edge OS is built on quant first principles from the HangukQuant QT101 to QT401 courses. Signals stay separate from sizing and account results. Every variant tried is kept, so selection bias stays visible. Strategies compile to a typed language with exact units and rules, so the agent runs what was tested.
+Edge OS is built on quant first principles. Signals stay separate from position sizing and account results. Every variant tried is kept, so a lucky result cannot hide the failed ones. Strategies compile to a typed language with exact units and rules, so the agent runs what was tested. Formal checks for overfitting and multiple testing are next on the plan.
 
 ## A walkthrough
 
