@@ -194,7 +194,7 @@ The open question is whether Orbio's `usage.cost` exists in its usage data (UNKN
 
 Step 1: DONE 2026-11-05. The builder read Orbio's terms of service and privacy policy and accepted them (U5 closed).
 
-Step 2: DONE 2026-11-05. The controller read the public catalogue. The rate is the list rate, and section 4's rule holds with rule 3 as amended (U6 closed).
+Step 2: DONE 2026-11-05. The controller read the public catalogue. The rate is the list rate, and the override cannot apply under rule 3 as amended (U6 closed). Section 8 re-checks the other fees and rule 4 before the call.
 
 Step 3: DONE 2026-11-05. The builder chose option (b). A reviewed code change admits a release that names no routing, without relaxing any OpenRouter check. It covers every routing use, including the snapshot `provider` and `max_price` rules (section 3).
 
@@ -230,13 +230,14 @@ Operator steps. The controller runs these. The key stays in one file that only t
 4. Set the application's environment. `EDGE_OS_ENV` is `local`, `EDGE_OS_INTERPRETER` is `hermes_local`, and `EDGE_OS_CORS_ALLOWED_ORIGINS` names the web page's origin. `EDGE_OS_DATABASE_URL`, `EDGE_OS_PRIVY_APP_ID` and `EDGE_OS_PRIVY_VERIFICATION_KEY` come from the recorded local env files. The Privy values are the same ones the web page signs in with.
 5. From `apps/api`, run `python -m alembic upgrade head`, then `python -m alembic check`. The application refuses a database below migration 0015.
 6. From `apps/api`, run `python ../../scripts/hermes_app_mount/serve_relay_application.py --handoff-path PATH --handoff-sha256 SHA --run-id ID --port PORT`. Confirm that its `serving` line names `orbio-first-call-1`.
-7. Start the web page with `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:PORT` and open `/app`. The research rows belong to a signed-in owner, and the only sign-in is Privy, so the builder signs in. The controller holds no sign-in token.
-8. The builder submits one research request on that page. That request calls `POST /v1/research/requests`, which makes the one provider request. Do not submit a second request, and do not press retry.
-9. Read the evidence:
+7. Start the ordinary API, because the step 6 application serves the six Hermes paths only and the web page also needs `/v1/me`. From `apps/api`, use the step 4 environment with two changes: `EDGE_OS_INTERPRETER` is `fixture`, and `EDGE_OS_HERMES_APP_URL` is `http://127.0.0.1:PORT`, with the step 6 port. Run `python -m edge_os_api --host 127.0.0.1 --port API_PORT`. This API forwards the six paths to the step 6 application and keeps every other path.
+8. Start the web page with `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:API_PORT` and `NEXT_PUBLIC_PRIVY_APP_ID` set to the same value as `EDGE_OS_PRIVY_APP_ID`, and open `/app`. The research rows belong to a signed-in owner, and the only sign-in is Privy, so the builder signs in. The controller holds no sign-in token.
+9. The builder submits one research request on that page. That request calls `POST /v1/research/requests`, which makes the one provider request. Do not submit a second request, and do not press retry.
+10. Read the evidence:
    - the attempt's `finished.json` in `<run root>/relay/state/<attempt>/` (`usage`, `cost`, `generation_id`, `reply_headers`, `reply_headers_refused`);
-   - the reply body, `<channel>/turn-NN-<attempt>/output/relay-channel/reply.json`, for `finish_reason`, the reply `model`, provider fields and `prompt_tokens_details`;
+   - the reply body, `<channel>/turn-NN-<attempt>/output/relay-channel/reply.json`, for `finish_reason`, the reply `model`, provider fields and `prompt_tokens_details`. The file holds the body in `body_b64`, so decode it first;
    - the gateway `opening` receipt and the ledger rows.
-10. Stop the application. Run `python scripts/hermes_provider_relay/relay_operator.py CONFIG stop`, whatever the result. Keep the run root. Scan it for the key before any publication.
+11. Stop the web page, the ordinary API and the application. Run `python scripts/hermes_provider_relay/relay_operator.py CONFIG stop`, whatever the result. Keep the run root. Scan it for the key before any publication.
 
 The caps need no hand check: the one ledger counts both routes (section 3 item 6).
 
