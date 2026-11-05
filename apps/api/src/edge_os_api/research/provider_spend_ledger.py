@@ -42,15 +42,38 @@ if str(SUPPORT) not in sys.path:
 # The accepted ledger's types, and its own usage checks, so both ledgers apply exactly the same rules.
 from spend_ledger import (  # noqa: E402
     NANO, CapExceeded, Event, LedgerConfigMismatch, NotReserved, Reservation, ReservationExists, ScopeBlocked,
-    Settlement, TokenPrice, Unresolved, _usd, _valid_tokens, _valid_usage,
+    Settlement, TokenPrice, Unresolved, _usd, _valid_tokens, _valid_usage, check_smallest_limit, fitted_output_tokens,
 )
 
-__all__ = ["AttemptNotSaved", "PostgresSpendLedger", "SpendLimits"]
+__all__ = ["AttemptNotSaved", "PostgresSpendLedger", "SpendLimits", "spend_view"]
 
 SCHEMA = "usage_local"
 OPERATOR_SOURCE = "operator:"
 LIABILITY = ("coalesce(sum(CASE WHEN state = 'SETTLED' THEN charged_nano_usd "
              "WHEN state IN ('RESERVED', 'UNKNOWN') THEN reserved_nano_usd ELSE 0 END), 0)")
+
+
+def spend_view(session: Session, owner_id: uuid.UUID | str) -> dict[str, int] | None:
+    """The owner's model budget as the ledger holds it now, in integer nano-USD. Read only: it takes no lock, writes
+    nothing and does not freeze the settings.
+
+    None when the settings row does not exist yet (the ledger was never used): the budget is not set, which is not 0.
+    Otherwise `owner_cap` and `global_cap` (the frozen caps), the owner's `settled` charges, `held` (RESERVED and UNKNOWN
+    reservations, which are used budget until settled) and `held_calls`, and `available`: the smaller of the owner's and
+    the global headroom, the most the next reservation could hold. One statement, so one consistent snapshot."""
+    row = session.execute(text(
+        f"SELECT s.global_cap_nano_usd, s.owner_cap_nano_usd, a.settled, a.held, a.held_calls, a.total "
+        f"FROM {SCHEMA}.provider_spend_settings s CROSS JOIN ("
+        "SELECT coalesce(sum(CASE WHEN owner_id = :o AND state = 'SETTLED' THEN charged_nano_usd END), 0) AS settled, "
+        "coalesce(sum(CASE WHEN owner_id = :o AND state IN ('RESERVED', 'UNKNOWN') THEN reserved_nano_usd END), 0) AS held, "
+        "count(*) FILTER (WHERE owner_id = :o AND state IN ('RESERVED', 'UNKNOWN')) AS held_calls, "
+        f"{LIABILITY} AS total FROM {SCHEMA}.provider_spend_reservations) a WHERE s.settings_id = 1"),
+        {"o": uuid.UUID(str(owner_id))}).first()
+    if row is None:
+        return None
+    global_cap, owner_cap, settled, held, held_calls, total = (int(value) for value in row)
+    return {"owner_cap": owner_cap, "global_cap": global_cap, "settled": settled, "held": held, "held_calls": held_calls,
+            "available": min(owner_cap - settled - held, global_cap - total)}
 
 
 class AttemptNotSaved(LookupError):
@@ -176,16 +199,30 @@ class PostgresSpendLedger:
 
     # --- Reserving and settling --------------------------------------------------------------------------------------
 
-    def reserve(self, attempt_id: str, *, scope: str, max_input_tokens: int, max_output_tokens: int) -> Reservation:
-        """Record the worst-case cost BEFORE a request may start. Raises, and writes nothing, when it may not."""
+    def reserved_output_tokens(self, attempt_id: str) -> int | None:
+        """The output limit this attempt's reservation covers, as recorded; None without a reservation."""
+        attempt = _attempt(attempt_id)
+        rows = [] if attempt is None else self._read(
+            f"SELECT max_output_tokens FROM {SCHEMA}.provider_spend_reservations WHERE attempt_id = :a", a=attempt)
+        return rows[0][0] if rows else None
+
+    def reserve(self, attempt_id: str, *, scope: str, max_input_tokens: int, max_output_tokens: int,
+                min_output_tokens: int | None = None) -> Reservation:
+        """Record the worst-case cost BEFORE a request may start. Raises, and writes nothing, when it may not.
+
+        With `min_output_tokens`, a call whose full output limit does not fit gets the largest smaller limit that fits
+        both the owner's and the global headroom, chosen under the settings lock; below `min_output_tokens` nothing is
+        reserved. Without it, the reservation is exactly the full limit's worst case or nothing."""
         if not _valid_tokens(max_input_tokens, max_output_tokens):
             raise ValueError("token bounds must be whole numbers within range")
+        if min_output_tokens is not None:
+            check_smallest_limit(min_output_tokens, max_output_tokens)
         attempt = _attempt(attempt_id)
         if attempt is None:
             raise AttemptNotSaved("a reservation needs the id of a saved interpretation attempt")
         with self._write() as session:
             frozen = self._locked(session, check=True)
-            amount = frozen.price.nano_usd(max_input_tokens, max_output_tokens)
+            amount, limit = frozen.price.nano_usd(max_input_tokens, max_output_tokens), max_output_tokens
             if session.execute(text(f"SELECT 1 FROM {SCHEMA}.provider_spend_reservations WHERE attempt_id = :a"),
                                {"a": attempt}).first():
                 raise ReservationExists(attempt_id)
@@ -197,6 +234,17 @@ class PostgresSpendLedger:
                                     "WHERE scope = :s AND state IN ('RESERVED', 'UNKNOWN') LIMIT 1"), {"s": scope}).first():
                 raise ScopeBlocked(scope)
             owner, total = self._liability(session, saved[0]), self._liability(session)
+            fits = owner + amount <= frozen.owner_cap and total + amount <= frozen.global_cap
+            if not fits and min_output_tokens is not None:
+                owner_room, global_room = frozen.owner_cap - owner, frozen.global_cap - total
+                fitted = fitted_output_tokens(frozen.price, max_input_tokens, max_output_tokens,
+                                              min(owner_room, global_room))
+                if fitted is None or fitted < min_output_tokens:
+                    smallest = frozen.price.nano_usd(max_input_tokens, min_output_tokens)
+                    if owner_room <= global_room:
+                        raise CapExceeded(_usd(owner), _usd(smallest), _usd(frozen.owner_cap))
+                    raise CapExceeded(_usd(total), _usd(smallest), _usd(frozen.global_cap))
+                amount, limit = frozen.price.nano_usd(max_input_tokens, fitted), fitted
             if owner + amount > frozen.owner_cap:
                 raise CapExceeded(_usd(owner), _usd(amount), _usd(frozen.owner_cap))
             if total + amount > frozen.global_cap:
@@ -206,9 +254,9 @@ class PostgresSpendLedger:
                 f"INSERT INTO {SCHEMA}.provider_spend_reservations VALUES "
                 "(:a, :o, :i, :s, 'RESERVED', :n, NULL, :mi, :mo, :now, :now)"),
                 {"a": attempt, "o": saved[0], "i": saved[1], "s": scope, "n": amount, "mi": max_input_tokens,
-                 "mo": max_output_tokens, "now": now})
+                 "mo": limit, "now": now})
             self._event(session, attempt, "RESERVED", scope, amount)
-        return Reservation(attempt_id, scope, _usd(amount))
+        return Reservation(attempt_id, scope, _usd(amount), limit)
 
     def settle(self, attempt_id: str, *, input_tokens: object, output_tokens: object) -> Settlement:
         """Replace the reservation with the exact charge. Unusable usage keeps the whole reservation as liability."""

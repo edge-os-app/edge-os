@@ -66,10 +66,13 @@ NO_PRICE = object()
 
 
 def build(tmp_path: Path, actual: ActualRelease | None, the_route: TransportRoute, *, release: Any = None,
-          policy: GuardPolicy = POLICY, ledger: Any = None, price: Any = PRICE, timeout: Any = None) -> Any:
+          policy: GuardPolicy = POLICY, ledger: Any = None, price: Any = PRICE, timeout: Any = None,
+          min_output_tokens: int | None = None) -> Any:
     extra = {} if price is NO_PRICE else {"price": price}
     if timeout is not None:
         extra["timeout_seconds"] = timeout
+    if min_output_tokens is not None:
+        extra["min_output_tokens"] = min_output_tokens
     return build_relay_job(the_route, release=release or (actual.release if actual else RELEASE), actual=actual, **extra,
                            endpoint=RelayEndpoint(*(tmp_path / n for n in ("grants", "revocations", "state", "key")), "jobs"),
                            subject_for=lambda turn: RelaySubject("owner-a", "intake-1"), policy=policy, ledger=ledger,
@@ -123,19 +126,21 @@ def test_a_route_or_policy_that_differs_from_the_record_is_refused(tmp_path: Pat
 
 
 class Rig:
-    def __init__(self, tmp_path: Path, actual: ActualRelease, finished: dict[str, Any], usage: Usage = USAGE) -> None:
+    def __init__(self, tmp_path: Path, actual: ActualRelease, finished: dict[str, Any], usage: Usage = USAGE, *,
+                 cap: Decimal = Decimal("0.20"), min_output_tokens: int | None = None) -> None:
         state = tmp_path / "state"
         for folder in ("grants", "revocations", "state"):
-            (tmp_path / folder).mkdir()
+            (tmp_path / folder).mkdir(exist_ok=True)
         (tmp_path / "key").write_bytes(b"a" * 32)
         (state / "heartbeat.json").write_text(json.dumps({"release": actual.release.settings(), "at": time.time(),
                                                           "started_at": 0}))
-        self.spend = SpendLedger(tmp_path / "spend.sqlite", cap_usd=Decimal("0.20"), price=PRICE)
-        self.job = build(tmp_path, actual, route(actual), ledger=self.spend)
-        self.calls = 0
+        self.spend = SpendLedger(tmp_path / "spend.sqlite", cap_usd=cap, price=PRICE)
+        self.job = build(tmp_path, actual, route(actual), ledger=self.spend, min_output_tokens=min_output_tokens)
+        self.calls, self.turns = 0, []
 
         def run_turn(turn: HermesTurn) -> HermesTurnResult:
             self.calls += 1
+            self.turns.append(turn)
             folder = state / turn.attempt_id
             folder.mkdir()
             (folder / "closed.json").write_text(json.dumps({"started": True}))
@@ -213,7 +218,6 @@ def test_invalid_or_different_usage_keeps_the_full_reservation(tmp_path: Path, a
     assert rig.spend.state("att-1") == "UNKNOWN" and rig.spend.liability_usd("att-1") == RESERVATION
 
 
-
 @pytest.mark.parametrize("timeout", [60, 89.9, 120, True])  # the record's grant life is 90 s
 def test_an_actual_job_timeout_other_than_the_records_is_refused_before_any_io(tmp_path: Path, actual: ActualRelease,
                                                                               timeout: Any) -> None:
@@ -225,3 +229,103 @@ def test_an_actual_job_timeout_other_than_the_records_is_refused_before_any_io(t
 def test_an_actual_job_with_the_records_timeout_is_built(tmp_path: Path, actual: ActualRelease) -> None:
     build(tmp_path, actual, route(actual), timeout=90)
     assert list(tmp_path.iterdir()) == []
+
+
+# --- The per-call output limit (ORBIO_CREDIT_DESIGN 2b) ----------------------------------------------------------------
+# A cap of 0.04 leaves 40,000,000 nano-USD: the input worst case is 12,064 x 2.00 = 24,128,000 and each output token costs
+# 7,500, so (40,000,000 - 24,128,000) / 7,500 = 2,116 output tokens fit (39,998,000 nano-USD). The tests set their own
+# `min_output_tokens`; no release sets one.
+LOWERED = 2_116
+LOWERED_RESERVATION = Decimal("0.039998")
+
+
+def grant_of(tmp_path: Path) -> dict[str, Any]:
+    [path] = (tmp_path / "grants").iterdir()
+    return json.loads(path.read_text())
+
+
+def test_the_grant_and_the_job_carry_the_lowered_limit_and_an_equal_cost_still_settles(
+        tmp_path: Path, actual: ActualRelease) -> None:
+    rig = Rig(tmp_path, actual, reply_record(), cap=Decimal("0.04"), min_output_tokens=1)
+
+    result = rig.job.runner.run_turn(TURN)
+
+    assert rig.spend.reserved_output_tokens("att-1") == LOWERED
+    assert grant_of(tmp_path)["policy"]["max_output_tokens"] == LOWERED
+    assert [t.max_output_tokens for t in rig.turns] == [LOWERED]
+    assert result.observed["granted_max_output_tokens"] == LOWERED
+    assert (result.status, result.observed["spend_state"]) == ("RETURNED", "SETTLED")  # E1-COST1, unchanged
+    assert rig.spend.liability_usd("att-1") == CHARGE
+
+
+@pytest.mark.parametrize("cost", [0.0012, 0.02, 0.0074284, 0.0074285001, 0.06])
+def test_with_a_lowered_limit_any_other_cost_keeps_the_lowered_reservation(tmp_path: Path, actual: ActualRelease,
+                                                                         cost: float) -> None:
+    rig = Rig(tmp_path, actual, reply_record(cost=cost), cap=Decimal("0.04"), min_output_tokens=1)
+    result = rig.job.runner.run_turn(TURN)
+    assert (result.status, result.error_class) == ("UNKNOWN", "RelayCostUnverified")
+    assert rig.spend.state("att-1") == "UNKNOWN" and rig.spend.liability_usd("att-1") == LOWERED_RESERVATION
+
+
+def test_without_a_smallest_limit_the_grant_carries_the_release_limit(tmp_path: Path, actual: ActualRelease) -> None:
+    rig = Rig(tmp_path, actual, reply_record())
+    result = rig.job.runner.run_turn(TURN)
+    assert grant_of(tmp_path)["policy"] == {**POLICY.__dict__, "required_extra": dict(POLICY.required_extra)}
+    assert result.observed["granted_max_output_tokens"] == 4096 and rig.turns == [TURN]
+
+
+def test_a_turn_whose_limit_is_not_the_one_reserved_gets_no_grant(tmp_path: Path, actual: ActualRelease) -> None:
+    from dataclasses import replace
+    rig = Rig(tmp_path, actual, reply_record())
+    rig.spend.reserve("att-1", scope="scope-1", max_input_tokens=12_064, max_output_tokens=4096)  # the full limit
+    relay = rig.job.runner._delegate  # the RelayTurnRunner the accepted runner wraps
+
+    result = relay.run_turn(replace(TURN, max_output_tokens=LOWERED))
+
+    assert (result.status, result.request_count, result.error_class) == ("PROVIDER_FAILED", 0, "RelayReservationMissing")
+    assert list((tmp_path / "grants").iterdir()) == [] and rig.calls == 0
+
+
+def test_a_started_call_with_a_lowered_limit_is_never_resent_by_a_restarted_runner_with_another_limit_choice(
+        tmp_path: Path, actual: ActualRelease) -> None:
+    rig = Rig(tmp_path, actual, reply_record(), cap=Decimal("0.04"), min_output_tokens=1)
+    receipts: list[str] = []
+
+    def killed(turn: HermesTurn) -> HermesTurnResult:  # the job starts its one request, then the host runner dies
+        rig.calls += 1
+        folder = tmp_path / "state" / turn.attempt_id
+        folder.mkdir()
+        (folder / "started.json").write_text(json.dumps({"grant_id": grant_of(tmp_path)["grant_id"]}))
+        receipts.append(turn.attempt_id)
+        raise KeyboardInterrupt
+
+    rig.job.supervision.run_turn = killed  # type: ignore[method-assign]
+    with pytest.raises(KeyboardInterrupt):
+        rig.job.runner.run_turn(TURN)
+    assert rig.spend.state("att-1") == "UNKNOWN" and rig.spend.reserved_output_tokens("att-1") == LOWERED
+
+    # A restarted host runner whose own limit choice differs (no smallest limit, so it would ask for the full release
+    # limit): the same attempt reserves nothing new and gets no second grant. A raised cap (`change_caps`) exists only on
+    # PostgreSQL; `test_provider_spend_ledger.py` shows the same refusal there after more headroom.
+    restarted = build(tmp_path, actual, route(actual), ledger=rig.spend)
+    restarted.supervision.run_turn = killed  # type: ignore[method-assign]
+    result = restarted.runner.run_turn(TURN)
+
+    assert (result.status, result.request_count, result.error_class) == ("PROVIDER_FAILED", 0, "ReservationExists")
+    assert rig.spend.reserved_output_tokens("att-1") == LOWERED and rig.spend.liability_usd("att-1") == LOWERED_RESERVATION
+    assert len(list((tmp_path / "grants").iterdir())) == 1 and len(list((tmp_path / "state" / "att-1").glob("started.json"))) == 1
+    assert receipts == ["att-1"] and rig.calls == 1
+
+
+@pytest.mark.parametrize("limit", [5_000, True])
+def test_a_turn_limit_above_the_policy_or_not_a_number_gets_no_grant_even_when_the_ledger_row_matches(
+        tmp_path: Path, actual: ActualRelease, limit: Any) -> None:
+    from dataclasses import replace
+    rig = Rig(tmp_path, actual, reply_record())
+    rig.spend.reserve("att-1", scope="scope-1", max_input_tokens=1, max_output_tokens=int(limit))  # the row matches
+    relay = rig.job.runner._delegate  # the RelayTurnRunner the accepted runner wraps
+
+    result = relay.run_turn(replace(TURN, max_output_tokens=limit))
+
+    assert (result.request_count, result.error_class) == (0, "RelayReservationMissing")
+    assert list((tmp_path / "grants").iterdir()) == [] and rig.calls == 0

@@ -51,3 +51,7 @@ _Avoid_: Latest strategy
 **Attributable inventory**:
 The inventory assigned to a position from confirmed approved acquisitions and additions, adjusted for exits and other qualified balance changes. Unrelated transfers and inventory assigned to other positions are excluded.
 _Avoid_: Wallet balance, sell permission
+
+**CREDIT**:
+Orbio's billing unit for model and tool usage, worth exactly USD 1 of usage. Edge OS shows model spend and budget in CREDIT as a second label for the same exact USD amount. A CREDIT is not a Nansen credit, and the two never share a field, column or label.
+_Avoid_: AI credits, Nansen credits, credits

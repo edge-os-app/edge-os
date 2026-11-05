@@ -170,7 +170,9 @@ def grant_refusal(grant: Any, key: bytes, release: RelayRelease, *, now: float) 
         return "grant_signature_invalid"
     if (grant["release_id"], grant["route_id"]) != (release.release_id, release.route_id):
         return "grant_release_mismatch"
-    if grant["policy"].get("model") != release.model or grant["policy"].get("max_output_tokens") != release.max_output_tokens:
+    limit = grant["policy"].get("max_output_tokens")  # the call's own limit: lowered by its reservation, never raised
+    if grant["policy"].get("model") != release.model or type(limit) is not int or not (  # noqa: E721
+            1 <= limit <= release.max_output_tokens):
         return "grant_release_mismatch"
     if now >= grant["expires_at"]:
         return "grant_expired"
@@ -266,8 +268,11 @@ class ActualRelease:
     def endpoint_url(self) -> str:
         return f"https://{self.destination.host}{self.destination.path}"
 
-    def body_refusal(self, body: bytes, attempt_id: str) -> str | None:
-        """Why this admitted body is not exactly the release's request shape, or None. Checked before any start."""
+    def body_refusal(self, body: bytes, attempt_id: str, *, granted_max_tokens: int | None = None) -> str | None:
+        """Why this admitted body is not exactly the release's request shape, or None. Checked before any start.
+
+        `max_tokens` must equal the grant's limit, which is at most the release's; without one, the release's own."""
+        limit = self.release.max_output_tokens if granted_max_tokens is None else granted_max_tokens
         try:
             value = _strict_json(body)
         except ValueError:
@@ -285,7 +290,8 @@ class ActualRelease:
             return "body_model_mismatch"
         if value["stream"] is not False:
             return "body_stream_not_false"
-        if type(value["max_tokens"]) is not int or value["max_tokens"] != self.release.max_output_tokens:  # noqa: E721
+        if (type(value["max_tokens"]) is not int or type(limit) is not int  # noqa: E721
+                or not 1 <= limit <= self.release.max_output_tokens or value["max_tokens"] != limit):
             return "body_max_tokens_mismatch"
         if _canonical(value["provider"]) != _canonical(self.provider):
             return "body_routing_mismatch"

@@ -129,8 +129,11 @@ class RelayTurnRunner:
             scope = self._scope_for(turn)
         except Exception:  # noqa: BLE001 - an owner or request that cannot be proved gets no grant
             return _refused("RelaySubjectUnavailable")
-        try:
-            reserved = self._ledger.state(turn.attempt_id) == "RESERVED"
+        try:  # the grant may carry only the output limit this attempt's reservation covers
+            reserved = (self._ledger.state(turn.attempt_id) == "RESERVED"
+                        and type(turn.max_output_tokens) is int  # noqa: E721 - a bool is not a limit
+                        and 1 <= turn.max_output_tokens <= self._policy.max_output_tokens
+                        and self._ledger.reserved_output_tokens(turn.attempt_id) == turn.max_output_tokens)
         except Exception:  # noqa: BLE001 - without a readable reservation nothing may start
             reserved = False
         if not reserved:
@@ -142,7 +145,8 @@ class RelayTurnRunner:
             return _refused("RelayUnavailable")
         grant = issue_grant(release=self._release, run_id=self._run_id, channel_root=self._endpoint.channel_root,
                             owner_id=subject.owner_id, request_id=subject.request_id, attempt_id=turn.attempt_id,
-                            scope=scope, policy={**asdict(self._policy), "required_extra": dict(self._policy.required_extra)},
+                            scope=scope, policy={**asdict(self._policy), "max_output_tokens": turn.max_output_tokens,
+                                                 "required_extra": dict(self._policy.required_extra)},
                             system_prompt=turn.system_prompt, user_message=turn.user_message, issued_at=time.time(),
                             timeout_seconds=self._timeout, key=key)
         if not self._write_once(self._endpoint.grants / f"{turn.attempt_id}.json", grant):
@@ -154,6 +158,7 @@ class RelayTurnRunner:
             self._close(turn.attempt_id)  # the job is over either way; the accepted runner keeps the liability
             raise
         closed, finished = self._close(turn.attempt_id)
+        result = replace(result, observed={**result.observed, "granted_max_output_tokens": turn.max_output_tokens})
         return self._limited(result, grant["grant_id"], closed, finished, turn.attempt_id)
 
     def _relay_alive(self) -> bool:
@@ -289,9 +294,13 @@ def build_relay_job(route: TransportRoute, *, release: RelayRelease, endpoint: R
                     script_for: Callable[[HermesTurn], Mapping[str, Any]], forbidden: Sequence[str] = (),
                     timeout_seconds: float = 90, run_budget_seconds: int = 60, seal_grace_seconds: float = 5.0,
                     recovery_budget_seconds: float = 5.0, close_budget_seconds: float = 2.0,
-                    actual: ActualRelease | None = None, price: TokenPrice | None = None) -> RelayJob:
+                    actual: ActualRelease | None = None, price: TokenPrice | None = None,
+                    min_output_tokens: int | None = None) -> RelayJob:
     """`price` is required for an ACTUAL route: the SAME TokenPrice the caller gave its ledger (the trusted composition
-    owner's obligation; a type check cannot prove it). An AUTHORED route takes no record and no price."""
+    owner's obligation; a type check cannot prove it). An AUTHORED route takes no record and no price.
+
+    `min_output_tokens` (default None: every call reserves and grants the release's full limit) lets a reservation lower
+    one call's output limit to what the remaining budget covers, never below it (CONTRACT A9)."""
     if route.kind == "ACTUAL":
         if actual is None or actual.release != release:
             raise ActualProviderUnavailable("an ACTUAL route needs its approved release record (CONTRACT A6)")
@@ -318,4 +327,4 @@ def build_relay_job(route: TransportRoute, *, release: RelayRelease, endpoint: R
                             ledger=ledger, scope_for=scope_for, subject_for=subject_for, run_id=run_id,
                             timeout_seconds=timeout_seconds, close_budget_seconds=close_budget_seconds, actual=actual,
                             price=price)
-    return RelayJob(GuardedTurnRunner(relay, ledger, policy, scope_for), supervision)
+    return RelayJob(GuardedTurnRunner(relay, ledger, policy, scope_for, min_output_tokens=min_output_tokens), supervision)

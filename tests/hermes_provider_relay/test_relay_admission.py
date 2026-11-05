@@ -92,3 +92,16 @@ def test_release_and_destination_are_bounded_and_only_authored_in_this_milestone
                              ("user@h", 443, "/x")):
         with pytest.raises(ValueError):
             ProviderDestination(host, port, path)
+
+
+# --- The per-call output limit (ORBIO_CREDIT_DESIGN 2b) ----------------------------------------------------------------
+
+@pytest.mark.parametrize("limit", [1, 1880, 4096])
+def test_a_grant_may_carry_a_lowered_output_limit(limit: int) -> None:
+    assert grant_refusal(grant(policy={**POLICY, "max_output_tokens": limit}), KEY, RELEASE, now=1001.0) is None
+
+
+@pytest.mark.parametrize("limit", [4097, 0, -1, True, "4096", None, 4096.0])
+def test_a_grant_whose_output_limit_is_raised_or_not_a_whole_number_is_refused(limit) -> None:
+    assert grant_refusal(grant(policy={**POLICY, "max_output_tokens": limit}), KEY, RELEASE,
+                         now=1001.0) == "grant_release_mismatch"

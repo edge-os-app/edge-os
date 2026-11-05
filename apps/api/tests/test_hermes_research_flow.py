@@ -978,3 +978,30 @@ def test_the_reply_dry_run_uses_the_longest_question_identifier_a_real_reply_can
     assert isinstance(parsed, ParsedInterpretation), parsed
     publication.RecordPublicationCheck().reply(intake, evidence, "Which entry?", answer_, parsed)
     assert seen and len(seen[0]) == MAX_IDENTIFIER_CHARS
+
+
+def test_an_application_with_no_spend_ledger_shows_no_budget_rather_than_a_zero_one(make_client, owner_a) -> None:
+    bundle = create(make_client(CaseRunner(turn_result(case("concrete-thesis")["provider"]))), owner_a,
+                    "concrete-thesis").json()
+    assert "model_budget" in bundle and bundle["model_budget"] is None  # "budget not set", never 0
+
+
+def test_a_spend_view_without_the_hermes_interpreter_and_its_runner_is_refused(env, migrated) -> None:
+    from edge_os_api.core.settings import ConfigError
+    with pytest.raises(ConfigError, match="spend view"):
+        create_app(load_settings(env), spend_view=lambda session, owner: None)
+
+
+def test_a_budget_that_cannot_be_read_is_unknown_and_the_saved_result_still_loads(env, migrated, owner_a) -> None:
+    def broken(session, owner):
+        raise RuntimeError("the ledger tables cannot be read")
+
+    settings = load_settings({**env, "EDGE_OS_INTERPRETER": "hermes_local"})
+    with TestClient(create_app(settings, hermes_runner=CaseRunner(turn_result(case("concrete-thesis")["provider"])),
+                               spend_view=broken)) as client:
+        created = create(client, owner_a, "concrete-thesis")
+        saved = client.get(f"/v1/research/requests/{created.json()['intake']['record_id']}", headers=owner_a)
+
+    assert created.status_code == 201 and saved.status_code == 200
+    # unknown, which is neither "budget not set" (None) nor a zero budget
+    assert created.json()["model_budget"] == saved.json()["model_budget"] == {"unit": "CREDIT", "state": "UNKNOWN"}
