@@ -69,15 +69,30 @@ def test_one_admitted_request_leaves_through_the_relay_with_the_relay_key_and_is
 def test_a_request_the_job_guard_refuses_never_reaches_the_relay_and_is_released_on_the_relay_record(
         relay, pinned_hermes_image, evidence_root) -> None:
     rig = Rig(relay, pinned_hermes_image, evidence_root, "guard-refused", case())
-    rig.job.supervision.policy = replace(POLICY, max_output_tokens=2048)  # the job is told a different output limit
+    # The job takes its output limit from the turn, so a different model is what makes the request differ from its policy.
+    rig.job.supervision.policy = replace(POLICY, model="another-model/1")
 
     result = rig.run_case()
 
     assert isinstance(result, Unavailable)
     container = rig.container_result("guard-refused-1")
     assert container["transport"]["sent"] == [] and container["hermes"]["request_count"] == 0
+    assert [r["reason"] for r in container["guard"]["evidence"]] == ["model_not_as_configured"]
     assert counts(relay, "guard-refused-1") == (0, 0) and relay_record(relay, "guard-refused-1", "closed")["started"] is False
     assert rig.spend.state("guard-refused-1") == "RELEASED" and rig.spend.committed_usd() == 0
+
+
+def test_a_turn_limit_above_the_job_policy_is_refused_before_any_launch_and_never_reaches_the_relay(
+        relay, pinned_hermes_image, evidence_root) -> None:
+    rig = Rig(relay, pinned_hermes_image, evidence_root, "limit-refused", case())
+    rig.job.supervision.policy = replace(POLICY, max_output_tokens=2048)  # the turn carries 4,096
+
+    result = rig.run_case()
+
+    assert isinstance(result, Unavailable) and rig.saved().settlement.request_count == 0
+    assert list(rig.evidence.glob("turn-*-limit-refused-1")) == []
+    assert counts(relay, "limit-refused-1") == (0, 0) and relay_record(relay, "limit-refused-1", "closed")["started"] is False
+    assert rig.spend.state("limit-refused-1") == "RELEASED" and rig.spend.committed_usd() == 0
 
 
 def test_with_the_relay_down_no_grant_is_issued_no_job_starts_and_the_reservation_is_released(

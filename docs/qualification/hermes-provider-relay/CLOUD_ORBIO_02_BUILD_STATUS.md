@@ -161,6 +161,19 @@ Decisions 4 and 5 are display changes only. Reservation, settlement, caps, relay
 
 RED ran after the source edits, because the check slot was not free. It ran on a scratch export of the tests-only commit `9c8b966`, which has the old source. Web: 2 failed, 14 passed. API: 8 failed, 242 passed. The web text for decision 4 was already green, because the text format did not change; its RED is in the API tests. GREEN: web 20 passed, `tsc --noEmit` exit 0, API 250 passed.
 
+### Guard test repair (same ticket)
+
+Three pinned-Hermes tests passed on `9c79493` and failed on the merged base `56709b9`. The cloud session could not run them. Each set the job policy to 2,048 while the turn carried 4,096. The new `run_turn` check in `guarded_docker_runner.py` now refuses that before any launch, so these tests stopped reaching the in-container guard. That check is unchanged. Nothing is sent in that refusal.
+
+| Test | Proves now |
+|---|---|
+| `test_transport_job_through_pinned_hermes.py::test_a_request_the_guard_refuses_never_reaches_the_transport_and_frees_its_reservation` | In-container guard refuses with `model_not_as_configured`; nothing sent; RELEASED |
+| `test_relay_through_pinned_hermes.py::test_a_request_the_job_guard_refuses_never_reaches_the_relay_and_is_released_on_the_relay_record` | Same reason; relay counts 0, closed not started; RELEASED |
+| `test_pinned_hermes_guard.py::test_the_guard_in_the_container_refuses_a_request_that_differs_from_the_policy` | Same reason; RELEASED |
+| `test_a_turn_limit_above_the_job_policy_is_refused_before_any_launch*` (new, one in each file) | `run_turn` refuses (`RequestNotAdmitted`) before any launch; RELEASED |
+
+`output_limit_not_as_configured` loses its proof through the in-container guard with pinned Hermes. The job takes the policy limit and the request limit from the same turn value, so they cannot differ without a product change. That reason keeps its unit proof in `test_provider_guard.py` and its relay guard proof in `test_relay_service.py` and `test_relay_service_actual.py`.
+
 ## Open questions for the builder
 
 1. **The release value of `min_output_tokens`** (design Q2, item 3 of `CLOUD_ORBIO_02_DESIGN_STATUS.md`). The brief called it Q3. Below what output limit is a call not worth making for `hermes-first-call-1`? Setting it means adding `min_output_tokens=<n>` to its `RelayApplicationDefinition`, a reviewed change. Until then every call reserves and grants the full 4,096.

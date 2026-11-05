@@ -108,7 +108,8 @@ def test_one_admitted_request_reaches_the_transport_with_the_host_credential_and
 def test_a_request_the_guard_refuses_never_reaches_the_transport_and_frees_its_reservation(
         pinned_hermes_image, run_id, evidence_root) -> None:
     rig = Rig(pinned_hermes_image, run_id, evidence_root, "guard-refused", case())
-    rig.job.supervision.policy = replace(POLICY, max_output_tokens=2048)  # the job is told a different output limit
+    # The job takes its output limit from the turn, so a different model is what makes the request differ from its policy.
+    rig.job.supervision.policy = replace(POLICY, model="another-model/1")
 
     result = rig.run_case()
 
@@ -116,7 +117,19 @@ def test_a_request_the_guard_refuses_never_reaches_the_transport_and_frees_its_r
     assert isinstance(result, Unavailable) and result.reason_code == "outcome_unknown"
     container = rig.container_result()
     assert container["transport"]["sent"] == [] and container["hermes"]["request_count"] == 0
-    assert [r["reason"] for r in container["guard"]["evidence"]] == ["output_limit_not_as_configured"]
+    assert [r["reason"] for r in container["guard"]["evidence"]] == ["model_not_as_configured"]
+    assert rig.spend.state("attempt-1") == "RELEASED" and rig.spend.committed_usd() == 0
+
+
+def test_a_turn_limit_above_the_job_policy_is_refused_before_any_launch_and_frees_its_reservation(
+        pinned_hermes_image, run_id, evidence_root) -> None:
+    rig = Rig(pinned_hermes_image, run_id, evidence_root, "limit-refused", case())
+    rig.job.supervision.policy = replace(POLICY, max_output_tokens=2048)  # the turn carries 4,096
+
+    result = rig.run_case()
+
+    assert isinstance(result, Unavailable) and result.reason_code == "provider_failed"
+    assert list(rig.evidence.glob("turn-*")) == [] and rig.saved().settlement.request_count == 0
     assert rig.spend.state("attempt-1") == "RELEASED" and rig.spend.committed_usd() == 0
 
 
