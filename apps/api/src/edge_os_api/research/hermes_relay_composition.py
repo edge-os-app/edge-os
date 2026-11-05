@@ -400,7 +400,7 @@ def compose_application(release: HermesApplicationRelease, engine: Engine, *, en
         raise _Refused("the relay endpoint must serve this release's channel root")
     if not isinstance(run_id, str) or not relay_admission.IDENTIFIER.fullmatch(run_id):
         raise _Refused("run_id must be 1-64 letters, digits or ._:-")
-    spend = PostgresSpendLedger(make_session_factory(engine), release.limits)
+    spend = PostgresSpendLedger(make_session_factory(engine), release.limits, route_id=release.actual.release.route_id)
     job = build_relay_job(release.route, release=release.actual.release, endpoint=endpoint,
                           subject_for=_subject(engine), policy=release.policy, ledger=spend,
                           scope_for=_intake_scope(engine), image=release.image, run_id=run_id,

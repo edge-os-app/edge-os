@@ -90,7 +90,7 @@ def open_relay_mount(settings: Settings, *, limits: SpendLimits, release: RelayR
     engine = make_engine(settings.database_url, settings.database_statement_timeout_ms)
     try:
         require_head(engine)
-        spend = PostgresSpendLedger(make_session_factory(engine), limits)
+        spend = PostgresSpendLedger(make_session_factory(engine), limits, route_id=route.route_id)
         job = build_relay_job(route, release=release, endpoint=endpoint, subject_for=_subject(engine), policy=policy,
                               ledger=spend, scope_for=_intake_scope(engine), image=image, run_id=run_id,
                               evidence_dir=evidence_dir, script_for=script_for, timeout_seconds=timeout_seconds,

@@ -20,8 +20,11 @@ from edge_os_api.research.provider_spend_ledger import PostgresSpendLedger, Spen
 
 def main(url: str, global_cap: str, owner_cap: str, start_at: str, *pairs: str) -> None:
     engine = make_engine(url)
-    spend = PostgresSpendLedger(make_session_factory(engine), SpendLimits(
-        Decimal(global_cap), Decimal(owner_cap), TokenPrice(Decimal("2.00"), Decimal("7.50"))))
+    route = pairs[0].removeprefix("route=") if pairs and pairs[0].startswith("route=") else "route-test"
+    pairs = pairs[1:] if route != "route-test" else pairs
+    price = TokenPrice(Decimal("4.00"), Decimal("15.00")) if route == "route-b" else TokenPrice(Decimal("2.00"), Decimal("7.50"))
+    spend = PostgresSpendLedger(make_session_factory(engine), SpendLimits(Decimal(global_cap), Decimal(owner_cap), price),
+                                route_id=route)
     smallest = int(pairs[0].removeprefix("min=")) if pairs and pairs[0].startswith("min=") else None
     pairs = pairs[1:] if smallest is not None else pairs
     results: list[dict[str, object]] = []

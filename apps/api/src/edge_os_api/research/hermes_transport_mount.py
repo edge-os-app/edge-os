@@ -95,7 +95,7 @@ def open_transport_mount(settings: Settings, *, limits: SpendLimits, image: str,
     engine = make_engine(settings.database_url, settings.database_statement_timeout_ms)
     try:
         require_head(engine)
-        spend = PostgresSpendLedger(make_session_factory(engine), limits)
+        spend = PostgresSpendLedger(make_session_factory(engine), limits, route_id=route.route_id)
         job = build_transport_job(route, policy=policy, ledger=spend, scope_for=_intake_scope(engine), image=image,
                                   run_id=run_id, evidence_dir=evidence_dir, script_for=script_for,
                                   credential_file=credential_file, timeout_seconds=timeout_seconds,

@@ -996,7 +996,7 @@ def test_before_the_ledger_is_used_the_saved_result_shows_the_configured_limits(
                                spend_view=partial(spend_view, limits=limits))) as client:
         with client.app.state.session_factory() as session:
             session.execute(text("TRUNCATE usage_local.provider_spend_events, usage_local.provider_spend_reservations, "
-                                 "usage_local.provider_spend_settings"))
+                                 "usage_local.provider_spend_route_prices, usage_local.provider_spend_settings"))
             session.commit()
         created = create(client, owner_a, "concrete-thesis")
 

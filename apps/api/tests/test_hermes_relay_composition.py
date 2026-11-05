@@ -448,7 +448,7 @@ def test_the_ledger_and_the_relay_runner_hold_the_same_token_price_object_and_co
     app = compose_application(release, lazy_engine(), endpoint=endpoint(tmp_path / "relay"), run_id="rc-unit",
                               evidence_dir=tmp_path / "jobs")
     relay_runner = app.runner._delegate  # type: ignore[attr-defined] - accepted GuardedTurnRunner over RelayTurnRunner
-    assert app.spend._configured.price is release.price  # what PostgresSpendLedger reserves and settles with
+    assert app.spend._price is release.price  # what PostgresSpendLedger reserves and settles with
     assert relay_runner._price is release.price and relay_runner._actual is release.actual  # E1-COST1 check
     assert app.runner._policy is release.policy and app.config is release.config  # type: ignore[attr-defined]
     assert list(tmp_path.iterdir()) == []

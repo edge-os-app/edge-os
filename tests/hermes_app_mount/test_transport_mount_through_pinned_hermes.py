@@ -37,7 +37,7 @@ LIMITS = SpendLimits(Decimal("0.20"), Decimal("0.12"), PRICE)
 RESERVATION = Decimal("0.054848")  # (12,000 + 64) x 2.00 / 1e6 + 4,096 x 7.50 / 1e6
 EXACT_CHARGE = Decimal("0.0074285")  # concrete-thesis reports 1,423 prompt and 611 completion tokens
 HOST = Path(__file__).resolve().parents[2] / "scripts" / "hermes_app_mount" / "serve_transport_mount.py"
-SPEND_TABLES = "usage_local.provider_spend_events, usage_local.provider_spend_reservations, usage_local.provider_spend_settings"
+SPEND_TABLES = "usage_local.provider_spend_events, usage_local.provider_spend_reservations, usage_local.provider_spend_route_prices, usage_local.provider_spend_settings"
 
 
 def intake(name: str = "concrete-thesis") -> dict[str, Any]:

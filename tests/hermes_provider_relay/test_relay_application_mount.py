@@ -33,7 +33,7 @@ RESERVATION = Decimal("0.054848")
 EXACT_CHARGE = Decimal("0.0074285")
 APP_RELEASE = RelayRelease("local-relay-app-1", AUTHORED_ROUTE.route_id, "AUTHORED", DEFAULT_POLICY.model,
                            DEFAULT_POLICY.max_output_tokens, DEFAULT_POLICY.max_request_bytes, AUTHORED_ROUTE.max_reply_bytes)
-SPEND_TABLES = "usage_local.provider_spend_events, usage_local.provider_spend_reservations, usage_local.provider_spend_settings"
+SPEND_TABLES = "usage_local.provider_spend_events, usage_local.provider_spend_reservations, usage_local.provider_spend_route_prices, usage_local.provider_spend_settings"
 
 
 @pytest.fixture(scope="module")

@@ -203,7 +203,7 @@ def test_the_shape_helper_pins_the_receipt_id_to_the_host_platform(
 RELEASE_ID = "SYNTHETIC-hermes-app-1"
 IMAGE_RECEIPT = "HERMES_APP_IMAGE_RECEIPT"  # a kept `source_identity.json` of this candidate's pinned Hermes image
 SPEND_TABLES = ("usage_local.provider_spend_events, usage_local.provider_spend_reservations, "
-                "usage_local.provider_spend_settings")
+                "usage_local.provider_spend_route_prices, usage_local.provider_spend_settings")
 
 
 def docker_names(*args: str) -> list[str]:

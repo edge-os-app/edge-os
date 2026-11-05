@@ -162,7 +162,7 @@ def test_composing_the_adopted_release_opens_nothing(tmp_path: Path, monkeypatch
     app = compose_application(bind_release(adopted()), lazy_engine(), endpoint=endpoint(tmp_path / "relay",
                                                                                          "edge-os-research"),
                               run_id="rc-binding", evidence_dir=tmp_path / "jobs")
-    assert app.spend._configured.price is app.release.price and app.supervision.image == IMAGE
+    assert app.spend._price is app.release.price and app.supervision.image == IMAGE
     assert list(tmp_path.iterdir()) == []
 
 
