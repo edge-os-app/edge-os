@@ -110,7 +110,8 @@ def test_the_online_configs_fix_the_destination_and_the_test_resolution_names_th
     provider = json.loads(made.path("provider-config.json").read_text())
     assert relay["destination"] == {"host": "openrouter.ai", "port": 443, "path": "/api/v1/chat/completions"}
     assert (relay["gateway_socket"], relay["egress_probes"]) == ("/relay/egress/gateway.sock", [])
-    assert gateway == {"socket": "/egress/gateway.sock", "receipts": "/gateway/receipts", "test_resolution": STAND_IN_IP}
+    assert gateway == {"socket": "/egress/gateway.sock", "receipts": "/gateway/receipts", "test_resolution": STAND_IN_IP,
+                       "destination": {"host": "openrouter.ai", "port": 443}}  # the gateway's one allowed target
     assert (provider["bind"], provider["port"], provider["path"]) == ("0.0.0.0", 443, "/api/v1/chat/completions")
     assert made.path("tls", "server.pem").read_text() == "openrouter.ai"  # a test CA for the stand-in only
 

@@ -70,9 +70,11 @@ def test_an_approved_record_gives_the_actual_release_and_fixed_destination() -> 
 
 @pytest.mark.parametrize("change", [
     {"kind": "AUTHORED"},
-    {"destination": {"host": "localhost", "port": 443, "path": "/api/v1/chat/completions"}},
-    {"destination": {"host": "openrouter.ai", "port": 8443, "path": "/api/v1/chat/completions"}},
-    {"destination": {"host": "openrouter.ai", "port": 443, "path": "/v1/chat/completions"}},
+    # Another host, port or path is now refused unless that record is the approved release (CLOUD-02):
+    # test_release_destination.py checks both sides.
+    {"destination": {"host": "OpenRouter.ai", "port": 443, "path": "/api/v1/chat/completions"}},
+    {"destination": {"host": "openrouter.ai", "port": 0, "path": "/api/v1/chat/completions"}},
+    {"destination": {"host": "openrouter.ai", "port": 443, "path": "/api/v1/chat?x=1"}},
     {"stream": True},
     {"provider": {**ROUTING, "allow_fallbacks": True}},
     {"provider": {**ROUTING, "only": ["a", "b"]}},
