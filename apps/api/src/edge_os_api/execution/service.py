@@ -201,19 +201,22 @@ class ExecutionService:
         decision_at: dt.datetime,
         release_id: str,
         binding_sha256: str,
-    ) -> SavedDecisionView:
-        """Save the one owner-triggered decision. No market observation and no rule evaluation.
+        attempt: int,
+    ) -> SavedDecisionView | None:
+        """Save one owner-triggered attempt. No market observation and no rule evaluation.
 
-        The basis comes from saved rows only. The partial unique index allows one owner-triggered decision per
-        owner, agent, wallet and network, so a second action under the same permission cannot create a second one.
+        The basis comes from saved rows only. The caller reads `attempt` with the proof that every earlier attempt
+        is released. The partial unique index allows each number once per owner, agent, wallet and network, so
+        concurrent triggers cannot both proceed: the loser gets None and no decision.
         """
-        inputs = {"basis": "OWNER_TRIGGER", "release_id": release_id, "binding_sha256": binding_sha256}
+        inputs = {"basis": "OWNER_TRIGGER", "release_id": release_id, "binding_sha256": binding_sha256,
+                  "attempt": attempt}
         row = DecisionRow(
             decision_id=uuid.uuid4(), owner_id=verified_owner_id, agent_id=agent_id, wallet_id=wallet_id,
             network_id=network_id, strategy_id=revision.strategy_id, revision_id=revision.revision_id,
             content_hash=revision.content_hash, manifest_hash=revision.manifest_hash,
             market_binding_id=revision.market_binding_id, decision_at=decision_at, status="SIGNAL",
-            operation="ENTRY", decision_basis="OWNER_TRIGGER",
+            operation="ENTRY", decision_basis="OWNER_TRIGGER", owner_trigger_attempt=attempt,
             reasons=["OWNER_TRIGGERED_ONE_ACTION"],
             rule_results=[{"rule": "owner_trigger", "state": "AUTHORIZED",
                            "reasons": ["OWNER_TRIGGERED_ONE_ACTION"]}],
@@ -225,14 +228,7 @@ class ExecutionService:
                 return _decision_view(row)
             except IntegrityError:
                 session.rollback()
-                existing = session.execute(select(DecisionRow).where(
-                    DecisionRow.owner_id == verified_owner_id, DecisionRow.agent_id == agent_id,
-                    DecisionRow.wallet_id == wallet_id, DecisionRow.network_id == network_id,
-                    DecisionRow.decision_basis == "OWNER_TRIGGER",
-                ).order_by(DecisionRow.created_at)).scalars().first()
-                if existing is None:
-                    raise
-                return _decision_view(existing)
+                return None
             except SQLAlchemyError:
                 session.rollback()
                 raise

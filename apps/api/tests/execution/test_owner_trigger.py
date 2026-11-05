@@ -28,7 +28,7 @@ def basis(**changes):
     fields = {"release": release(), "deployment_id": None, "consent_adoption_id": CONSENT,
               "job_consent_adoption_id": CONSENT, "consent_hash": "sha256:" + "a" * 64,
               "job_consent_hash": "sha256:" + "a" * 64, "market_proof": PROOF, "market_profile": None,
-              "prior_intent": False}
+              "refusal": None, "attempt": 1}
     fields.update(changes)
     return owner_trigger_basis(**fields)
 
@@ -53,8 +53,8 @@ def test_any_other_saved_fact_keeps_the_rule_path(change):
     assert basis(**change).basis == RULE
 
 
-def test_a_prior_intent_for_the_same_permission_is_refused_not_rerun():
-    result = basis(prior_intent=True)
+def test_a_saved_refusal_is_refused_not_rerun():
+    result = basis(refusal=ALREADY_USED)
     assert (result.basis, result.refusal) == (OWNER_TRIGGER, ALREADY_USED)
 
 

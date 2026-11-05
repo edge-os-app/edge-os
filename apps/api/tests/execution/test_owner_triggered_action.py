@@ -33,7 +33,7 @@ DECISION_HASH = "7" * 64
 REASON = "NO_FORWARD_SOURCE_BUILDER_DECISION"
 
 
-def owner_triggered_agent(client, headers, tmp_path, clock, monkeypatch):
+def owner_triggered_agent(client, headers, tmp_path, clock, monkeypatch, lifetime=dt.timedelta(minutes=5)):
     """The controlled agent of the mounted test, with no market source and the owner-trigger decision binding."""
     from edge_os_api.execution import operating_release
     monkeypatch.setattr(operating_release, "APPROVED_BINDING_DECISIONS",
@@ -52,7 +52,7 @@ def owner_triggered_agent(client, headers, tmp_path, clock, monkeypatch):
     ff.confirmed_agent(client, headers, agent_id, network_id=143)
     declaration = ff.funded(client, headers, agent_id)
     factory = client.app.state.session_factory
-    expiry = (decision_slot(clock()) + dt.timedelta(minutes=5)).isoformat()
+    expiry = (decision_slot(clock()) + lifetime).isoformat()
     seed = tmp_path / f"seed-{agent_id}"; seed.mkdir()
     transport, data, _ = pure_original(seed, None)
     prior, _ = bound_original(transport)
@@ -114,16 +114,20 @@ class SpyRuntime:
         return self._runtime.observe_market(request)
 
 
-@pytest.fixture
-def owner_triggered(original, owner_a, tmp_path, settings, monkeypatch):
+def composed_case(original, owner_a, tmp_path, settings, monkeypatch, lifetime=dt.timedelta(minutes=5)):
     original_clock = original.app.state.execution_worker.connected._clock
     offset = [dt.timedelta()]
     clock = lambda: original_clock() + offset[0]
-    case = owner_triggered_agent(original, owner_a, tmp_path, clock, monkeypatch)
+    case = owner_triggered_agent(original, owner_a, tmp_path, clock, monkeypatch, lifetime)
     case.offset = offset
     case.market = SpyRuntime(case.runtime)
     case.compose = compose_controlled(original, settings, clock, {case.agent: case.market})
     return case
+
+
+@pytest.fixture
+def owner_triggered(original, owner_a, tmp_path, settings, monkeypatch):
+    return composed_case(original, owner_a, tmp_path, settings, monkeypatch)
 
 
 def test_owner_triggered_entry_completes_without_a_market_source(owner_triggered):

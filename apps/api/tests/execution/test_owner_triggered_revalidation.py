@@ -26,7 +26,7 @@ BINDING = "7" * 64
 def _owner_entry(execution_service, owner, revision):
     decision = execution_service.authorize_owner_trigger(
         owner, revision, agent_id=AGENT_A, wallet_id=WALLET_A, network_id=NETWORK,
-        decision_at=DECISION_TIME, release_id=RELEASE_ID, binding_sha256=BINDING)
+        decision_at=DECISION_TIME, release_id=RELEASE_ID, binding_sha256=BINDING, attempt=1)
     approval, context = scoped_approval(revision_id=revision.revision_id), scoped_context()
     result = execution_service.enqueue(
         owner, decision.decision_id, entry_terms(), approval, context)

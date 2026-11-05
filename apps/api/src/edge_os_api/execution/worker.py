@@ -28,7 +28,7 @@ from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
@@ -45,7 +45,8 @@ from edge_os_api.execution.connected_identity import (AdoptedConsent, ConnectedA
 from edge_os_api.execution.current_holdings import HoldingsUnavailable
 from edge_os_api.execution.models import (DecisionRow, EvaluationJobRow, EvaluationOutcomeRow, IntentRow, QueueRow,
                                           RecurringDeploymentRow, SubmissionAttemptRow)
-from edge_os_api.execution.owner_trigger import OWNER_TRIGGER, RULE, OwnerTriggerBasis, owner_trigger_basis
+from edge_os_api.execution.owner_trigger import (ALREADY_USED, OWNER_TRIGGER, RULE, OwnerTriggerBasis, SavedAttempt,
+                                                 next_attempt, owner_trigger_basis, prior_refusal)
 from edge_os_api.execution.original_transaction import (TRANSPORT_ID as ORIGINAL_TRANSPORT_ID,
                                                         Leg, OriginalClients, OriginalContext,
                                                         OriginalTransactionTransport, RouteProfile,
@@ -403,17 +404,45 @@ class ConnectedExecution:
         runtime = self._ports.controlled.get(agent.agent_id) if self._ports.mode == "controlled" else None
         if runtime is None:
             return OwnerTriggerBasis(RULE)
-        with self._factory() as session:
-            prior = session.execute(select(IntentRow.intent_id).where(
-                IntentRow.owner_id == job.owner_id, IntentRow.agent_id == agent.agent_id,
-                IntentRow.wallet_id == agent.wallet_id, IntentRow.network_id == agent.network_id,
-                IntentRow.mandate_id == str(consent.adoption_id)).limit(1)).scalar_one_or_none()
+        attempts, foreign_intent = self._saved_attempts(job, agent, consent)
         return owner_trigger_basis(
             release=runtime.binding.release.content(), deployment_id=job.deployment_id,
             consent_adoption_id=str(consent.adoption_id), job_consent_adoption_id=str(job.consent_adoption_id),
             consent_hash=consent.consent_hash, job_consent_hash=job.consent_hash,
             market_proof=runtime.binding.proofs().get("market_proof_sha256"),
-            market_profile=runtime.binding.market_profile(), prior_intent=prior is not None)
+            market_profile=runtime.binding.market_profile(),
+            refusal=prior_refusal(attempts, binding_sha256=runtime.binding.sha256, foreign_intent=foreign_intent),
+            attempt=next_attempt(attempts))
+
+    def _saved_attempts(self, job: EvaluationJobRow, agent: ConnectedAgent,
+                        consent: AdoptedConsent) -> tuple[tuple[SavedAttempt, ...], bool]:
+        """Every saved owner-triggered attempt on this wallet, and whether the permission has an intent outside them."""
+        with self._factory() as session:
+            decisions = session.execute(select(
+                DecisionRow.decision_id, DecisionRow.owner_trigger_attempt, DecisionRow.inputs).where(
+                DecisionRow.owner_id == job.owner_id, DecisionRow.agent_id == agent.agent_id,
+                DecisionRow.wallet_id == agent.wallet_id, DecisionRow.network_id == agent.network_id,
+                DecisionRow.decision_basis == OWNER_TRIGGER)).all()
+            decision_ids = [row.decision_id for row in decisions]
+            intents = session.execute(select(IntentRow.decision_id, IntentRow.action_id).where(
+                IntentRow.owner_id == job.owner_id, IntentRow.agent_id == agent.agent_id,
+                IntentRow.wallet_id == agent.wallet_id, IntentRow.network_id == agent.network_id,
+                or_(IntentRow.mandate_id == str(consent.adoption_id), IntentRow.decision_id.in_(decision_ids)))).all()
+            action_ids = [row.action_id for row in intents]
+            jobs = session.execute(select(EvaluationJobRow.decision_id, EvaluationJobRow.state).where(
+                EvaluationJobRow.owner_id == job.owner_id, EvaluationJobRow.decision_id.in_(decision_ids))).all()
+            queue = dict(session.execute(select(QueueRow.action_id, QueueRow.state).where(
+                QueueRow.owner_id == job.owner_id, QueueRow.action_id.in_(action_ids))).tuples().all())
+            submitted = session.execute(select(SubmissionAttemptRow.action_id).where(
+                SubmissionAttemptRow.owner_id == job.owner_id,
+                SubmissionAttemptRow.action_id.in_(action_ids))).scalars().all()
+        action_of = {row.decision_id: row.action_id for row in intents}
+        attempts = tuple(SavedAttempt(
+            number=row.owner_trigger_attempt, binding_sha256=row.inputs["binding_sha256"],
+            job_states=tuple(saved.state for saved in jobs if saved.decision_id == row.decision_id),
+            has_intent=row.decision_id in action_of, queue_state=queue.get(action_of.get(row.decision_id)),
+            submission_attempts=submitted.count(action_of.get(row.decision_id))) for row in decisions)
+        return attempts, any(row.decision_id not in decision_ids for row in intents)
 
     def _decide(self, job: EvaluationJobRow, agent: ConnectedAgent, consent: AdoptedConsent) -> None:
         with self._factory() as session:
@@ -437,21 +466,15 @@ class ConnectedExecution:
                     self._terminate(job, "DENIED", basis.refusal)
                     return
                 runtime = self._ports.controlled[agent.agent_id]
-                with self._factory() as session:
-                    prior_binding = session.execute(select(DecisionRow.inputs).where(
-                        DecisionRow.owner_id == job.owner_id, DecisionRow.agent_id == agent.agent_id,
-                        DecisionRow.wallet_id == agent.wallet_id, DecisionRow.network_id == agent.network_id,
-                        DecisionRow.decision_basis == OWNER_TRIGGER,
-                    ).order_by(DecisionRow.created_at).limit(1)).scalar_one_or_none()
-                if prior_binding is not None and prior_binding.get("binding_sha256") != runtime.binding.sha256:
-                    # A new permission on the same wallet never inherits the earlier owner-triggered decision.
-                    self._terminate(job, "DENIED", "OWNER_TRIGGER_PERMISSION_CHANGED")
-                    return
                 release_id = runtime.binding.release.content()["release_id"]
                 view = self._services.execution.authorize_owner_trigger(
                     job.owner_id, agent.revision, agent_id=agent.agent_id, wallet_id=agent.wallet_id,
                     network_id=agent.network_id, decision_at=job.decision_slot, release_id=release_id,
-                    binding_sha256=runtime.binding.sha256)
+                    binding_sha256=runtime.binding.sha256, attempt=basis.attempt)
+                if view is None:
+                    # Another trigger took this attempt number after this job read the saved attempts.
+                    self._terminate(job, "DENIED", ALREADY_USED)
+                    return
                 provenance = {**job.provenance, "decision_basis": OWNER_TRIGGER, "release_id": release_id,
                               "binding_sha256": runtime.binding.sha256}
                 self._save_outcome(job, "SIGNAL", None, view.decision_id, None, None, self._clock(), provenance)
