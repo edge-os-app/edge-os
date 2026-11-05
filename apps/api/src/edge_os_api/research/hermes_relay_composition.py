@@ -14,8 +14,8 @@ A release is composed only from a code-owned definition in `RELEASE_DEFINITIONS`
 trusted registry `relay_admission.APPROVED_ACTUAL_RELEASES`. Several may be approved. The operator's handoff selects one
 by record hash; there is no default, so no handoff means no start. Binding reads no file, and nothing opens an engine,
 key, socket or Docker command before that handoff is read. The ledger is shared: every route counts against the one
-USD 2.00 ceiling. A ledger cap sees one database only: that ceiling still needs an external reconciliation before the
-first actual call. No setting, environment value, file or request adds a definition.
+USD 2.00 ceiling. Spend outside this database is not seen. No setting, environment value, file or request adds a
+definition.
 Production needs an approved hosted deployment record that names this exact release; the registry is empty in this
 candidate, so production stays refused. The application holds no provider key: the relay holds it. The owner and saved
 request of each grant are read from the saved attempt row and must equal those the RESERVED reservation copied from it;
@@ -112,8 +112,12 @@ class RelayApplicationDefinition:
     seller: str | None = None
 
 
-# The one approved release, hermes-first-call-1. Its record and price bytes are the frozen files in
-# docs/qualification/hermes-actual-operation/release/, held here so that binding reads no file.
+_PINNED_IMAGES = (("linux/arm64", "sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0"),
+                  ("linux/amd64", "sha256:42541c05f27ee56bfe02ce9d7223728c0432a040abef6515fff67a7f992f9aff"))
+
+# The approved releases. An operator handoff selects one by record hash; the order selects nothing. Record and price
+# bytes are the frozen files, held here so that binding reads no file: hermes-first-call-1 in
+# docs/qualification/hermes-actual-operation/release/, orbio-first-call-1 in docs/qualification/orbio-release/.
 RELEASE_DEFINITIONS: tuple[RelayApplicationDefinition, ...] = (RelayApplicationDefinition(
     record=(b'{"allowed_fields":["model","messages","stream","response_format","provider","reasoning",'
             b'"max_tokens","session_id","prompt_cache_options"],'
@@ -132,12 +136,31 @@ RELEASE_DEFINITIONS: tuple[RelayApplicationDefinition, ...] = (RelayApplicationD
     price_snapshot=(b'{"completion_usd_per_million":"10","model":"openai/gpt-6.1-sol","prompt_usd_per_million":"2",'
                     b'"provider":"openai"}'),
     response_format=interpretation_response_format(),
-    images=(("linux/arm64", "sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0"),
-            ("linux/amd64", "sha256:42541c05f27ee56bfe02ce9d7223728c0432a040abef6515fff67a7f992f9aff")),
+    images=_PINNED_IMAGES,
     channel_root="edge-os-research",
     global_cap_usd=Decimal("2.00"),  # the one shared USD 2.00 model and data ceiling, not a Hermes allocation
     owner_cap_usd=Decimal("2.00"),
-),)
+), RelayApplicationDefinition(
+    record=(b'{"allowed_fields":["model","messages","stream","response_format","reasoning","max_tokens","session_id","'
+            b'prompt_cache_options"],"approval":{"path":"docs/qualification/orbio-release/orbio_first_call_approval.js'
+            b'on","sha256":"22e9ccdc52de423f8c612bc59376bec38357a47134f2c130b50a75e7c9e23e48"},"ca_bundle_sha256":"22b'
+            b'557a27055b33606b6559f37703928d3e4ad79f110b407d04986e1843543d1","destination":{"host":"api.orbio.so","pat'
+            b'h":"/api/v1/chat/completions","port":443},"kind":"ACTUAL","max_reply_bytes":262144,"max_request_bytes":6'
+            b'5536,"max_tokens":4096,"model":"openai/gpt-6.1-sol","price_snapshot_sha256":"4f83b00bd51b0614f1da551c762'
+            b'ce8969f27c5bb26bf5edf8a3f6e3412f982dc","prompt_cache_options":{"mode":"explicit"},"provider":null,"reaso'
+            b'ning":{"effort":"low"},"recorded_reply_headers":["X-Orbio-Balance","X-Orbio-Ignored-Parameters"],"releas'
+            b'e_id":"orbio-first-call-1","response_format_sha256":"cdffe6fd07f14b796cae3f97268148f6ad8893100b8080e1bc6'
+            b'52c7d3e9cbc60","route_id":"orbio-openrouter-managed","stream":false,"timeout_seconds":90}'),
+    record_sha256="041f588d3b9564fd605d00d2204083cbfc4e4cd3307906656345a73118ac563f",
+    price_snapshot=(b'{"completion_usd_per_million":"10.5","model":"openai/gpt-6.1-sol","prompt_usd_per_millio'
+                    b'n":"2.1","provider":"orbio"}'),
+    response_format=interpretation_response_format(),
+    images=_PINNED_IMAGES,
+    channel_root="edge-os-research",
+    global_cap_usd=Decimal("2.00"),  # the same shared ceiling: both routes count against the one settings row
+    owner_cap_usd=Decimal("2.00"),
+    seller="orbio",
+))
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,7 @@
 
 import { Fragment } from "react";
 import { formatTime } from "../lib/describe";
-import { ATTEMPT_STATUS_LABEL, describeAttemptCost, describeCreditSpend, describeLatency, describeModelBudget, describeModelCost, describeParse, describePurpose, describeUsage } from "../lib/interpretation";
+import { ATTEMPT_STATUS_LABEL, describeAttemptCost, describeCreditSpend, describeLatency, describeModelBudget, describeModelCost, describeParse, describeRoute, describePurpose, describeUsage } from "../lib/interpretation";
 import type { Attempt, LateResult, ModelBudget, ModelCost } from "../lib/types";
 import { Details } from "./Details";
 
@@ -21,6 +21,7 @@ export function InterpretationAttempts({ attempts, modelCost = null, modelBudget
         <summary>Research agent reads ({attempts.length})</summary>
         <ol className="attempts" aria-label="Research agent attempts for this request, oldest first">
           {attempts.map((a) => {
+            const route = describeRoute(a.identity.route);
             const rows: [string, string][] = [
               ["Result", ATTEMPT_STATUS_LABEL[a.status] + (a.error_class ? ` (${a.error_class})` : "")],
               ["Answer", describeParse(a.parse_result) + (a.revision_id ? (a.revision_id === currentRevisionId ? ". Used for the current meaning" : ". Used for an earlier meaning") : "")],
@@ -28,6 +29,7 @@ export function InterpretationAttempts({ attempts, modelCost = null, modelBudget
               ["Time", describeLatency(a.latency_ms)],
               ["Model cost", describeAttemptCost(a.spend)],
             ];
+            if (route !== null) rows.push(["Route", route]);
             return (
               <li key={a.attempt_id} data-attempt={a.attempt_id} data-status={a.status}>
                 <h3>Read #{a.sequence}: {describePurpose(a, byId)}</h3>

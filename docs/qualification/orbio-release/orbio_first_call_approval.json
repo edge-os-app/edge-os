@@ -1,0 +1,135 @@
+{
+  "format": "edge-os.hermes-release-approval/1",
+  "status": "APPROVED_RELEASE_VALUES",
+  "meaning": "The builder-decided values of one ACTUAL Orbio relay release (orbio-first-call-1). It approves these values for a reviewed code registry entry beside hermes-first-call-1. An operator handoff selects it explicitly; nothing selects it by default. It does not authorize a provider call, a key, a purchase or any spending, and it is not evidence that any provider call ran. See docs/qualification/orbio-release/ORBIO_RELEASE_DRAFT.md.",
+  "adopted_utc": "2026-11-05",
+  "base": "47b8906a7897a49d486b5b6692e8df7b5cb3c77e",
+  "record_values_except_approval": {
+    "allowed_fields": [
+      "model",
+      "messages",
+      "stream",
+      "response_format",
+      "reasoning",
+      "max_tokens",
+      "session_id",
+      "prompt_cache_options"
+    ],
+    "ca_bundle_sha256": "22b557a27055b33606b6559f37703928d3e4ad79f110b407d04986e1843543d1",
+    "destination": {
+      "host": "api.orbio.so",
+      "path": "/api/v1/chat/completions",
+      "port": 443
+    },
+    "kind": "ACTUAL",
+    "max_reply_bytes": 262144,
+    "max_request_bytes": 65536,
+    "max_tokens": 4096,
+    "model": "openai/gpt-6.1-sol",
+    "price_snapshot_sha256": "4f83b00bd51b0614f1da551c762ce8969f27c5bb26bf5edf8a3f6e3412f982dc",
+    "prompt_cache_options": {
+      "mode": "explicit"
+    },
+    "provider": null,
+    "reasoning": {
+      "effort": "low"
+    },
+    "release_id": "orbio-first-call-1",
+    "response_format_sha256": "cdffe6fd07f14b796cae3f97268148f6ad8893100b8080e1bc652c7d3e9cbc60",
+    "route_id": "orbio-openrouter-managed",
+    "stream": false,
+    "timeout_seconds": 90,
+    "recorded_reply_headers": [
+      "X-Orbio-Balance",
+      "X-Orbio-Ignored-Parameters"
+    ]
+  },
+  "application_definition_values": {
+    "images": "the same pinned image ids as hermes-first-call-1",
+    "channel_root": "edge-os-research",
+    "global_cap_usd": "2.00",
+    "owner_cap_usd": "2.00",
+    "seller": "orbio"
+  },
+  "inputs": {
+    "response_format": {
+      "source": "edge_os_api.research.interpreter_output_schema.interpretation_response_format()",
+      "sha256": "cdffe6fd07f14b796cae3f97268148f6ad8893100b8080e1bc652c7d3e9cbc60"
+    },
+    "price_snapshot": {
+      "path": "docs/qualification/orbio-release/orbio_first_call_prices.json",
+      "sha256": "4f83b00bd51b0614f1da551c762ce8969f27c5bb26bf5edf8a3f6e3412f982dc",
+      "rule": "worst case a buyer pays: the catalogue list rate USD 2 / 10 per million at the 0% Liquidity Book tier plus the 5% platform fee on the discounted price, so 1.05 x list = USD 2.1 / 10.5"
+    },
+    "ca_bundle": {
+      "path": "docs/qualification/orbio-release/orbio_ca_isrg_root_x1.pem",
+      "sha256": "22b557a27055b33606b6559f37703928d3e4ad79f110b407d04986e1843543d1",
+      "certificate": "ISRG Root X1, DER SHA256 96bcec06264976f37460779acf28c5a7cfe8a3c0aae11a8ffcee05c0bddf08c6"
+    }
+  },
+  "decisions": {
+    "terms": "Step 1: the builder accepted Orbio's terms of service and privacy policy (closes U5).",
+    "routing": "Step 3 option (b): a reviewed code change admits a release that names no routing.",
+    "reply_headers": "Step 5 option one: the relay records X-Orbio-Ignored-Parameters and X-Orbio-Balance only.",
+    "selection": "The operator handoff selects the release. OpenRouter stays a separate approved release."
+  },
+  "facts": {
+    "catalogue": {
+      "read_utc": "2026-11-05",
+      "read_by": "controller",
+      "source": "https://www.orbio.so/api/v1/models",
+      "model": "openai/gpt-6.1-sol",
+      "listed": true,
+      "prompt_usd_per_token": "0.000002",
+      "completion_usd_per_token": "0.00001",
+      "override": {
+        "min_prompt_tokens": 272000,
+        "prompt_usd_per_token": "0.000004",
+        "completion_usd_per_token": "0.000015"
+      },
+      "override_count": 1,
+      "time_of_day_part": false,
+      "reach": "the 65,536-byte request limit cannot reach min_prompt_tokens 272000 (closes U6)"
+    },
+    "tls": {
+      "read_utc": "2026-11-05",
+      "read_by": "controller",
+      "scope": "handshake only, no HTTP request",
+      "endpoint": "api.orbio.so:443",
+      "sni": "api.orbio.so",
+      "trust": "orbio_ca_isrg_root_x1.pem alone",
+      "protocol": "TLSv1.3",
+      "verify_return_code": 0,
+      "chain": [
+        "api.orbio.so",
+        "YR1",
+        "Root YR",
+        "ISRG Root X1"
+      ],
+      "closes": "U8"
+    }
+  },
+  "spending": {
+    "combined_model_and_data_ceiling_usd": "2.00",
+    "ledger": "one ledger database for every route: OpenRouter and Orbio reservations count against the same caps in the one settings row",
+    "maximum_reservation_usd": "0.180768",
+    "maximum_reservation_meaning": "The worst-case reservation of one request ((65,536 + 64) prompt tokens x 2.1 + 4,096 completion tokens x 10.5, USD per million). An accounting calculation, not an allocation.",
+    "credit_purchase": "Orbio's minimum purchase starts at USD 5. The builder buys later; this release buys nothing."
+  },
+  "open": {
+    "U1": "whether replies include usage.cost, and what it means",
+    "U2": "whether a cost lookup endpoint exists",
+    "U3": "whether a provider object is forwarded, dropped or rejected (this release sends none)",
+    "U4": "the exact reply model field and any provider fields",
+    "U7": "whether reasoning, response_format, max_tokens and prompt_cache_options are forwarded or dropped",
+    "U9": "whether X-Orbio-Balance is read before or after the reply's charge, and its precision",
+    "U10": "whether the discount and the 5% fee apply only at purchase or change each request's charge",
+    "U11": "whether the balance is USD cash or inference face value"
+  },
+  "limits": [
+    "At most one first model request, after the builder's separate approval and a funded key; no fallback and no blind retry.",
+    "The model job holds no provider key; the relay alone reads it. No key in logs, model context, source control or application responses.",
+    "Production stays refused.",
+    "No funded transaction, policy or wallet change, host deployment or main publication is approved by this release."
+  ]
+}

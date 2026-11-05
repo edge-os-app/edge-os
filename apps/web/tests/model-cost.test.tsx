@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { InterpretationAttempts } from "../components/InterpretationAttempts";
 import { RequestPage } from "../components/RequestPage";
-import { describeAttemptCost, describeCredit, describeCreditSpend, describeModelBudget, describeModelCost } from "../lib/interpretation";
+import { describeAttemptCost, describeCredit, describeCreditSpend, describeModelBudget, describeModelCost, describeRoute } from "../lib/interpretation";
 import type { Attempt, AttemptSpend, ModelBudget, ModelCost } from "../lib/types";
 
 const mocks = vi.hoisted(() => ({ get: vi.fn() }));
@@ -196,5 +196,34 @@ describe("CREDIT on the attempts list", () => {
   it("shows nothing with no attempts when the application reports no model cost", () => {
     const { container } = render(<InterpretationAttempts attempts={[]} lateResults={[]} open={false} />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+const routed = (route: string | null): Attempt => {
+  const base = attempt("a-route", 1, settled);
+  return { ...base, identity: { ...base.identity, route } };
+};
+const routeLine = () => screen.queryByText("Route")?.nextElementSibling?.textContent ?? null;
+
+describe("the route on a saved attempt line", () => {
+  it("names each saved route in plain words", () => {
+    expect(describeRoute("orbio-openrouter-managed")).toBe("via Orbio");
+    expect(describeRoute("openrouter-openai-standard")).toBe("via OpenRouter");
+  });
+
+  it("does not guess for a route with no saved value or no plain name", () => {
+    expect(describeRoute(null)).toBeNull();
+    expect(describeRoute("relay")).toBeNull();
+  });
+
+  it.each([["orbio-openrouter-managed", "via Orbio"], ["openrouter-openai-standard", "via OpenRouter"]])(
+    "shows the attempt's own route %s", (route, words) => {
+      render(<InterpretationAttempts attempts={[routed(route)]} lateResults={[]} open />);
+      expect(routeLine()).toBe(words);
+    });
+
+  it.each([[null], ["relay"]])("shows no route line for %s", (route) => {
+    render(<InterpretationAttempts attempts={[routed(route)]} lateResults={[]} open />);
+    expect(screen.queryByText("Route")).toBeNull();
   });
 });
