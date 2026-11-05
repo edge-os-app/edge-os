@@ -157,7 +157,7 @@ Rule 3 was amended on 2026-11-05 under Decision 2 of `ORBIO-ROUTE-L4-20261105`. 
 
 4. The platform fee is still 5% of the discounted price, and no tier costs more than the list price.
 
-All four rules held on 2026-11-05, except rule 3 before its amendment. Otherwise no Orbio release is approved for that model. In particular, no rate is averaged, no discount tier is assumed, and no rate is picked as "the usual one" for an override model.
+The reading of 2026-11-05 covers rules 1 and 2 and the override part of rule 3, as amended. It records nothing on the other fees in rule 3 or on rule 4. Section 8 re-checks those before the call. If any rule fails, no Orbio release is approved for that model. In particular, no rate is averaged, no discount tier is assumed, and no rate is picked as "the usual one" for an override model.
 
 `provider` names the seller, `orbio`, because the upstream endpoint is not pinned. The ledger's two-rate `TokenPrice(2.1, 10.5)` is the same object for reservation, settlement and the relay cost check (E1-COST1). The worst-case reservation is (65,600 × 2.1 + 4,096 × 10.5) / 1,000,000 = USD 0.180768 per request (180,768,000 nano-USD), above OpenRouter's USD 0.17216. 65,600 is `max_request_bytes` 65,536 plus the input token margin of 64.
 
@@ -214,7 +214,7 @@ Before the call:
 
 - [ ] Steps 1 to 7 are done and recorded, and the builder authorized step 8.
 - [ ] The builder records the balance B0, the usage and the rate limits, from Orbio's account page or from `GET /api/v1/key` in the builder's own terminal. The controller does not do this read, because the relay alone reads the key.
-- [ ] Record the call's UTC time, and confirm the catalogue list rates for that model at that time are still USD 2 / 10 with no reachable override, and the fee is still 5%.
+- [ ] Record the call's UTC time, and confirm the catalogue list rates for that model at that time are still USD 2 / 10 with no reachable override, no cache, reasoning, request or other fee is listed, the platform fee is still 5%, and no tier costs more than the list price (section 4 rules 3 and 4).
 
 Operator steps. The controller runs these. The key stays in one file that only the relay reads. The operator only checks that file's mode and place, and never opens it.
 
@@ -223,14 +223,20 @@ Operator steps. The controller runs these. The key stays in one file that only t
    - `kind` `ACTUAL`, `release` null, `shutdown_owner` `relay_operator`;
    - `release_record`: the absolute path of `orbio_first_call_record.json`, with the SHA256 in section 2;
    - `ca_bundle`: the absolute path of `orbio_ca_isrg_root_x1.pem`, with the SHA256 in section 2;
-   - `image`: the pinned image id for this host from `RELEASE_DEFINITIONS`;
+   - `image`: `id` is the pinned image id for this host from `RELEASE_DEFINITIONS`, and `reference` is the local tag of that image. The operator launches by the id and refuses a tag with another id;
    - `channel` name `edge-os-research`; a new `run_root` and channel folder;
    - `provider_key_file`: the path from step 1.
 3. Run `python scripts/hermes_provider_relay/relay_operator.py CONFIG check`, then `start`. Keep the printed handoff path and SHA256.
-4. From `apps/api`, with `EDGE_OS_INTERPRETER=hermes_local`, run `python ../../scripts/hermes_app_mount/serve_relay_application.py --handoff-path PATH --handoff-sha256 SHA --run-id ID --port PORT`. Confirm that it prints `orbio-first-call-1`.
-5. Send one interpretation request through the application. Do not send a second request.
-6. Read the evidence: the attempt's `finished.json` (`usage`, `cost`, `generation_id`, `reply_headers`, `reply_headers_refused`), the gateway `opening` receipt and the ledger rows.
-7. Run `python scripts/hermes_provider_relay/relay_operator.py CONFIG stop`, whatever the result. Keep the run root. Scan it for the key before any publication.
+4. Set the application's environment. `EDGE_OS_ENV` is `local`, `EDGE_OS_INTERPRETER` is `hermes_local`, and `EDGE_OS_CORS_ALLOWED_ORIGINS` names the web page's origin. `EDGE_OS_DATABASE_URL`, `EDGE_OS_PRIVY_APP_ID` and `EDGE_OS_PRIVY_VERIFICATION_KEY` come from the recorded local env files. The Privy values are the same ones the web page signs in with.
+5. From `apps/api`, run `python -m alembic upgrade head`, then `python -m alembic check`. The application refuses a database below migration 0015.
+6. From `apps/api`, run `python ../../scripts/hermes_app_mount/serve_relay_application.py --handoff-path PATH --handoff-sha256 SHA --run-id ID --port PORT`. Confirm that its `serving` line names `orbio-first-call-1`.
+7. Start the web page with `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:PORT` and open `/app`. The research rows belong to a signed-in owner, and the only sign-in is Privy, so the builder signs in. The controller holds no sign-in token.
+8. The builder submits one research request on that page. That request calls `POST /v1/research/requests`, which makes the one provider request. Do not submit a second request, and do not press retry.
+9. Read the evidence:
+   - the attempt's `finished.json` in `<run root>/relay/state/<attempt>/` (`usage`, `cost`, `generation_id`, `reply_headers`, `reply_headers_refused`);
+   - the reply body, `<channel>/turn-NN-<attempt>/output/relay-channel/reply.json`, for `finish_reason`, the reply `model`, provider fields and `prompt_tokens_details`;
+   - the gateway `opening` receipt and the ledger rows.
+10. Stop the application. Run `python scripts/hermes_provider_relay/relay_operator.py CONFIG stop`, whatever the result. Keep the run root. Scan it for the key before any publication.
 
 The caps need no hand check: the one ledger counts both routes (section 3 item 6).
 
