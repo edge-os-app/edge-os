@@ -1,5 +1,5 @@
 import { OUTCOME_COPY } from "./describe";
-import type { Attempt, AttemptSpend, AttemptStatus, AttemptUsage, Bundle, Finding, ModelCost, ReplyState, RequestSummary } from "./types";
+import type { Attempt, AttemptSpend, AttemptStatus, AttemptUsage, Bundle, Finding, ModelBudget, ModelCost, ReplyState, RequestSummary } from "./types";
 
 /** The three ways the interpreter can fail to give a usable answer. None is a verdict on the user's idea. */
 export type FailureKind = "MALFORMED_OUTPUT" | "UNAVAILABLE" | "OUTCOME_UNKNOWN";
@@ -77,12 +77,46 @@ export function describeAttemptCost(spend: AttemptSpend): string {
   return (spend.state === "SETTLED" ? usd(spend.charge_usd) : null) ?? "Unknown";
 }
 
+/** A total with its unknown calls: complete, a lower bound ("at least"), or unknown. Never a zero for unknown. */
+function describeTotal(total: string | null, unknownCalls: number, complete: (total: string) => string): string {
+  if (unknownCalls === 0) return total === null ? "unknown" : complete(total);
+  const unknown = `${unknownCalls} call${unknownCalls === 1 ? "" : "s"} unknown`;
+  return total === null ? `unknown, ${unknown}` : `at least ${total}, ${unknown}`;
+}
+
 /** The request's total model cost. With any unknown call it is a lower bound, and with no settled call it is unknown. */
 export function describeModelCost(cost: ModelCost): string {
-  const total = cost.settled_calls > 0 ? usd(cost.settled_usd) : null;
-  if (cost.unknown_calls === 0 && total !== null) return total;
-  const unknown = `${cost.unknown_calls} call${cost.unknown_calls === 1 ? "" : "s"} unknown`;
-  return total === null ? `unknown, ${unknown}` : `at least ${total}, ${unknown}`;
+  return describeTotal(cost.settled_calls > 0 ? usd(cost.settled_usd) : null, cost.unknown_calls, (total) => total);
+}
+
+/** An amount in CREDIT (Orbio's unit, exactly USD 1): the same exact decimal as `usd()`, labelled CREDIT. */
+export function describeCredit(amount: string | null): string | null {
+  const dollars = usd(amount);
+  return dollars === null ? null : `${dollars.slice(1)} CREDIT`;
+}
+
+/** The request's model spend in CREDIT. With any unknown call it is a lower bound; with no settled call it is unknown. */
+export function describeCreditSpend(cost: ModelCost): string {
+  // 1 CREDIT is exactly USD 1, so both labels print the one settled amount; two different strings are not a known amount.
+  const same = cost.settled_calls > 0 && cost.settled_credit === cost.settled_usd;
+  const amount = same ? usd(cost.settled_usd) : null;
+  const total = amount === null ? null : `${amount.slice(1)} CREDIT`;
+  return describeTotal(total, cost.unknown_calls, (credit) => `spent ${credit} (USD ${amount!.slice(1)})`);
+}
+
+/** The owner's shared model budget. Held calls are used budget. No budget from the API means no limit is configured, not 0. */
+export function describeModelBudget(budget: ModelBudget | null): string {
+  if (budget === null) return "budget not set";
+  if (budget.state !== "SET") return "unknown";
+  const available = usd(budget.available_credit), cap = describeCredit(budget.owner_cap_credit);
+  const ceiling = describeCredit(budget.global_cap_credit), held = describeCredit(budget.held_credit);
+  const over = describeCredit(budget.over_credit);
+  if (available === null || cap === null || ceiling === null || held === null || over === null
+      || !Number.isInteger(budget.held_calls) || budget.held_calls < 0) return "unknown";
+  const limit = over === "0 CREDIT" ? `available ${available.slice(1)} of ${cap}` : `${available.slice(1)} available, over by ${over}; cap ${cap}`;
+  const shared = `${limit}, shared by all your studies and limited by the global ceiling of ${ceiling}`;
+  if (budget.held_calls === 0) return shared;
+  return `${shared}; ${held} held by ${budget.held_calls} call${budget.held_calls === 1 ? "" : "s"} of unknown cost`;
 }
 
 export function describeLatency(ms: number | null): string {

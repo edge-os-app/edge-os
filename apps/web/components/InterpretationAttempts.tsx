@@ -2,17 +2,20 @@
 
 import { Fragment } from "react";
 import { formatTime } from "../lib/describe";
-import { ATTEMPT_STATUS_LABEL, describeAttemptCost, describeLatency, describeModelCost, describeParse, describePurpose, describeUsage } from "../lib/interpretation";
-import type { Attempt, LateResult, ModelCost } from "../lib/types";
+import { ATTEMPT_STATUS_LABEL, describeAttemptCost, describeCreditSpend, describeLatency, describeModelBudget, describeModelCost, describeParse, describePurpose, describeUsage } from "../lib/interpretation";
+import type { Attempt, LateResult, ModelBudget, ModelCost } from "../lib/types";
 
 /** Every attempt the interpreter made for this request, oldest first. A failed or unknown attempt stays listed. */
-export function InterpretationAttempts({ attempts, modelCost = null, lateResults, open, currentRevisionId = null }: { attempts: Attempt[]; modelCost?: ModelCost | null; lateResults: LateResult[]; open: boolean; currentRevisionId?: string | null }) {
-  if (attempts.length === 0) return null;
+export function InterpretationAttempts({ attempts, modelCost = null, modelBudget = null, lateResults, open, currentRevisionId = null }: { attempts: Attempt[]; modelCost?: ModelCost | null; modelBudget?: ModelBudget | null; lateResults: LateResult[]; open: boolean; currentRevisionId?: string | null }) {
+  const budgetLine = modelCost && <p data-testid="model-budget">Model budget: {describeModelBudget(modelBudget)}</p>;
+  if (attempts.length === 0) return budgetLine;
   const byId = new Map(attempts.map((a) => [a.attempt_id, a]));
   const number = (id: string) => byId.get(id)?.sequence;
   return (
     <>
       {modelCost && <p data-testid="model-cost-total">Total model cost: {describeModelCost(modelCost)}</p>}
+      {modelCost && <p data-testid="model-credit">Model spend: {describeCreditSpend(modelCost)}</p>}
+      {budgetLine}
       <details open={open} data-testid="attempts">
         <summary>Interpreter attempts ({attempts.length})</summary>
         <ol className="attempts" aria-label="Interpreter attempts for this request, oldest first">
@@ -40,7 +43,7 @@ export function InterpretationAttempts({ attempts, modelCost = null, lateResults
             A result arrived after attempt #{number(late.attempt_id)} was closed. It is kept as evidence and was not used.
           </p>
         ))}
-        <p className="muted">Tokens show Unknown when the provider did not report them. Model cost shows Unknown unless the ledger settled the exact charge. Unknown is not zero.</p>
+        <p className="muted">Tokens show Unknown when the provider did not report them. Model cost shows Unknown unless the ledger settled the exact charge. Unknown is not zero. 1 CREDIT is exactly USD 1 of usage.</p>
       </details>
     </>
   );

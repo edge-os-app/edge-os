@@ -23,7 +23,8 @@ from decimal import ROUND_CEILING, Context, Decimal
 from pathlib import Path
 
 __all__ = ["CapExceeded", "Event", "LedgerConfigMismatch", "NotReserved", "Reservation", "ReservationExists",
-           "ScopeBlocked", "Settlement", "SpendLedger", "TokenPrice", "Unresolved"]
+           "ScopeBlocked", "Settlement", "SpendLedger", "TokenPrice", "Unresolved", "check_smallest_limit",
+           "fitted_output_tokens"]
 
 NANO = Decimal(10) ** 9
 MAX_TOKENS = 10 ** 12
@@ -88,6 +89,7 @@ class Reservation:
     attempt_id: str
     scope: str
     amount_usd: Decimal
+    max_output_tokens: int  # the output limit this reservation covers: the call's own limit, at most the release's
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,30 @@ def _valid_tokens(*counts: object) -> bool:
 def _valid_usage(input_tokens: object, output_tokens: object) -> bool:
     """Reported usage that can fix a charge. A request that carried a prompt has at least one input token."""
     return _valid_tokens(input_tokens, output_tokens) and input_tokens >= 1  # type: ignore[operator]
+
+
+def check_smallest_limit(min_output_tokens: object, max_output_tokens: int) -> None:
+    """A smallest useful output limit is a whole number from 1 to the full limit: a call never asks for 0 tokens."""
+    if (isinstance(min_output_tokens, bool) or not isinstance(min_output_tokens, int)
+            or not 1 <= min_output_tokens <= max_output_tokens):
+        raise ValueError("min_output_tokens must be a whole number from 1 to max_output_tokens")
+
+
+def fitted_output_tokens(price: TokenPrice, max_input_tokens: int, max_output_tokens: int, headroom_nano: int) -> int | None:
+    """The largest output limit, at most `max_output_tokens`, whose worst case fits the headroom; None if none does.
+
+    The worst case grows with every output token, so a search over whole limits finds the largest one exactly, with the
+    ledger's own rounding. No float is used."""
+    if price.nano_usd(max_input_tokens, 0) > headroom_nano:
+        return None
+    low, high = 0, max_output_tokens
+    while low < high:
+        middle = (low + high + 1) // 2
+        if price.nano_usd(max_input_tokens, middle) <= headroom_nano:
+            low = middle
+        else:
+            high = middle - 1
+    return low
 
 
 def _now() -> str:
@@ -202,11 +228,23 @@ class SpendLedger:
 
     # --- Reserving and settling --------------------------------------------------------------------------------------
 
-    def reserve(self, attempt_id: str, *, scope: str, max_input_tokens: int, max_output_tokens: int) -> Reservation:
-        """Record the worst-case cost BEFORE a request may start. Raises, and writes nothing, when the cap would pass."""
+    def reserved_output_tokens(self, attempt_id: str) -> int | None:
+        """The output limit this attempt's reservation covers, as recorded; None without a reservation."""
+        rows = self._read("select max_output_tokens from reservation where attempt_id = ?", attempt_id)
+        return rows[0][0] if rows else None
+
+    def reserve(self, attempt_id: str, *, scope: str, max_input_tokens: int, max_output_tokens: int,
+                min_output_tokens: int | None = None) -> Reservation:
+        """Record the worst-case cost BEFORE a request may start. Raises, and writes nothing, when the cap would pass.
+
+        With `min_output_tokens`, a call whose full output limit does not fit gets the largest smaller limit that fits
+        the headroom, chosen in the same transaction as the cap check; below `min_output_tokens` nothing is reserved.
+        Without it, the reservation is exactly the full limit's worst case or nothing."""
         if not _valid_tokens(max_input_tokens, max_output_tokens):
             raise ValueError("token bounds must be whole numbers within range")
-        amount = self._price.nano_usd(max_input_tokens, max_output_tokens)
+        if min_output_tokens is not None:
+            check_smallest_limit(min_output_tokens, max_output_tokens)
+        amount, limit = self._price.nano_usd(max_input_tokens, max_output_tokens), max_output_tokens
         with self._write() as connection:
             if connection.execute("select 1 from reservation where attempt_id = ?", (attempt_id,)).fetchone():
                 raise ReservationExists(attempt_id)
@@ -214,13 +252,19 @@ class SpendLedger:
                                   (scope,)).fetchone():
                 raise ScopeBlocked(scope)
             committed = self._liability_nano(connection)
+            if committed + amount > self._cap_nano and min_output_tokens is not None:
+                fitted = fitted_output_tokens(self._price, max_input_tokens, max_output_tokens, self._cap_nano - committed)
+                if fitted is None or fitted < min_output_tokens:
+                    raise CapExceeded(_usd(committed), _usd(self._price.nano_usd(max_input_tokens, min_output_tokens)),
+                                      _usd(self._cap_nano))
+                amount, limit = self._price.nano_usd(max_input_tokens, fitted), fitted
             if committed + amount > self._cap_nano:
                 raise CapExceeded(_usd(committed), _usd(amount), _usd(self._cap_nano))
             now = _now()
             connection.execute("insert into reservation values (?, ?, 'RESERVED', ?, null, ?, ?, ?, ?)",
-                               (attempt_id, scope, amount, max_input_tokens, max_output_tokens, now, now))
+                               (attempt_id, scope, amount, max_input_tokens, limit, now, now))
             self._event(connection, attempt_id, "RESERVED", scope, amount)
-        return Reservation(attempt_id, scope, _usd(amount))
+        return Reservation(attempt_id, scope, _usd(amount), limit)
 
     def settle(self, attempt_id: str, *, input_tokens: object, output_tokens: object) -> Settlement:
         """Replace the reservation with the exact charge. Unusable usage keeps the whole reservation as liability."""

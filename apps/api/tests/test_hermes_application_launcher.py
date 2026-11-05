@@ -98,6 +98,7 @@ class Opened:
 
     def __init__(self) -> None:
         self.runner, self.config, self.closed, self.startup_recovery = object(), object(), 0, [{"attempt_id": "a"}]
+        self.budget_view = object()
         self.release = type("Release", (), {"actual": type("Actual", (), {"release": type(
             "Relay", (), {"release_id": "SYNTHETIC-launch-1"})})})
 
@@ -137,7 +138,8 @@ def test_an_opened_application_is_served_on_loopback_with_its_exact_runner_and_c
     opened = serving["opened"]
     assert serving["open"] == (unreachable, {"handoff_path": located[0], "handoff_sha256": "1" * 64,
                                              "run_id": "launch-unit"})
-    assert serving["factory"] == (unreachable, {"hermes_runner": opened.runner, "hermes_config": opened.config})
+    assert serving["factory"] == (unreachable, {"hermes_runner": opened.runner, "hermes_config": opened.config,
+                                                "spend_view": opened.budget_view})  # the saved result shows the CREDIT budget
     app, options, closed_while_serving = serving["run"]
     assert isinstance(app, PublicRouteGuard) and app.app is serving["app"]
     assert options == {"host": "127.0.0.1", "port": 8765, "log_level": "warning"}

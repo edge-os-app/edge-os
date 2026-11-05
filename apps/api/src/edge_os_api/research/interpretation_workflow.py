@@ -161,6 +161,24 @@ def settled_charge(spend: dict[str, Any]) -> Decimal | None:
     return Decimal(charge)
 
 
+def held_charge(spend: dict[str, Any]) -> Decimal | None:
+    """The liability a RESERVED or UNKNOWN attempt holds, as the guarded runner saved it; otherwise None."""
+    charge = spend["charge_usd"]
+    if spend["state"] not in ("RESERVED", "UNKNOWN") or not isinstance(charge, str) or DECIMAL_USD.fullmatch(charge) is None:
+        return None
+    return Decimal(charge)
+
+
+def _exact_sum(amounts: Sequence[Decimal]) -> str | None:
+    """The exact sum as a plain decimal string (no exponent, no float), or None for no amounts (never a zero)."""
+    if not amounts:
+        return None
+    # Enough digits for the exact sum, so neither the sum nor `normalize` rounds; an inexact result would raise.
+    digits = max(a.adjusted() for a in amounts) - min(a.as_tuple().exponent for a in amounts) + 1 + len(str(len(amounts)))
+    with localcontext(prec=digits, Emax=MAX_EMAX, Emin=MIN_EMIN, traps=[Inexact]):
+        return format(sum(amounts, Decimal(0)).normalize(), "f")
+
+
 def study_model_cost(attempts: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """The request's model cost from its public attempts: the exact `Decimal` sum of the SETTLED charges.
 
@@ -168,16 +186,42 @@ def study_model_cost(attempts: Sequence[dict[str, Any]]) -> dict[str, Any]:
     plain decimal string (no exponent, no float). Every other spend state, and an attempt without a spend record, is
     unknown: it is counted, never added as zero, and the sum is then only a lower bound. With no settled call there is
     no amount (`None`), not a zero.
+
+    CREDIT (Orbio's unit, exactly USD 1 of usage) is a second label for the same amount: `settled_credit` is the same
+    string as `settled_usd`. `held_credit` is the exact sum of the liability saved for RESERVED and UNKNOWN attempts, or
+    None. It is a lower bound: an attempt saved without a charge (SETTLEMENT_NOT_RECORDED, or no spend record) still holds
+    its full reservation in the ledger, and only the ledger's `spend_view` knows that amount.
     """
     charges = [c for c in (settled_charge(a["spend"]) for a in attempts) if c is not None]
-    if not charges:
-        return {"settled_usd": None, "settled_calls": 0, "unknown_calls": len(attempts)}
-    # Enough digits for the exact sum, so neither the sum nor `normalize` rounds; an inexact result would raise.
-    digits = max(c.adjusted() for c in charges) - min(c.as_tuple().exponent for c in charges) + 1 + len(str(len(charges)))
-    with localcontext(prec=digits, Emax=MAX_EMAX, Emin=MIN_EMIN, traps=[Inexact]):
-        total = sum(charges, Decimal(0)).normalize()
-    return {"settled_usd": format(total, "f"), "settled_calls": len(charges),
-            "unknown_calls": len(attempts) - len(charges)}
+    settled = _exact_sum(charges)
+    return {"settled_usd": settled, "settled_calls": len(charges), "unknown_calls": len(attempts) - len(charges),
+            "unit": "CREDIT", "settled_credit": settled,
+            "held_credit": _exact_sum([h for h in (held_charge(a["spend"]) for a in attempts) if h is not None])}
+
+
+def _nano_usd_as_credit(nano: int) -> str:
+    """Integer nano-USD as an exact plain decimal string of CREDIT (1 CREDIT = USD 1, so 1 nano-CREDIT = 1 nano-USD)."""
+    with localcontext(prec=len(str(abs(nano))) + 1, Emax=MAX_EMAX, Emin=MIN_EMIN, traps=[Inexact]):
+        return format(Decimal(nano).scaleb(-9).normalize(), "f")
+
+
+UNKNOWN_BUDGET = {"unit": "CREDIT", "state": "UNKNOWN"}
+
+
+def model_budget(view: dict[str, int] | None) -> dict[str, Any] | None:
+    """The owner's shared model budget (`provider_spend_ledger.spend_view`) in CREDIT, or None when it is not set.
+
+    The budget is the owner's cap shared by all their studies and bounded by the global ceiling; there is no per-study
+    cap. Held liability (RESERVED and UNKNOWN calls) is used budget. A ledger past its cap has nothing available, and
+    `over_credit` is how far past it is.
+    A budget the ledger could not report is `UNKNOWN_BUDGET`, which is neither "not set" nor zero."""
+    if view is None:
+        return None
+    credit = _nano_usd_as_credit
+    return {"unit": "CREDIT", "state": "SET", "owner_cap_credit": credit(view["owner_cap"]),
+            "global_cap_credit": credit(view["global_cap"]), "settled_credit": credit(view["settled"]),
+            "held_credit": credit(view["held"]), "held_calls": view["held_calls"],
+            "available_credit": credit(max(0, view["available"])), "over_credit": credit(max(0, -view["available"]))}
 
 
 class HermesResearch:
@@ -185,8 +229,10 @@ class HermesResearch:
 
     def __init__(self, runner: HermesTurnRunner, session_factory: Callable[[], Session], guard: AdvisoryLockGuard,
                  monotonic: Callable[[], float], config: HermesInterpreterConfig = LOCAL_FAKE_CONFIG,
-                 turn_limits: TurnLimits | None = None) -> None:
+                 turn_limits: TurnLimits | None = None,
+                 spend_view: Callable[[Session, uuid.UUID], dict[str, int] | None] | None = None) -> None:
         self._session_factory = session_factory
+        self._spend_view = spend_view  # the runner's ledger read (`provider_spend_ledger.spend_view`); None: no budget
         self.config = config
         self.guard = guard
         self.store = PostgresAttemptStore(session_factory)
@@ -549,7 +595,15 @@ class HermesResearch:
                      "reason_code": parse.removeprefix("REJECTED:") if parse.startswith("REJECTED:") else None,
                      "attempt_id": last.start.attempt_id}
         attempts = [public_attempt(v) for v in history]
-        return {"attempts": attempts, "model_cost": study_model_cost(attempts),
+        budget = None
+        if self._spend_view is not None:
+            try:
+                with self._session_factory() as session:
+                    budget = model_budget(self._spend_view(session, principal.user_id))
+            except Exception as error:  # noqa: BLE001 - the saved result still loads; its budget is unknown, not 0
+                log.error("model budget not read: %s", type(error).__name__)
+                budget = dict(UNKNOWN_BUDGET)
+        return {"attempts": attempts, "model_cost": study_model_cost(attempts), "model_budget": budget,
                 "late_results": [self._public_late(o) for o in self.ledger.late_results(owner, iid)],
                 "retry": {"allowed": state.allowed, "retry_of": state.retry_of, "reason": state.reason},
                 "reply": reply}

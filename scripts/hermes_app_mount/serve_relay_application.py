@@ -86,7 +86,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"refused: {NO_RELEASE}", file=sys.stderr)
         return REFUSED
     try:
-        app = PublicRouteGuard(create_app(settings, hermes_runner=opened.runner, hermes_config=opened.config))
+        app = PublicRouteGuard(create_app(settings, hermes_runner=opened.runner, hermes_config=opened.config,
+                                          spend_view=opened.budget_view))
         print(json.dumps({"serving": opened.release.actual.release.release_id, "host": host, "port": args.port,
                           "pid": os.getpid(), "startup_recovered": len(opened.startup_recovery)}), flush=True)
         uvicorn.run(app, host=host, port=args.port, log_level="warning")

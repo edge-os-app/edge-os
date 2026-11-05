@@ -259,3 +259,120 @@ def test_concurrent_turns_start_only_as_many_requests_as_the_cap_allows(ledger: 
     assert len(started) == sum(1 for r in results if r.request_count == 1)
     assert ledger.committed_usd() <= CAP
     assert all(r.error_class in (None, "SpendCapReached") for r in results)
+
+
+# --- The per-call output limit (ORBIO_CREDIT_DESIGN 2b) ----------------------------------------------------------------
+# A cap of 0.02 leaves 20,000,000 nano-USD: the input worst case is 7,300 x 2.00 = 14,600,000 and each output token costs
+# 7,500, so (20,000,000 - 14,600,000) / 7,500 = 720 output tokens fit. The tests set their own `min_output_tokens`.
+
+class Recording(Delegate):
+    def __init__(self, ledger: SpendLedger, *results: HermesTurnResult | Exception) -> None:
+        super().__init__(ledger, *results)
+        self.turns: list[HermesTurn] = []
+
+    def run_turn(self, turn: HermesTurn) -> HermesTurnResult:
+        self.turns.append(turn)
+        return super().run_turn(turn)
+
+
+def small_ledger(tmp_path: Path) -> SpendLedger:
+    return SpendLedger(tmp_path / "small.sqlite", cap_usd=Decimal("0.02"), price=PRICE)
+
+
+def test_a_call_over_budget_is_refused_before_the_boundary_is_called(tmp_path: Path) -> None:
+    spend = small_ledger(tmp_path)
+    delegate = Recording(spend, returned())
+    guarded = GuardedTurnRunner(delegate, spend, POLICY, scope_for=lambda t: "case-a", min_output_tokens=721)
+
+    result = guarded.run_turn(turn())
+
+    assert (result.status, result.request_count, result.error_class) == ("PROVIDER_FAILED", 0, "SpendCapReached")
+    assert delegate.calls == 0 and spend.state("attempt-1") is None and spend.events("attempt-1") == []
+
+
+def test_the_boundary_gets_the_lowered_limit_that_was_reserved(tmp_path: Path) -> None:
+    spend = small_ledger(tmp_path)
+    delegate = Recording(spend, returned())
+    guarded = GuardedTurnRunner(delegate, spend, POLICY, scope_for=lambda t: "case-a", min_output_tokens=1)
+
+    result = guarded.run_turn(turn())
+
+    [seen] = delegate.turns
+    assert seen.max_output_tokens == 720 == spend.reserved_output_tokens("attempt-1")
+    assert seen == turn(max_output_tokens=720)  # nothing else about the turn changes
+    assert delegate.seen_during == [("RESERVED", Decimal("0.02"))]
+    assert (result.status, result.observed["spend_state"], result.observed["spend_charge_usd"]) == (
+        "RETURNED", "SETTLED", "0.0074285")
+
+
+def test_the_incoming_turn_must_still_carry_the_full_limit(tmp_path: Path) -> None:
+    spend = small_ledger(tmp_path)
+    delegate = Recording(spend, returned())
+    guarded = GuardedTurnRunner(delegate, spend, POLICY, scope_for=lambda t: "case-a", min_output_tokens=1)
+    result = guarded.run_turn(turn(max_output_tokens=720))
+    assert (result.request_count, result.error_class) == (0, "RequestNotAdmitted") and delegate.calls == 0
+    assert spend.state("attempt-1") is None
+
+
+def test_without_a_smallest_limit_the_boundary_gets_the_turn_unchanged(ledger: SpendLedger) -> None:
+    delegate = Recording(ledger, returned())
+    GuardedTurnRunner(delegate, ledger, POLICY, scope_for=lambda t: "case-a").run_turn(turn())
+    assert delegate.turns == [turn()] and ledger.reserved_output_tokens("attempt-1") == 4096
+
+
+@pytest.mark.parametrize("smallest", [0, -1, True, 4097, "1", 1.0])
+def test_a_smallest_limit_outside_one_to_the_policy_limit_is_refused_when_the_runner_is_built(
+        ledger: SpendLedger, smallest: object) -> None:
+    with pytest.raises(ValueError, match="min_output_tokens"):
+        GuardedTurnRunner(Recording(ledger), ledger, POLICY, scope_for=lambda t: "case-a",
+                          min_output_tokens=smallest)  # type: ignore[arg-type]
+
+
+MISSING = object()
+
+
+@pytest.mark.parametrize("limit", [MISSING, None, 0, 4097, True, "720"])
+def test_a_reservation_without_a_usable_output_limit_is_released_and_nothing_is_sent(tmp_path: Path, limit: object) -> None:
+    spend = small_ledger(tmp_path)
+
+    class OddLedger:
+        """The real ledger, except that `reserve` returns an object whose output limit the runner cannot use."""
+
+        def __getattr__(self, name: str):
+            return getattr(spend, name)
+
+        def reserve(self, attempt_id: str, **kwargs):
+            spend.reserve(attempt_id, **kwargs)
+            return object() if limit is MISSING else type("Odd", (), {"max_output_tokens": limit})()
+
+    delegate = Recording(spend, returned())
+    guarded = GuardedTurnRunner(delegate, OddLedger(), POLICY, scope_for=lambda t: "case-a",  # type: ignore[arg-type]
+                                min_output_tokens=1)
+
+    result = guarded.run_turn(turn())
+
+    assert (result.status, result.request_count, result.error_class) == ("PROVIDER_FAILED", 0, "SpendLedgerUnavailable")
+    assert delegate.calls == 0
+    assert spend.state("attempt-1") == "RELEASED" and spend.committed_usd() == 0  # the scope is not left blocked
+
+
+def test_an_unusable_reservation_that_cannot_be_released_stays_liability_and_nothing_is_sent(tmp_path: Path) -> None:
+    spend = small_ledger(tmp_path)
+
+    class StuckLedger:
+        def __getattr__(self, name: str):
+            return getattr(spend, name)
+
+        def reserve(self, attempt_id: str, **kwargs):
+            spend.reserve(attempt_id, **kwargs)
+            return object()  # no output limit
+
+        def release_unsent(self, attempt_id: str, *, reason: str) -> None:
+            raise OSError("the ledger file cannot be written")
+
+    delegate = Recording(spend, returned())
+    result = GuardedTurnRunner(delegate, StuckLedger(), POLICY, scope_for=lambda t: "case-a",  # type: ignore[arg-type]
+                               min_output_tokens=1).run_turn(turn())
+
+    assert (result.request_count, result.error_class) == (0, "SpendLedgerUnavailable") and delegate.calls == 0
+    assert spend.state("attempt-1") == "RESERVED" and spend.committed_usd() == Decimal("0.02")  # kept, never lost

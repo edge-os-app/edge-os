@@ -20,9 +20,10 @@ candidate, so production stays refused. The application holds no provider key: t
 request of each grant are read from the saved attempt row and must equal those the RESERVED reservation copied from it;
 anything else gets no grant.
 
-Give `app.runner` and `app.config` to `create_app(settings, hermes_runner=..., hermes_config=...)` with
-`EDGE_OS_INTERPRETER=hermes_local`. The lane-1 relay operator starts the relay and owns its shutdown; its one-time
-handoff file names the endpoint and evidence folder and approves nothing. LOCAL only: the accepted job
+Give `app.runner` and `app.config` to `create_app(settings, hermes_runner=..., hermes_config=...,
+spend_view=application.budget_view)` with `EDGE_OS_INTERPRETER=hermes_local`. The lane-1 relay operator
+starts the relay and owns its shutdown; its one-time handoff file names the endpoint and evidence folder and approves
+nothing. LOCAL only: the accepted job
 code lives under `scripts/`, which this module adds to the import path; the application factory does not import it.
 See `docs/qualification/hermes-application-release/CONTRACT.md`.
 """
@@ -45,6 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import Engine, text
+from sqlalchemy.orm import Session
 
 from edge_os_api.core.database import make_engine, make_session_factory, require_head
 from edge_os_api.core.hosted_deployment import HostedDeploymentRefused, check_hosted_deployment
@@ -53,7 +55,7 @@ from edge_os_api.research.hermes_interpreter import HermesInterpreterConfig, Her
 # `hermes_transport_mount` (through `provider_spend_ledger`) has already added the accepted runner folders.
 from edge_os_api.research.hermes_transport_mount import DEFAULT_POLICY, MountRefused
 from edge_os_api.research.interpreter_output_schema import interpretation_response_format
-from edge_os_api.research.provider_spend_ledger import PostgresSpendLedger, SpendLimits, TokenPrice
+from edge_os_api.research.provider_spend_ledger import PostgresSpendLedger, SpendLimits, TokenPrice, spend_view
 
 RELAY = Path(__file__).resolve().parents[5] / "scripts" / "hermes_provider_relay"
 if str(RELAY) not in sys.path:
@@ -65,6 +67,7 @@ from provider_guard import GuardPolicy  # noqa: E402
 from provider_transport import TransportRoute  # noqa: E402
 from relay_admission import ActualRelease, RelaySubject, load_actual_release  # noqa: E402
 from relay_turn_runner import RelayEndpoint, build_relay_job  # noqa: E402
+from spend_ledger import check_smallest_limit  # noqa: E402 - the ledgers' own range rule for min_output_tokens
 
 __all__ = ["HermesApplication", "HermesApplicationRelease", "RELEASE_DEFINITIONS", "RelayApplicationDefinition",
            "bind_release", "compose_application", "image_for_platform", "open_hermes_application"]
@@ -100,6 +103,9 @@ class RelayApplicationDefinition:
     channel_root: str  # this application's job channel under the relay
     global_cap_usd: Decimal  # every owner together
     owner_cap_usd: Decimal  # each owner on their own
+    # The smallest output limit worth a call (relay CONTRACT A9). None, the default: every call reserves and grants the
+    # record's full limit. A value lets a reservation lower one call's limit to the remaining budget, never below it.
+    min_output_tokens: int | None = None
 
 
 # The one approved release, hermes-first-call-1. Its record and price bytes are the frozen files in
@@ -145,6 +151,7 @@ class HermesApplicationRelease:
     channel_root: str
     limits: SpendLimits
     required_extra_sha256: str  # the policy's request shape when bound; checked again before anything is built
+    min_output_tokens: int | None = None  # the definition's, checked against the record's limit (CONTRACT A9)
 
     def unchanged(self) -> bool:
         """The owned request shape is still exactly the bound one and still the record's."""
@@ -287,6 +294,12 @@ def bind_release(definition: RelayApplicationDefinition) -> HermesApplicationRel
     if not isinstance(channel, str) or not relay_admission.IDENTIFIER.fullmatch(channel):
         raise _Refused("the channel root must be 1-64 letters, digits or ._:-")
     release = actual.release
+    smallest = definition.min_output_tokens
+    if smallest is not None:
+        try:
+            check_smallest_limit(smallest, release.max_output_tokens)  # the ledgers' own rule
+        except ValueError as error:
+            raise _Refused(f"{error} (the record's max_tokens)") from error
     limits = SpendLimits(global_cap_usd=definition.global_cap_usd, owner_cap_usd=definition.owner_cap_usd, price=price)
     approval = record["approval"]
     config = HermesInterpreterConfig(
@@ -301,7 +314,7 @@ def bind_release(definition: RelayApplicationDefinition) -> HermesApplicationRel
                            max_request_bytes=release.max_request_bytes,
                            max_envelope_chars=DEFAULT_POLICY.max_envelope_chars, required_extra=extra),
         config=config, image=image, channel_root=definition.channel_root, limits=limits,
-        required_extra_sha256=hashlib.sha256(_canonical(extra)).hexdigest())
+        required_extra_sha256=hashlib.sha256(_canonical(extra)).hexdigest(), min_output_tokens=smallest)
 
 
 @dataclass
@@ -316,6 +329,10 @@ class HermesApplication:
     @property
     def config(self) -> HermesInterpreterConfig:
         return self.release.config
+
+    def budget_view(self, session: Session, owner_id: uuid.UUID | str) -> dict[str, int] | None:
+        """The owner's budget from the ledger; before its first use, this release's configured limits."""
+        return spend_view(session, owner_id, self.release.limits)
 
     def close(self) -> None:
         self.engine.dispose()
@@ -366,7 +383,8 @@ def compose_application(release: HermesApplicationRelease, engine: Engine, *, en
                           evidence_dir=evidence_dir, script_for=lambda turn: {},
                           timeout_seconds=release.actual.timeout_seconds, run_budget_seconds=run_budget_seconds,
                           seal_grace_seconds=seal_grace_seconds, recovery_budget_seconds=recovery_budget_seconds,
-                          close_budget_seconds=close_budget_seconds, actual=release.actual, price=release.price)
+                          close_budget_seconds=close_budget_seconds, actual=release.actual, price=release.price,
+                          min_output_tokens=release.min_output_tokens)
     return HermesApplication(release, job.runner, job.supervision, spend, engine)
 
 

@@ -2,8 +2,8 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { InterpretationAttempts } from "../components/InterpretationAttempts";
 import { RequestPage } from "../components/RequestPage";
-import { describeAttemptCost, describeModelCost } from "../lib/interpretation";
-import type { Attempt, AttemptSpend, ModelCost } from "../lib/types";
+import { describeAttemptCost, describeCredit, describeCreditSpend, describeModelBudget, describeModelCost } from "../lib/interpretation";
+import type { Attempt, AttemptSpend, ModelBudget, ModelCost } from "../lib/types";
 
 const mocks = vi.hoisted(() => ({ get: vi.fn() }));
 vi.mock("../lib/api", () => ({
@@ -28,13 +28,16 @@ const settled: AttemptSpend = { state: "SETTLED", charge_usd: "0.0074285" };
 const unknown: AttemptSpend = { state: "UNKNOWN", charge_usd: "0.054848" }; // the held reservation, not a cost
 const missing: AttemptSpend = { state: null, charge_usd: null }; // no spend record was saved
 
+const cost = (settledUsd: string | null, settledCalls: number, unknownCalls: number, held: string | null = null): ModelCost =>
+  ({ settled_usd: settledUsd, settled_calls: settledCalls, unknown_calls: unknownCalls, unit: "CREDIT",
+     settled_credit: settledUsd, held_credit: held });
 const costRow = (item: HTMLElement) => within(item).getByText("Model cost").nextElementSibling as HTMLElement;
 
 describe("model cost on the saved research result", () => {
   it("shows each settled cost exactly, and unknown for an unknown or missing spend record", () => {
-    const cost: ModelCost = { settled_usd: "0.0074285", settled_calls: 1, unknown_calls: 2 };
+    const total: ModelCost = cost("0.0074285", 1, 2);
     render(<InterpretationAttempts attempts={[attempt("a1", 1, settled), attempt("a2", 2, unknown), attempt("a3", 3, missing)]}
-      modelCost={cost} lateResults={[]} open />);
+      modelCost={total} lateResults={[]} open />);
     const [first, second, third] = screen.getAllByRole("listitem");
     expect(costRow(first)).toHaveTextContent("$0.0074285");
     expect(costRow(second)).toHaveTextContent("Unknown");
@@ -45,13 +48,13 @@ describe("model cost on the saved research result", () => {
 
   it("shows the total when every call settled", () => {
     render(<InterpretationAttempts attempts={[attempt("a1", 1, settled), attempt("a2", 2, settled)]}
-      modelCost={{ settled_usd: "0.014857", settled_calls: 2, unknown_calls: 0 }} lateResults={[]} open={false} />);
+      modelCost={cost("0.014857", 2, 0)} lateResults={[]} open={false} />);
     expect(screen.getByTestId("model-cost-total")).toHaveTextContent(/^Total model cost: \$0\.014857$/);
   });
 
   it("never shows zero when no call settled", () => {
     render(<InterpretationAttempts attempts={[attempt("a1", 1, unknown), attempt("a2", 2, missing)]}
-      modelCost={{ settled_usd: null, settled_calls: 0, unknown_calls: 2 }} lateResults={[]} open />);
+      modelCost={cost(null, 0, 2)} lateResults={[]} open />);
     expect(screen.getByTestId("model-cost-total")).toHaveTextContent("Total model cost: unknown, 2 calls unknown");
     expect(document.body.textContent).not.toMatch(/\$0(\.0+)?\b/);
   });
@@ -63,9 +66,9 @@ describe("model cost on the saved research result", () => {
     expect(describeAttemptCost({ state: "RELEASED", charge_usd: "0" })).toBe("Unknown");
     expect(describeAttemptCost({ state: "SETTLED", charge_usd: null })).toBe("Unknown");
     expect(describeAttemptCost({ state: "SETTLED", charge_usd: "-1" })).toBe("Unknown");
-    expect(describeModelCost({ settled_usd: "0.0074285", settled_calls: 1, unknown_calls: 1 })).toBe("at least $0.0074285, 1 call unknown");
-    expect(describeModelCost({ settled_usd: null, settled_calls: 0, unknown_calls: 1 })).toBe("unknown, 1 call unknown");
-    expect(describeModelCost({ settled_usd: "0.3", settled_calls: 2, unknown_calls: 0 })).toBe("$0.3");
+    expect(describeModelCost(cost("0.0074285", 1, 1))).toBe("at least $0.0074285, 1 call unknown");
+    expect(describeModelCost(cost(null, 0, 1))).toBe("unknown, 1 call unknown");
+    expect(describeModelCost(cost("0.3", 2, 0))).toBe("$0.3");
   });
 });
 
@@ -87,11 +90,111 @@ describe("the saved request page", () => {
       intake: { record_id: "intake-1", created_at: "2026-10-10T08:00:00Z", content: { original_request: "Buy when up", restrictions: [], input_class: "CONCRETE_THESIS", requested_job: "CREATE_STRATEGY" } },
       interpretations: [], clarifications: [], publications: [], drafts: [], revisions: [], outcomes: [], late_results: [],
       attempts: [attempt("a1", 1, settled), attempt("a2", 2, missing)],
-      model_cost: { settled_usd: "0.0074285", settled_calls: 1, unknown_calls: 1 },
+      model_cost: cost("0.0074285", 1, 1),
       head: { interpretation_revision_id: null, outcome: null, questions: [], draft_id: null, strategy_id: null,
         retry: { allowed: false, retry_of: null, reason: "nothing_to_retry" }, reply: null },
     });
     render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
     expect(await screen.findByTestId("model-cost-total")).toHaveTextContent("Total model cost: at least $0.0074285, 1 call unknown");
+  });
+});
+
+// --- CREDIT (ORBIO_CREDIT_DESIGN 2a) ---------------------------------------------------------------------------------
+// CREDIT is Orbio's unit, exactly USD 1 of usage, so an amount in CREDIT is the same exact decimal string as in USD.
+// UNKNOWN is never shown as zero, and a budget that is not set is not 0.
+
+const heldUnknown: AttemptSpend = { state: "UNKNOWN", charge_usd: "0.17216" };
+const budget: ModelBudget = { unit: "CREDIT", state: "SET", owner_cap_credit: "2", global_cap_credit: "2", settled_credit: "0.02784",
+  held_credit: "0.17216", held_calls: 1, available_credit: "1.8", over_credit: "0" };
+
+describe("CREDIT amounts", () => {
+  it("prints the exact stored decimal with the CREDIT unit and refuses anything else", () => {
+    expect(describeCredit("0.0074285")).toBe("0.0074285 CREDIT");
+    expect(describeCredit("5E-7")).toBe("0.0000005 CREDIT");
+    expect(describeCredit("2")).toBe("2 CREDIT");
+    expect(describeCredit(null)).toBeNull();
+    expect(describeCredit("-1")).toBeNull();
+    expect(describeCredit("0.1e400")).toBeNull();
+  });
+
+  it("shows settled spend in CREDIT with its USD, a lower bound with unknown calls, and unknown when nothing settled", () => {
+    expect(describeCreditSpend(cost("0.0074285", 1, 0))).toBe("spent 0.0074285 CREDIT (USD 0.0074285)");
+    expect(describeCreditSpend(cost("0.0074285", 1, 2, "0.17216"))).toBe("at least 0.0074285 CREDIT, 2 calls unknown");
+    expect(describeCreditSpend(cost(null, 0, 1, "0.17216"))).toBe("unknown, 1 call unknown");
+    expect(describeCreditSpend(cost(null, 0, 2))).not.toMatch(/\b0 CREDIT/);
+    expect(describeCreditSpend({ ...cost("0.0074285", 1, 0), settled_credit: "0.0074284" })).toBe("unknown");
+  });
+
+  it("shows the owner's shared budget with held calls as used, and a missing budget as not set", () => {
+    expect(describeModelBudget(budget)).toBe(
+      "available 1.8 of 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT; 0.17216 CREDIT held by 1 call of unknown cost");
+    expect(describeModelBudget({ ...budget, held_credit: "0", held_calls: 0, available_credit: "1.97216" })).toBe(
+      "available 1.97216 of 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT");
+    expect(describeModelBudget({ ...budget, held_credit: "0.34432", held_calls: 2, available_credit: "1.62784" })).toBe(
+      "available 1.62784 of 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT; 0.34432 CREDIT held by 2 calls of unknown cost");
+    expect(describeModelBudget(null)).toBe("budget not set");
+    expect(describeModelBudget({ ...budget, available_credit: "not-a-number" })).toBe("unknown");
+    expect(describeModelBudget({ ...budget, held_calls: 1.5 })).toBe("unknown");
+    expect(describeModelBudget({ unit: "CREDIT", state: "UNKNOWN" })).toBe("unknown"); // could not be read: not 0, not "not set"
+  });
+
+  it("shows the configured limits before the ledger's first use", () => {
+    expect(describeModelBudget({ ...budget, settled_credit: "0", held_credit: "0", held_calls: 0, available_credit: "2" })).toBe(
+      "available 2 of 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT");
+  });
+
+  it("shows 0 available and the overrun amount after a charge passes the cap", () => {
+    const over = { ...budget, settled_credit: "2.05", held_credit: "0", held_calls: 0, available_credit: "0", over_credit: "0.05" };
+    expect(describeModelBudget(over)).toBe(
+      "0 available, over by 0.05 CREDIT; cap 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT");
+    expect(describeModelBudget({ ...over, held_credit: "0.17216", held_calls: 1 })).toBe(
+      "0 available, over by 0.05 CREDIT; cap 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT; 0.17216 CREDIT held by 1 call of unknown cost");
+    expect(describeModelBudget({ ...over, over_credit: "not-a-number" })).toBe("unknown");
+  });
+});
+
+describe("CREDIT on the attempts list", () => {
+  it("renders an all-unknown study as unknown, never as 0 CREDIT", () => {
+    render(<InterpretationAttempts attempts={[attempt("a1", 1, heldUnknown)]} modelCost={cost(null, 0, 1, "0.17216")}
+      modelBudget={budget} lateResults={[]} open />);
+    expect(screen.getByTestId("model-credit")).toHaveTextContent("Model spend: unknown, 1 call unknown");
+    expect(screen.getByTestId("model-budget")).toHaveTextContent(
+      "Model budget: available 1.8 of 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT; 0.17216 CREDIT held by 1 call of unknown cost");
+    expect(document.body.textContent).not.toMatch(/\b0 CREDIT/);
+  });
+
+  it("renders a mixed study as a lower bound and a missing budget as not set", () => {
+    render(<InterpretationAttempts attempts={[attempt("a1", 1, settled), attempt("a2", 2, heldUnknown)]}
+      modelCost={cost("0.0074285", 1, 1, "0.17216")} modelBudget={null} lateResults={[]} open />);
+    expect(screen.getByTestId("model-credit")).toHaveTextContent("Model spend: at least 0.0074285 CREDIT, 1 call unknown");
+    expect(screen.getByTestId("model-budget")).toHaveTextContent("Model budget: budget not set");
+    expect(screen.getByTestId("model-budget")).not.toHaveTextContent(/\b0 CREDIT/);
+  });
+
+  it("passes the bundle's budget through the saved request page", async () => {
+    mocks.get.mockResolvedValue({
+      interpreter: { kind: "HERMES_LIVE_RELEASE", id: "release-1", notice: "" },
+      intake: { record_id: "intake-1", created_at: "2026-10-10T08:00:00Z", content: { original_request: "Buy when up", restrictions: [], input_class: "CONCRETE_THESIS", requested_job: "CREATE_STRATEGY" } },
+      interpretations: [], clarifications: [], publications: [], drafts: [], revisions: [], outcomes: [], late_results: [],
+      attempts: [attempt("a1", 1, settled)], model_cost: cost("0.0074285", 1, 0), model_budget: budget,
+      head: { interpretation_revision_id: null, outcome: null, questions: [], draft_id: null, strategy_id: null,
+        retry: { allowed: false, retry_of: null, reason: "nothing_to_retry" }, reply: null },
+    });
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    expect(await screen.findByTestId("model-credit")).toHaveTextContent("Model spend: spent 0.0074285 CREDIT (USD 0.0074285)");
+    expect(screen.getByTestId("model-budget")).toHaveTextContent("Model budget: available 1.8 of 2 CREDIT");
+  });
+
+  it("shows the budget on a saved request with no attempts, and no cost lines", () => {
+    render(<InterpretationAttempts attempts={[]} modelCost={cost(null, 0, 0)} modelBudget={{ ...budget, held_credit: "0", held_calls: 0, available_credit: "2" }} lateResults={[]} open={false} />);
+    expect(screen.getByTestId("model-budget")).toHaveTextContent(
+      "Model budget: available 2 of 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT");
+    expect(screen.queryByTestId("model-credit")).toBeNull();
+    expect(screen.queryByTestId("attempts")).toBeNull();
+  });
+
+  it("shows nothing with no attempts when the application reports no model cost", () => {
+    const { container } = render(<InterpretationAttempts attempts={[]} lateResults={[]} open={false} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });

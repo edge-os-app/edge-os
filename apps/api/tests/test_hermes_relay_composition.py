@@ -574,6 +574,15 @@ def saved(app_client: TestClient, attempt_id: str) -> dict[str, Any]:
     return dict(zip(keys, row))
 
 
+def test_before_first_use_the_application_budget_view_is_the_releases_configured_limits(mounted, client, owner_a) -> None:
+    app, _serving = mounted("budget", StandInJob(mounted.relay))
+    owner = client.get("/v1/me", headers=owner_a).json()["user_id"]
+    with client.app.state.session_factory() as session:
+        view = app.budget_view(session, owner)
+    assert view == {"owner_cap": 150_000_000, "global_cap": 300_000_000, "settled": 0, "held": 0, "held_calls": 0,
+                    "available": 150_000_000}
+
+
 def test_a_saved_request_is_sent_once_settled_at_the_snapshot_price_reopened_elsewhere_and_denied_to_another_owner(
         mounted, owner_a, owner_b) -> None:
     job = StandInJob(mounted.relay, (reply_record(), RETURNED))
@@ -689,3 +698,34 @@ def test_a_reservation_that_no_longer_names_the_saved_owner_gets_no_grant_and_is
     [(new_owner,)] = moved  # exactly one reservation row was moved before the subject check
     row = saved(app_client, attempt["attempt_id"])
     assert row["reserved_owner"] == new_owner != row["owner"]
+
+
+# --- The per-call output limit (ORBIO_CREDIT_DESIGN 2b) ----------------------------------------------------------------
+
+def test_no_registered_release_sets_a_smallest_output_limit() -> None:
+    # The release value is an open builder question (design Q2, status-file item 3): the mechanism exists, but every call keeps the full limit.
+    assert [d.min_output_tokens for d in composition.RELEASE_DEFINITIONS] == [None] * len(composition.RELEASE_DEFINITIONS)
+
+
+def test_a_definition_without_a_smallest_limit_composes_a_runner_that_never_lowers_the_limit(approve, tmp_path: Path) -> None:
+    [given] = approve(definition())
+    release = bind_release(given)
+    app = compose_application(release, lazy_engine(), endpoint=endpoint(tmp_path / "relay"), run_id="rc-unit",
+                              evidence_dir=tmp_path / "jobs")
+    assert release.min_output_tokens is None and app.runner._min_output_tokens is None  # type: ignore[attr-defined]
+
+
+def test_the_definitions_smallest_limit_reaches_the_guarded_runner(approve, tmp_path: Path) -> None:
+    [given] = approve(definition(min_output_tokens=512))
+    release = bind_release(given)
+    app = compose_application(release, lazy_engine(), endpoint=endpoint(tmp_path / "relay"), run_id="rc-unit",
+                              evidence_dir=tmp_path / "jobs")
+    assert release.min_output_tokens == 512 and app.runner._min_output_tokens == 512  # type: ignore[attr-defined]
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("smallest", [0, -1, True, 4097, "512", 512.0])
+def test_a_smallest_limit_outside_one_to_the_records_limit_is_refused_at_binding(approve, smallest: Any) -> None:
+    [given] = approve(definition(min_output_tokens=smallest))
+    with pytest.raises(MountRefused, match="min_output_tokens"):
+        bind_release(given)
