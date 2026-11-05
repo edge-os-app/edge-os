@@ -10,7 +10,7 @@ import { ResearchNansenReport } from "./ResearchNansenReport";
 import { declarationRelease, describeRelease, releaseBounds, sourceRelease, transportRelease } from "../lib/research-release";
 import { Details } from "./Details";
 import { plural } from "../lib/plural";
-import { CLAIM_STATUS, DATASET_LIMIT, DIRECTION, EVIDENCE_CLASS, PARTITION_ROLE, PROVIDER_USE, REPORT_OUTCOME, STATISTICAL_STATUS, VERDICT, deliveryCheckText, plain } from "../lib/labels";
+import { CLAIM_STATUS, DATASET_LIMIT, DIRECTION, EVIDENCE_CLASS, JOB_UNAVAILABLE_REASON, PARTITION_ROLE, PROVIDER_USE, REPORT_OUTCOME, STATISTICAL_STATUS, VERDICT, deliveryCheckText, plain } from "../lib/labels";
 import { deriveHistoryPlan, historyUnknowns } from "../lib/history-declaration";
 import type { HistoryDirection, HistoryPlan } from "../lib/history-declaration";
 
@@ -541,7 +541,7 @@ const STATE_COPY: Record<string, string> = {
   CANCELLED: "Cancelled. Saved attempts and any partial dataset are kept.",
   DEADLINE_EXCEEDED: "Stopped at its deadline. Saved attempts are kept.",
   BUDGET_EXHAUSTED: "Refused: your research budget cannot reserve this job. Nothing was collected.",
-  UNAVAILABLE: "The collection outcome is unknown after a stop. It is not collected again; its full reservation stays counted.",
+  UNAVAILABLE: "This job is unavailable. The reason is in Details.",
   FAILED: "The job failed. Its attempts and unknown usage are kept.",
 };
 
@@ -883,7 +883,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
           {jobs.map((job) => (
             <div className="card stack" key={job.job_id} data-testid="history-job" data-state={job.state}>
               <strong>Job {job.job_id.slice(0, 8)}</strong>
-              <p role="status">{STATE_COPY[job.state] ?? "Unknown state"}</p>
+              <p role="status">{(job.state === "UNAVAILABLE" && job.terminal_reason && JOB_UNAVAILABLE_REASON[job.terminal_reason]) || (STATE_COPY[job.state] ?? "Unknown state")}</p>
               <p className="muted">Saved steps: {plural(job.events.length, "step")}.</p>
               <Details summary="Details"><p className="mono">{job.state}{job.terminal_reason ? ` · ${job.terminal_reason}` : ""}</p>
                 <p className="mono">{job.events.map((event) => event.kind).join(" → ") || "none"}</p></Details>

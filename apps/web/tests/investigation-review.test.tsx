@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InvestigationReview } from "../components/InvestigationReview";
@@ -447,6 +447,20 @@ describe("recorded-history investigation", () => {
         { op: "constant", value: "0.004", unit: "DIMENSIONLESS" }] } });
     expect(body.configuration.permitted_access).toEqual(["RECORDED_RESPONSE"]);
     expect(Object.values(body.field_origins).every((item) => (item as { adoption: string }).adoption === "ADOPTED")).toBe(true);
+  });
+
+  it.each([
+    ["collection_outcome_unknown", "The collection outcome is unknown after a stop. It is not collected again; its full reservation stays counted."],
+    ["declared_source_changed", "The declared source changed, so nothing was collected. The full reservation is released."],
+    ["history_source_unavailable", "The declared source is not available, so nothing was collected. The full reservation is released."],
+    ["operating_release_endpoint_mismatch", "This job is unavailable. The reason is in Details."],
+  ])("states the true outcome of an unavailable job: %s", async (reason, sentence) => {
+    const user = userEvent.setup();
+    mocks.jobs.mockResolvedValue({ jobs: [job("UNAVAILABLE", { terminal_reason: reason })] });
+    await openSaved(user);
+    const card = await screen.findByTestId("history-job");
+    expect(within(card).getByRole("status")).toHaveTextContent(sentence);
+    expect(card).toHaveTextContent(reason);
   });
 
   async function declareMoe(user: ReturnType<typeof userEvent.setup>, lookback: string,

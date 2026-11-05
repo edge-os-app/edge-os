@@ -45,7 +45,7 @@ export const VERDICT: Record<string, string> = {
   UNKNOWN: "Unknown",
 };
 
-/** `apps/api/src/edge_os_api/funding/types.py:44`. */
+/** `apps/api/src/edge_os_api/funding/types.py:44`; REQUESTED also from `apps/api/src/edge_os_api/accounts/views.py:178`. */
 export const FLOW_STATE: Record<string, string> = {
   REQUESTED: "Requested",
   PENDING: "Pending",
@@ -221,6 +221,14 @@ export const STOP_SCOPE: Record<string, string> = {
 };
 
 /** `apps/api/src/edge_os_api/core/request_schemas.py:204` (partition roles). */
+// Reasons an investigation job ends UNAVAILABLE: apps/api/src/edge_os_api/research/investigation_jobs.py:804,814,890.
+// Other reasons are release refusals (:779); they use the caller's fallback, and the raw reason stays in Details.
+export const JOB_UNAVAILABLE_REASON: Record<string, string> = {
+  collection_outcome_unknown: "The collection outcome is unknown after a stop. It is not collected again; its full reservation stays counted.",
+  declared_source_changed: "The declared source changed, so nothing was collected. The full reservation is released.",
+  history_source_unavailable: "The declared source is not available, so nothing was collected. The full reservation is released.",
+};
+
 export const PARTITION_ROLE: Record<string, string> = {
   DESCRIPTIVE: "Descriptive",
   TRAINING: "Training",
