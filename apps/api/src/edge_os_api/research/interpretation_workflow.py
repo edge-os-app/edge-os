@@ -212,7 +212,8 @@ def model_budget(view: dict[str, int] | None) -> dict[str, Any] | None:
     """The owner's shared model budget (`provider_spend_ledger.spend_view`) in CREDIT, or None when it is not set.
 
     The budget is the owner's cap shared by all their studies and bounded by the global ceiling; there is no per-study
-    cap. Held liability (RESERVED and UNKNOWN calls) is used budget. A ledger past its cap has nothing available.
+    cap. Held liability (RESERVED and UNKNOWN calls) is used budget. A ledger past its cap has nothing available, and
+    `over_credit` is how far past it is.
     A budget the ledger could not report is `UNKNOWN_BUDGET`, which is neither "not set" nor zero."""
     if view is None:
         return None
@@ -220,7 +221,7 @@ def model_budget(view: dict[str, int] | None) -> dict[str, Any] | None:
     return {"unit": "CREDIT", "state": "SET", "owner_cap_credit": credit(view["owner_cap"]),
             "global_cap_credit": credit(view["global_cap"]), "settled_credit": credit(view["settled"]),
             "held_credit": credit(view["held"]), "held_calls": view["held_calls"],
-            "available_credit": credit(max(0, view["available"]))}
+            "available_credit": credit(max(0, view["available"])), "over_credit": credit(max(0, -view["available"]))}
 
 
 class HermesResearch:

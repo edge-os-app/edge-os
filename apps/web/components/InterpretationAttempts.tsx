@@ -7,14 +7,15 @@ import type { Attempt, LateResult, ModelBudget, ModelCost } from "../lib/types";
 
 /** Every attempt the interpreter made for this request, oldest first. A failed or unknown attempt stays listed. */
 export function InterpretationAttempts({ attempts, modelCost = null, modelBudget = null, lateResults, open, currentRevisionId = null }: { attempts: Attempt[]; modelCost?: ModelCost | null; modelBudget?: ModelBudget | null; lateResults: LateResult[]; open: boolean; currentRevisionId?: string | null }) {
-  if (attempts.length === 0) return null;
+  const budgetLine = modelCost && <p data-testid="model-budget">Model budget: {describeModelBudget(modelBudget)}</p>;
+  if (attempts.length === 0) return budgetLine;
   const byId = new Map(attempts.map((a) => [a.attempt_id, a]));
   const number = (id: string) => byId.get(id)?.sequence;
   return (
     <>
       {modelCost && <p data-testid="model-cost-total">Total model cost: {describeModelCost(modelCost)}</p>}
       {modelCost && <p data-testid="model-credit">Model spend: {describeCreditSpend(modelCost)}</p>}
-      {modelCost && <p data-testid="model-budget">Model budget: {describeModelBudget(modelBudget)}</p>}
+      {budgetLine}
       <details open={open} data-testid="attempts">
         <summary>Interpreter attempts ({attempts.length})</summary>
         <ol className="attempts" aria-label="Interpreter attempts for this request, oldest first">

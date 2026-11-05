@@ -6,8 +6,9 @@
       -> TransportTurnRunner (accepted: the job's report must name this attempt and this route)
         -> GuardedDockerTurnRunner with the transport job entry (accepted: deadline D, sealing, recovery C)
 
-Give `mount.runner` to `create_app(settings, hermes_runner=..., spend_view=provider_spend_ledger.spend_view)` with
-`EDGE_OS_INTERPRETER=hermes_local`; `spend_view` lets each saved result show the owner's model budget. Production,
+Give `mount.runner` to `create_app(settings, hermes_runner=..., spend_view=partial(provider_spend_ledger.spend_view,
+limits=limits))` with `EDGE_OS_INTERPRETER=hermes_local`; `spend_view` lets each saved result show the owner's model
+budget. Production,
 any other interpreter, an ACTUAL route and a policy that does not match the application's interpreter are refused
 before any effect: no engine, no file, no Docker command. The only transport is the AUTHORED one in a no-network
 container. Each API process uses its own stable `run_id`; a restarted process reuses it to recover its dead turns.

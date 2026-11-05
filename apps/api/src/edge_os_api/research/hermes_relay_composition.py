@@ -21,7 +21,7 @@ request of each grant are read from the saved attempt row and must equal those t
 anything else gets no grant.
 
 Give `app.runner` and `app.config` to `create_app(settings, hermes_runner=..., hermes_config=...,
-spend_view=provider_spend_ledger.spend_view)` with `EDGE_OS_INTERPRETER=hermes_local`. The lane-1 relay operator
+spend_view=application.budget_view)` with `EDGE_OS_INTERPRETER=hermes_local`. The lane-1 relay operator
 starts the relay and owns its shutdown; its one-time handoff file names the endpoint and evidence folder and approves
 nothing. LOCAL only: the accepted job
 code lives under `scripts/`, which this module adds to the import path; the application factory does not import it.
@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import Engine, text
+from sqlalchemy.orm import Session
 
 from edge_os_api.core.database import make_engine, make_session_factory, require_head
 from edge_os_api.core.hosted_deployment import HostedDeploymentRefused, check_hosted_deployment
@@ -54,7 +55,7 @@ from edge_os_api.research.hermes_interpreter import HermesInterpreterConfig, Her
 # `hermes_transport_mount` (through `provider_spend_ledger`) has already added the accepted runner folders.
 from edge_os_api.research.hermes_transport_mount import DEFAULT_POLICY, MountRefused
 from edge_os_api.research.interpreter_output_schema import interpretation_response_format
-from edge_os_api.research.provider_spend_ledger import PostgresSpendLedger, SpendLimits, TokenPrice
+from edge_os_api.research.provider_spend_ledger import PostgresSpendLedger, SpendLimits, TokenPrice, spend_view
 
 RELAY = Path(__file__).resolve().parents[5] / "scripts" / "hermes_provider_relay"
 if str(RELAY) not in sys.path:
@@ -328,6 +329,10 @@ class HermesApplication:
     @property
     def config(self) -> HermesInterpreterConfig:
         return self.release.config
+
+    def budget_view(self, session: Session, owner_id: uuid.UUID | str) -> dict[str, int] | None:
+        """The owner's budget from the ledger; before its first use, this release's configured limits."""
+        return spend_view(session, owner_id, self.release.limits)
 
     def close(self) -> None:
         self.engine.dispose()

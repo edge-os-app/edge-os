@@ -94,11 +94,12 @@ export interface ModelCost {
 }
 /**
  * The owner's model budget from the spend ledger, in CREDIT. Shared by all the owner's studies and limited by the global
- * ceiling; held calls count as used. UNKNOWN: the ledger could not be read, which is neither "not set" nor zero.
+ * ceiling; held calls count as used. `over_credit` is how far past its limit the budget is, "0" when it is not.
+ * UNKNOWN: the ledger could not be read, which is neither "not set" nor zero.
  */
 export type ModelBudget =
   | { unit: "CREDIT"; state: "SET"; owner_cap_credit: string; global_cap_credit: string; settled_credit: string;
-      held_credit: string; held_calls: number; available_credit: string }
+      held_credit: string; held_calls: number; available_credit: string; over_credit: string }
   | { unit: "CREDIT"; state: "UNKNOWN" };
 export interface AttemptUsage { source: "PROVIDER_REPORTED" | "UNKNOWN"; input_tokens: number | null; output_tokens: number | null; total_tokens: number | null }
 

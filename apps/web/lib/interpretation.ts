@@ -104,15 +104,17 @@ export function describeCreditSpend(cost: ModelCost): string {
   return describeTotal(total, cost.unknown_calls, (credit) => `spent ${credit} (USD ${amount!.slice(1)})`);
 }
 
-/** The owner's shared model budget. Held calls are used budget. No budget from the API means it is not set, not 0. */
+/** The owner's shared model budget. Held calls are used budget. No budget from the API means no limit is configured, not 0. */
 export function describeModelBudget(budget: ModelBudget | null): string {
   if (budget === null) return "budget not set";
   if (budget.state !== "SET") return "unknown";
   const available = usd(budget.available_credit), cap = describeCredit(budget.owner_cap_credit);
   const ceiling = describeCredit(budget.global_cap_credit), held = describeCredit(budget.held_credit);
-  if (available === null || cap === null || ceiling === null || held === null || !Number.isInteger(budget.held_calls)
-      || budget.held_calls < 0) return "unknown";
-  const shared = `available ${available.slice(1)} of ${cap}, shared by all your studies and limited by the global ceiling of ${ceiling}`;
+  const over = describeCredit(budget.over_credit);
+  if (available === null || cap === null || ceiling === null || held === null || over === null
+      || !Number.isInteger(budget.held_calls) || budget.held_calls < 0) return "unknown";
+  const limit = over === "0 CREDIT" ? `available ${available.slice(1)} of ${cap}` : `${available.slice(1)} available, over by ${over}; cap ${cap}`;
+  const shared = `${limit}, shared by all your studies and limited by the global ceiling of ${ceiling}`;
   if (budget.held_calls === 0) return shared;
   return `${shared}; ${held} held by ${budget.held_calls} call${budget.held_calls === 1 ? "" : "s"} of unknown cost`;
 }

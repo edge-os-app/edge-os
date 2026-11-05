@@ -30,7 +30,6 @@ from edge_os_api.core.settings import load_settings
 from edge_os_api.main import create_app
 from edge_os_api.research.hermes_relay_composition import open_hermes_application
 from edge_os_api.research.hermes_transport_mount import MountRefused
-from edge_os_api.research.provider_spend_ledger import spend_view
 
 DEFAULT_BIND_HOST = "127.0.0.1"
 BIND_NETWORKS = (ipaddress.IPv4Network("10.0.0.0/8"), ipaddress.IPv4Network("172.16.0.0/12"),
@@ -88,7 +87,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return REFUSED
     try:
         app = PublicRouteGuard(create_app(settings, hermes_runner=opened.runner, hermes_config=opened.config,
-                                          spend_view=spend_view))
+                                          spend_view=opened.budget_view))
         print(json.dumps({"serving": opened.release.actual.release.release_id, "host": host, "port": args.port,
                           "pid": os.getpid(), "startup_recovered": len(opened.startup_recovery)}), flush=True)
         uvicorn.run(app, host=host, port=args.port, log_level="warning")

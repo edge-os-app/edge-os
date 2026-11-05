@@ -140,6 +140,27 @@ Each candidate was reviewed by two new independent reviewer subagents, a spec re
 - The web app needs Node 24. The container has Node 22, whose npm refused the lock file, so Node 24.22.2 and npm 11 were installed as local packages in the session scratchpad. `npm ci --ignore-scripts` then succeeded against the unchanged lock file.
 - The stopped run left two test PostgreSQL containers and their volumes; they were removed.
 
+## Builder decisions, 2026-11-05 (ORBIO-CREDIT-L4-20261105)
+
+These answer the open questions below. That list stays as the record of what was asked.
+
+1. `min_output_tokens` stays unset. No release value changes.
+2. Settlement stays option A (E1-COST1). Part 2c `max_cost` is not built.
+3. There is no per-study cap.
+4. Before the ledger's settings row exists, the page shows the configured limits. "budget not set" stays only when no limit is configured, which means no spend view was given to the application.
+5. After an OVERRUN, the page shows 0 available and the overrun amount.
+
+Decisions 4 and 5 are display changes only. Reservation, settlement, caps, relay admission and every ledger write are unchanged.
+
+- `provider_spend_ledger.spend_view` takes optional `limits`. With no settings row it returns those limits with nothing used. The first reservation writes that row in its own transaction, so no row means nothing is reserved. When the row exists, the frozen caps are shown, not the configured ones. The read still writes nothing.
+- `HermesApplication.budget_view` binds the release's limits, and `serve_relay_application.py` gives it to `create_app`.
+- `model_budget` adds `over_credit`, which is `max(0, -available)`. `available_credit` stays clamped at 0.
+- Budget text after an OVERRUN: "0 available, over by 0.05 CREDIT; cap 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT".
+- `InterpretationAttempts` shows the budget line alone on a saved request with no attempts, because that is a state with no settings row. It used to show nothing.
+- `scripts/hermes_provider_relay/relay_application_mount.py` is unchanged by controller instruction. Its docstring still names the plain `spend_view`. A caller that follows it shows "budget not set" until first use. That mount stays LOCAL and AUTHORED, and the served path does not use it.
+
+RED ran after the source edits, because the check slot was not free. It ran on a scratch export of the tests-only commit `9c8b966`, which has the old source. Web: 2 failed, 14 passed. API: 8 failed, 242 passed. The web text for decision 4 was already green, because the text format did not change; its RED is in the API tests. GREEN: web 20 passed, `tsc --noEmit` exit 0, API 250 passed.
+
 ## Open questions for the builder
 
 1. **The release value of `min_output_tokens`** (design Q2, item 3 of `CLOUD_ORBIO_02_DESIGN_STATUS.md`). The brief called it Q3. Below what output limit is a call not worth making for `hermes-first-call-1`? Setting it means adding `min_output_tokens=<n>` to its `RelayApplicationDefinition`, a reviewed change. Until then every call reserves and grants the full 4,096.

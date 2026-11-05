@@ -53,14 +53,16 @@ LIABILITY = ("coalesce(sum(CASE WHEN state = 'SETTLED' THEN charged_nano_usd "
              "WHEN state IN ('RESERVED', 'UNKNOWN') THEN reserved_nano_usd ELSE 0 END), 0)")
 
 
-def spend_view(session: Session, owner_id: uuid.UUID | str) -> dict[str, int] | None:
+def spend_view(session: Session, owner_id: uuid.UUID | str, limits: SpendLimits | None = None) -> dict[str, int] | None:
     """The owner's model budget as the ledger holds it now, in integer nano-USD. Read only: it takes no lock, writes
     nothing and does not freeze the settings.
 
-    None when the settings row does not exist yet (the ledger was never used): the budget is not set, which is not 0.
-    Otherwise `owner_cap` and `global_cap` (the frozen caps), the owner's `settled` charges, `held` (RESERVED and UNKNOWN
-    reservations, which are used budget until settled) and `held_calls`, and `available`: the smaller of the owner's and
-    the global headroom, the most the next reservation could hold. One statement, so one consistent snapshot."""
+    The first reservation writes the settings row in its own transaction, so without that row nothing is reserved: the
+    view is then the configured `limits` with nothing used, or None when no limits are given (the budget is not set,
+    which is not 0). Otherwise `owner_cap` and `global_cap` (the frozen caps), the owner's `settled` charges, `held`
+    (RESERVED and UNKNOWN reservations, which are used budget until settled) and `held_calls`, and `available`: the
+    smaller of the owner's and the global headroom, the most the next reservation could hold. One statement, so one
+    consistent snapshot."""
     row = session.execute(text(
         f"SELECT s.global_cap_nano_usd, s.owner_cap_nano_usd, a.settled, a.held, a.held_calls, a.total "
         f"FROM {SCHEMA}.provider_spend_settings s CROSS JOIN ("
@@ -70,7 +72,11 @@ def spend_view(session: Session, owner_id: uuid.UUID | str) -> dict[str, int] | 
         f"{LIABILITY} AS total FROM {SCHEMA}.provider_spend_reservations) a WHERE s.settings_id = 1"),
         {"o": uuid.UUID(str(owner_id))}).first()
     if row is None:
-        return None
+        if limits is None:
+            return None
+        owner_cap, global_cap = _nano(limits.owner_cap_usd, "the owner cap"), _nano(limits.global_cap_usd, "the global cap")
+        return {"owner_cap": owner_cap, "global_cap": global_cap, "settled": 0, "held": 0, "held_calls": 0,
+                "available": min(owner_cap, global_cap)}
     global_cap, owner_cap, settled, held, held_calls, total = (int(value) for value in row)
     return {"owner_cap": owner_cap, "global_cap": global_cap, "settled": settled, "held": held, "held_calls": held_calls,
             "available": min(owner_cap - settled - held, global_cap - total)}
