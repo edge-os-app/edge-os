@@ -1,4 +1,5 @@
 import { actionsForFlow, formatAmount, type AccountViewRecord } from "../lib/account-views";
+import { Details } from "./Details";
 import { FLOW_KIND, FLOW_STATE, RECORD_STATUS, plain } from "../lib/labels";
 
 export function FundRecords({ records }: { records: AccountViewRecord[] }) {
@@ -35,12 +36,14 @@ export function FundRecords({ records }: { records: AccountViewRecord[] }) {
             {content.agent_id} · {content.wallet_id} · {content.flow_id} · {plain(FLOW_KIND, content.flow_kind, "Unknown")} · {plain(FLOW_STATE, content.status, "Unknown")}
             {content.quantity && ` · ${formatAmount(content.quantity)} ${content.quantity.asset_id}`}
             {` · ${content.updated_at}. Deposit or withdrawal, not trading profit.`}
+            <Details summary="Details"><p className="mono">kind {content.flow_kind} · status {content.status}</p></Details>
             <h3>Wallet actions for this flow</h3>
             {!actions.length && <p>No saved wallet actions for this flow.</p>}
             <ul>{actions.map((action) => <li id={`record-${action.record_id}`} key={action.record_id}>
               {action.content.action_id} · {plain(RECORD_STATUS, action.content.status, "Unknown")} · {action.content.updated_at}
               {action.content.reason && <p>{action.content.reason}</p>}
               {action.content.gas && <p>Native gas: {formatAmount(action.content.gas)} {action.content.gas.asset_id}</p>}
+              <Details summary="Details"><p className="mono">status {action.content.status}</p></Details>
             </li>)}</ul>
           </li>
         );})}</ul>
@@ -51,6 +54,7 @@ export function FundRecords({ records }: { records: AccountViewRecord[] }) {
             {content.agent_id} · {content.wallet_id} · {content.network_id} · {content.flow_id} · {content.action_id} · {plain(RECORD_STATUS, content.status, "Unknown")} · {content.updated_at}
             {content.reason && <p>{content.reason}</p>}
             {content.gas && <p>Native gas: {formatAmount(content.gas)} {content.gas.asset_id}</p>}
+            <Details summary="Details"><p className="mono">status {content.status}</p></Details>
           </li>)}</ul>
         </>}
       </section>

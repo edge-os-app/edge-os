@@ -231,6 +231,8 @@ describe("direct account records", () => {
     expect(screen.getByText(/withdrawal-failed · Reverted/)).toBeInTheDocument();
     expect(screen.getByText(/wrong-wallet/)).toBeInTheDocument();
     expect(screen.getByText("Wallet actions with no loaded deposit or withdrawal")).toBeInTheDocument();
+    expect(screen.getByText(/status SUBMISSION_UNKNOWN/).closest("details")).not.toBeNull();
+    expect(screen.getAllByText(/kind WITHDRAWAL · status CONFIRMED/)[0].closest("details")).not.toBeNull();
     expect(screen.getAllByText(/Native gas: 0\.000000000000000007/)).toHaveLength(5);
   });
 

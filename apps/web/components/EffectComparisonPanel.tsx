@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type { EffectRunBody, EffectRunResult, InvestigationSaveResult } from "../lib/types";
 import { Details } from "./Details";
-import { STATISTICAL_STATUS, plain } from "../lib/labels";
+import { INCREMENTAL_VOLUME_STATUS, STATISTICAL_REASON, STATISTICAL_STATUS, plain } from "../lib/labels";
 import { plural } from "../lib/plural";
 
 const FIXTURE_START = "2026-01-01T00:00:00Z";
@@ -180,7 +180,7 @@ export function EffectComparisonPanel({ intakeId, saved }: { intakeId: string; s
             <dt>Chances found</dt><dd>{result.opportunity_count}</dd>
             <dt>Excluded</dt><dd>{result.excluded_count}</dd>
             <dt>Missing result</dt><dd>{result.missing_outcome_count}</dd>
-            <dt>Statistics</dt><dd>{plain(STATISTICAL_STATUS, result.statistical_status, "Unknown")} · {result.statistical_reasons.join(", ")}</dd>
+            <dt>Statistics</dt><dd>{plain(STATISTICAL_STATUS, result.statistical_status, "Unknown")} · {result.statistical_reasons.map((reason: string) => plain(STATISTICAL_REASON, reason, "unknown reason")).join(", ")}</dd>
           </dl>
           {result.variants.map((variant: {
             evaluation_id: string; variant_id: string;
@@ -190,7 +190,7 @@ export function EffectComparisonPanel({ intakeId, saved }: { intakeId: string; s
           }) => <section className="stack" key={variant.evaluation_id}>
             <h5>{variant.variant_id} · evaluation {variant.evaluation_id}</h5>
             <p>Mean when the rule fired: {variant.general_comparison.triggered.mean ?? "unavailable"}; Mean when it did not fire: {variant.general_comparison.control.mean ?? "unavailable"}; difference: {variant.general_comparison.triggered_minus_control_mean ?? "unavailable"}.</p>
-            <p>Extra volume: {variant.incremental_volume_comparison.status}; contrast: {variant.incremental_volume_comparison.triggered_minus_control_mean ?? "unavailable"}.</p>
+            <p>Extra volume: {plain(INCREMENTAL_VOLUME_STATUS, variant.incremental_volume_comparison.status, "Unknown")}; contrast: {variant.incremental_volume_comparison.triggered_minus_control_mean ?? "unavailable"}.</p>
             <details><summary>Every chance, exclusion and reference</summary><pre className="records-json">{JSON.stringify(variant, null, 2)}</pre></details>
           </section>)}
           <p>{selected.report.content.next_action}</p>

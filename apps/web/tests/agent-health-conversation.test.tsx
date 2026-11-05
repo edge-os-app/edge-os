@@ -73,7 +73,8 @@ describe("direct agent health", () => {
     expect(facts.getByTestId("health-last-evaluation")).toHaveTextContent("collected Unknown");
     expect(facts.getByTestId("health-last-attempt")).toHaveTextContent("act-1");
     expect(facts.getByTestId("health-pending")).toHaveTextContent("act-9");
-    expect(facts.getByTestId("health-warnings")).toHaveTextContent("an earlier action is unsettled");
+    expect(facts.getByTestId("health-warnings")).toHaveTextContent("an earlier action is unsettled (1 action)");
+    expect(facts.getByTestId("health-warnings")).toHaveTextContent("monitoring pending: yes");
     expect(document.body).toHaveTextContent("ACCOUNT_RECOVERY_OPEN_OR_UNKNOWN");
     expect(facts.getByTestId("health-controls")).toHaveTextContent("Stop new entries");
     expect(facts.getByTestId("health-inventory")).toHaveTextContent("50000000000000000000");
@@ -82,6 +83,29 @@ describe("direct agent health", () => {
     expect(document.body).toHaveTextContent("native_gas_aggregate");
     expect(document.body).toHaveTextContent("sha256:first");
     expect(mocks.read).toHaveBeenCalledWith("agent-a");
+  });
+
+  it("states no recovery warning and no unknown value when the snapshot has none", async () => {
+    mocks.read.mockResolvedValue(snapshot({
+      pending_reconciliation: { canonical: { rule: "PRODUCER_UNSETTLED_QUEUE", queue_states: [], source: "producer", action_ids: [] },
+        warnings: [{ kind: "ACCOUNT_RECOVERY_OPEN_OR_UNKNOWN", source: "recovery", action_ids: [] },
+          { kind: "MONITORING_SUBMITTED_UNKNOWN", source: "jobs", pending: false }] },
+      unknown_inputs: [] }));
+    render(<AgentHealthPanel agentId="agent-a" />);
+    const warnings = await screen.findByTestId("health-warnings");
+    expect(warnings).toHaveTextContent("Recovery warning: none; monitoring pending: no.");
+    expect(warnings).not.toHaveTextContent("unsettled");
+    expect(screen.getByTestId("health-unknowns")).toHaveTextContent(/^None$/);
+  });
+
+  it("names an unrecognised unknown input plainly and keeps its raw field in Details", async () => {
+    mocks.read.mockResolvedValue(snapshot({
+      unknown_inputs: [{ field: "future_raw_input", state: "UNKNOWN", reason: "PRODUCER_INPUT_MISSING: new" }] }));
+    render(<AgentHealthPanel agentId="agent-a" />);
+    const unknowns = await screen.findByTestId("health-unknowns");
+    expect(unknowns).toHaveTextContent("an unnamed value");
+    expect(unknowns).not.toHaveTextContent(/future.raw.input/);
+    expect(document.body).toHaveTextContent("future_raw_input");
   });
 
   it("says when no deployment exists instead of inventing next work", async () => {

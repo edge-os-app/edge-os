@@ -183,6 +183,28 @@ describe("Nansen report under an operating release", () => {
     expect(document.body).toHaveTextContent("value_usd");
   });
 
+  it("maps a non-default flow label, with the raw value in Details", async () => {
+    mocks.list.mockResolvedValue({ jobs: [], operating_release: release({}, { flow_query: { label: "smart_money" } }) });
+    render(<ResearchNansenReport intakeId="intake-1" />);
+    const request = await screen.findByTestId("nansen-release-request");
+    expect(request).toHaveTextContent("Flows: Smart money.");
+    expect(request).not.toHaveTextContent("top 100 holders");
+    expect(within(request).getByText("smart_money").closest("details")).not.toBeNull();
+  });
+
+  it("uses the fallback for an unmapped query value and states no false holder fact", async () => {
+    mocks.list.mockResolvedValue({ jobs: [], operating_release: release({}, {
+      operations: ["holders", "flows"],
+      holder_query: { label_type: "new_label", aggregate_by_entity: false, order_field: "new_order", value_usd_min: null },
+      flow_query: { label: "new_flow" },
+    }) });
+    render(<ResearchNansenReport intakeId="intake-1" />);
+    const request = await screen.findByTestId("nansen-release-request");
+    expect(request).toHaveTextContent("Holders: unknown holder type. Ordered by unknown order.");
+    expect(request).toHaveTextContent("Flows: unknown flow type.");
+    expect(within(request).getByText("new_flow").closest("details")).not.toBeNull();
+  });
+
   it("posts a holder-only stand-in release and labels it as not provider data", async () => {
     const holders = { operations: ["holders"], holder_query: { label_type: "all_holders", aggregate_by_entity: true,
       order_field: "token_amount", value_usd_min: 1000 } };

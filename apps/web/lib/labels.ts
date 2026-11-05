@@ -242,14 +242,9 @@ export const CLAIM_STATUS: Record<string, string> = {
   UNRESOLVED: "unresolved",
 };
 
-/** `apps/api/src/edge_os_api/nansen_research/report_builder.py:493` (saved settlement summary). */
+/** `apps/api/src/edge_os_api/research/nansen_reports.py:144-146` (saved settlement summary). */
 export const SETTLEMENT_STATE: Record<string, string> = {
   KNOWN: "Known",
-  MEASURED: "Measured",
-  NOT_MEASURED: "Not measured",
-  DEDUCTED: "Deducted",
-  RESERVED: "Reserved",
-  RELEASED: "Released",
   UNKNOWN: "Unknown",
 };
 
@@ -265,10 +260,11 @@ export const SUBMISSION_STATE: Record<string, string> = {
   SUBMISSION_UNKNOWN: "Outcome unknown",
 };
 
-/** `apps/api/src/edge_os_api/research/history_dataset.py` (provider usage projection). */
+/** `apps/api/src/edge_os_api/research/history_dataset.py:243-249,298-301` provider-use states. */
 export const PROVIDER_USE: Record<string, string> = {
   MEASURED_CLIENT_CALLS: "measured from client calls",
-  NOT_REQUIRED: "not required",
+  SUPPLIED_EVIDENCE: "supplied with the saved evidence",
+  INVALID: "invalid",
   UNKNOWN: "Unknown",
 };
 
@@ -278,6 +274,17 @@ export const STATISTICAL_STATUS: Record<string, string> = {
   DESCRIPTIVE_ONLY: "descriptive only",
   ASSESSED: "assessed",
   NOT_ASSESSED: "not assessed",
+};
+
+/** `apps/api/src/edge_os_api/research/effect_comparison.py:290` statistical reasons. */
+export const STATISTICAL_REASON: Record<string, string> = {
+  STAT_Q01_PROFILE_NOT_QUALIFIED: "the data profile is not qualified",
+};
+
+/** `apps/api/src/edge_os_api/research/effect_comparison.py:219,232` extra volume comparison states. */
+export const INCREMENTAL_VOLUME_STATUS: Record<string, string> = {
+  NOT_DECLARED: "not declared",
+  DESCRIPTIVE_ONLY: "descriptive only",
 };
 
 /** `apps/api/src/edge_os_api/execution/models.py:251` evaluation outcomes. */

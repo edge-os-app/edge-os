@@ -63,6 +63,8 @@ export function ReplayResult({ replay }: Props) {
         </dl>
       </section>
       <ReplayBalanceChart samples={result.samples} />
+      {history && String(result.evidence_class) !== "PROVIDER_ACTUAL" && !KNOWN_SYNTHETIC_CLASSES.has(String(result.evidence_class))
+        ? <p data-testid="spot-replay-unknown-class">This replay has an unknown data label. This view claims neither observed history nor synthetic prices.</p> : null}
       <Details summary="Details">
       <dl className="kv">
         <dt>Replay ID</dt><dd className="mono" data-testid="spot-replay-id">{replay.replay_id}</dd>

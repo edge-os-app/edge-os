@@ -580,6 +580,7 @@ describe("RG05 replay source-aware labels", () => {
     expect(region).not.toHaveTextContent(/Synthetic replay only/);
     expect(region).not.toHaveTextContent(/p13\.wc01\/1/);
     expect(region).toHaveTextContent(/Simulated fills on saved provider history/);
+    expect(within(region).getByText(/Hypothetical simulated fills on saved provider history/).closest("details")).toBeNull();
   });
 
   it("keeps a saved recorded-synthetic replay synthetic when the current catalog claims provider history", async () => {
@@ -606,5 +607,8 @@ describe("RG05 replay source-aware labels", () => {
     expect(region).toHaveTextContent("EXPERIMENTAL_LABEL");
     expect(region).not.toHaveTextContent(/saved provider history/);
     expect(region).not.toHaveTextContent(/saved recorded history/);
+    expect(within(region).getByTestId("spot-replay-unknown-class").closest("details")).toBeNull();
+    expect(within(region).getByTestId("spot-replay-unknown-class")).toHaveTextContent(
+      "This view claims neither observed history nor synthetic prices.");
   });
 });

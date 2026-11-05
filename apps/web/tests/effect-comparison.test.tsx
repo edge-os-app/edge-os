@@ -86,6 +86,9 @@ describe("P09 effect comparison", () => {
     await user.click(screen.getByRole("button", { name: "Evaluate example data" }));
     expect(await screen.findByTestId("effect-report-saved")).toHaveTextContent("UNRESOLVED");
     expect(screen.getAllByText(/STAT_Q01_PROFILE_NOT_QUALIFIED/).length).toBeGreaterThan(0);
+    for (const raw of screen.getAllByText(/STAT_Q01_PROFILE_NOT_QUALIFIED/)) expect(raw.closest("details")).not.toBeNull();
+    expect(screen.getByText(/the data profile is not qualified/).closest("details")).toBeNull();
+    expect(screen.getByText(/Extra volume: descriptive only/).closest("details")).toBeNull();
     expect(mocks.execute).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Reopen saved report without rerunning" }));
     await waitFor(() => expect(mocks.reopen).toHaveBeenCalledWith("request-1", "66666666-6666-4666-8666-666666666666"));

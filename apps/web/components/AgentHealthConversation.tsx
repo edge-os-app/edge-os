@@ -52,7 +52,7 @@ function Facts({ health }: { health: AgentHealth }) {
       <dt>Pending reconciliation</dt>
       <dd data-testid="health-pending">{"action_ids" in canonical ? (canonical.action_ids.join(", ") || "None") + " (producer unsettled queue)" : "Unknown"}</dd>
       <dt>Separate warnings</dt>
-      <dd data-testid="health-warnings">Recovery warning: {plain(HEALTH_WARNING_KIND, recovery.kind, "a warning is recorded")} ({plural(recovery.action_ids.length, "action")}); monitoring pending: {monitoring.pending ? "yes" : "no"}.</dd>
+      <dd data-testid="health-warnings">Recovery warning: {recovery.action_ids.length === 0 ? "none" : `${plain(HEALTH_WARNING_KIND, recovery.kind, "a warning is recorded")} (${plural(recovery.action_ids.length, "action")})`}; monitoring pending: {monitoring.pending ? "yes" : "no"}.</dd>
       <dt>Stops and removal</dt>
       <dd data-testid="health-controls">{[...health.controls.stops.map((s) => `${s.mode === "STOP_NEW_ENTRIES" ? "Stop new entries" : s.mode === "HALT_ALL_SWAPS" ? "Halt all swaps" : "Stop"} since ${s.created_at}`),
         ...health.controls.removals.map((r) => `Removal ${plain(REMOVAL_STATE, r.state, "Unknown")} (requested ${r.requested_at}, updated ${r.updated_at})`)].join("; ") || "None"}</dd>
@@ -60,7 +60,7 @@ function Facts({ health }: { health: AgentHealth }) {
       <dd data-testid="health-inventory">{health.residual_inventory.map((p) => `${p.position_id.slice(0, 8)} ${p.position_state === "OPEN" ? "open" : p.position_state === "CLOSED" ? "closed" : "unknown state"}: ${p.quantity.raw} raw ${p.quantity.asset_id}, last saved ${show(p.updated_at)}`).join("; ") || "No saved position"}</dd>
       <dt>Saved version changed</dt><dd>{show(health.identity.changed)}</dd>
       <dt>Unknown values</dt>
-      <dd data-testid="health-unknowns">{health.unknown_inputs.length === 0 ? "None" : health.unknown_inputs.map((u) => plain(HEALTH_FIELD, u.field, u.field.replaceAll("_", " "))).join(", ")}</dd>
+      <dd data-testid="health-unknowns">{health.unknown_inputs.length === 0 ? "None" : health.unknown_inputs.map((u) => plain(HEALTH_FIELD, u.field, "an unnamed value")).join(", ")}</dd>
       <dt>Snapshot</dt><dd className="mono" data-testid="health-digest">in Details</dd>
     </dl>
     <Details summary="Details"><pre className="mono" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify({
