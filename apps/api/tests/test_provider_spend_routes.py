@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from test_provider_spend_ledger import (  # noqa: F401 - fixtures
     BOUNDS, PRICE, RESERVATION, attempts, clean_spend, empty_spend_ledger, factory, limits,
 )
@@ -31,6 +32,9 @@ RESERVATION_B = Decimal("0.109696")
 USAGE = {"input_tokens": 1_423, "output_tokens": 611}
 CHARGE_A, CHARGE_B = Decimal("0.0074285"), Decimal("0.014857")
 OPENROUTER = "openrouter-openai-standard"
+EVENT_ROWS = "SELECT seq, attempt_id, kind, nano_usd FROM usage_local.provider_spend_events ORDER BY seq"
+EVENT_CHANGES = ("UPDATE usage_local.provider_spend_events SET nano_usd = 0",
+                 "DELETE FROM usage_local.provider_spend_events")
 
 
 def on_a(session_factory, **caps: str) -> PostgresSpendLedger:
@@ -274,6 +278,39 @@ def test_a_downgrade_with_one_route_restores_the_settings_price_and_keeps_every_
                            "table_name = 'provider_spend_settings' ORDER BY ordinal_position") == [  # 0014 inserts by position
         (name,) for name in ("settings_id", "global_cap_nano_usd", "owner_cap_nano_usd", "prompt_usd_per_million",
                              "completion_usd_per_million", "cap_source", "frozen_at", "updated_at")]
+
+
+def assert_events_refuse(session_factory, statement: str) -> None:
+    before = values(session_factory, EVENT_ROWS)
+    assert before
+    with session_factory() as session:
+        with pytest.raises(DBAPIError, match="provider_spend_events rows are immutable"):
+            session.execute(text(statement))
+        session.rollback()
+    assert values(session_factory, EVENT_ROWS) == before
+
+
+@pytest.mark.parametrize("statement", EVENT_CHANGES)
+def test_events_from_two_routes_refuse_every_change(clean_spend, attempts, owner_a, owner_b, statement: str) -> None:
+    on_a(clean_spend).reserve(attempts.new(owner_a), scope="s1", **BOUNDS)
+    on_b(clean_spend).reserve(attempts.new(owner_b), scope="s2", **BOUNDS)
+    assert len(values(clean_spend, EVENT_ROWS)) == 2
+    assert_events_refuse(clean_spend, statement)
+
+
+@pytest.mark.parametrize("statement", EVENT_CHANGES)
+def test_events_still_refuse_every_change_through_the_0015_downgrade_and_upgrade(
+        at_0014, env, attempts, owner_a, statement: str) -> None:
+    old_ledger(at_0014)
+    assert alembic(env, "upgrade", "head").returncode == 0
+    assert alembic(env, "downgrade", "0014").returncode == 0
+    assert_events_refuse(at_0014, statement)  # the downgrade rebuilds the neighbouring settings table
+
+    assert alembic(env, "upgrade", "head").returncode == 0
+    on_b(at_0014, global_cap="2.00", owner_cap="2.00").reserve(attempts.new(owner_a), scope="s2", **BOUNDS)
+    assert {row[0] for row in values(at_0014, "SELECT route_id FROM usage_local.provider_spend_reservations")} == {
+        OPENROUTER, ROUTE_B}
+    assert_events_refuse(at_0014, statement)
 
 
 def test_a_downgrade_is_refused_while_a_second_route_exists_and_keeps_it(clean_spend, attempts, owner_a, migrated, env) -> None:
