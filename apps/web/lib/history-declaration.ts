@@ -1,4 +1,3 @@
-import { DIRECTION, plain } from "./labels";
 import { plural } from "./plural";
 
 // The recorded-history declaration must fit the source's real window AND the partition the server can read.
@@ -51,8 +50,14 @@ function predictivePartitions(start: number, end: number, windowBuckets: number)
   ];
 }
 
+const DIRECTION_PHRASE: Record<HistoryDirection, string> = {
+  DESCRIPTIVE: "describe only",
+  OUTPERFORM: "an outperform rule",
+  UNDERPERFORM: "an underperform rule",
+};
+
 function directionLabel(direction: HistoryDirection): string {
-  return plain(DIRECTION, direction).toLowerCase();
+  return DIRECTION_PHRASE[direction];
 }
 
 /**

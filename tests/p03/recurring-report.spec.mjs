@@ -60,6 +60,9 @@ async function openRecurring(page, project) {
   return { agentId, recurring, actions: page.getByRole("region", { name: "Agent actions" }) };
 }
 
+/** The panel's collapsed list of raw slot, deployment and wait values. */
+const slotDetails = (recurring) => recurring.getByTestId("recurring-deployment").locator("details").filter({ hasText: "deployment state" });
+
 async function projection(page, project) {
   const response = await page.request.get(`${api}/v1/agents/${encodeURIComponent(agentFor(project))}/deployment`,
     { headers: { Authorization: `Bearer ${ownerToken(project)}` } });
@@ -77,7 +80,7 @@ test("stage A: repeated slots ran while the browser was closed", async ({ page }
   await expect(recurring.getByTestId("recurring-missed")).toContainText("not replayed");
   const items = recurring.getByTestId("recurring-occurrences").locator("li");
   await expect(items).toHaveCount(4);
-  await expect(recurring.getByTestId("recurring-occurrences")).toContainText("SYNTHETIC_FIXTURE");
+  await expect(slotDetails(recurring)).toContainText("data label SYNTHETIC_FIXTURE");
   if (project === "desktop") {
     expect(view.occurrences.map((item) => item.outcome)).toEqual(Array(4).fill("SUBMITTED_CONFIRMED"));
     await expect(recurring.getByTestId("recurring-wait")).toContainText("Active. Next slot");
@@ -114,9 +117,10 @@ test("stage B: the stop denied the next entry; removal; the ended deployment's u
   if (project === "desktop") {
     expect(view.occurrences[0].outcome).toBe("ADMISSION_DENIED");
     expect(view.occurrences[0].reason).toBe("STOPPED_NEW_ENTRIES");
-    await expect(recurring.getByTestId("recurring-wait")).toContainText("Stopped: stop new entries");
+    await expect(recurring.getByTestId("recurring-wait")).toContainText("Stopped: a saved stop blocks matching work.");
+    await expect(slotDetails(recurring)).toContainText("wait STOPPED:STOP_NEW_ENTRIES");
     await actions.getByRole("button", { name: "Request removal" }).click();
-    await expect(actions.getByTestId("actions-removal")).toContainText("Removal REQUESTED");
+    await expect(actions.getByTestId("actions-removal")).toContainText("Removal Requested");
   } else {
     // The pass at slot 30 created no occurrence for the ended deployment and still reconciled its unknown action.
     const before = saved(project).stageA;
@@ -125,7 +129,8 @@ test("stage B: the stop denied the next entry; removal; the ended deployment's u
     expect(view.occurrences.every((item) => item.outcome === "SUBMITTED_CONFIRMED")).toBe(true);
     expect(view.pending_reconciliation).toEqual([]);
     await expect(recurring.getByTestId("recurring-pending")).toHaveText("None");
-    await expect(recurring.getByTestId("recurring-next")).toContainText("None (OWNER_ENDED)");
+    await expect(recurring.getByTestId("recurring-next")).toHaveText("None");
+    await expect(slotDetails(recurring)).toContainText("no next reason OWNER_ENDED");
   }
   await shot(page, project, "03-controls");
   if (project === "mobile-390") await noSidewaysScroll(page);

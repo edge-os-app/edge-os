@@ -244,6 +244,8 @@ describe("P13 spot replay", () => {
     expect(screen.getByText(/example price data/)).toBeInTheDocument();
     expect(screen.getByText(/Fills are assumptions/)).toBeInTheDocument();
     expect(screen.getByText("1000. This fixed amount will be used for a new run.")).toBeInTheDocument();
+    expect(screen.getByText("Example data only")).toBeInTheDocument();
+    expect(screen.getByText("p13.wc01/1 · synthetic only").closest("details")).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "Add an input for entry" }));
     await user.click(screen.getByRole("button", { name: "Add an input for exit" }));
     await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry inputs" }));

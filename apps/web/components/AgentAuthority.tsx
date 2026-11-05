@@ -14,7 +14,7 @@ const ACTIVATION_COPY: Record<string, string> = {
   TERMS_INCOMPLETE: "A required limit is missing, so no action can run.",
   TERMS_ASSET_MISMATCH: "A limit names an asset outside this version's market, so no action can run.",
   AGENT_NOT_READY: "The agent has no confirmed wallet bound to an exact saved version.",
-  CONTROLLED_TERMS_MISMATCH: "The adopted terms do not cover the prepared trade, so no action can run.",
+  CONTROLLED_TERMS_MISMATCH: "The adopted terms do not match the prepared trade, so no action can run.",
   OPERATIONAL_QUALIFICATION_UNAVAILABLE: "A required proof for the locked setup is missing, so no action can run.",
 };
 

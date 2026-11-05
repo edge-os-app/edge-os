@@ -63,11 +63,15 @@ async function directAndConversationAgree(page, project, request, token, agentId
   const health = await apiHealth(request, token, agentId);
   await page.goto(`/app#/agents?agent=${encodeURIComponent(agentId)}`);
   const panel = page.getByRole("region", { name: "Agent health" });
-  await expect(panel.getByTestId("health-digest")).toHaveText(health.snapshot_digest);
+  const healthDetails = panel.locator("details").filter({ hasText: "snapshot_digest" });
+  await expect(panel.getByTestId("health-digest")).toHaveText("in Details");
+  await expect(healthDetails).toContainText(health.snapshot_digest);
   await expect(panel.getByTestId("health-as-of")).toHaveText(asOfText(health.as_of));
   const next = health.producer.next_due_slot;
-  await expect(panel.getByTestId("health-next")).toHaveText(next.state === "KNOWN" ? String(next.value) : `Unknown (${next.reason})`);
-  await expect(panel.getByTestId("health-unknowns")).toContainText("native_gas_aggregate");
+  await expect(panel.getByTestId("health-next")).toHaveText(next.state === "KNOWN" ? String(next.value) : "Unknown");
+  if (next.state !== "KNOWN") await expect(healthDetails).toContainText(next.reason);
+  await expect(panel.getByTestId("health-unknowns")).toContainText("native gas total");
+  await expect(healthDetails).toContainText("native_gas_aggregate");
   const convo = await conversation(page, project);
   const replies = convo.getByTestId("health-reply");
   const count = await replies.count();
@@ -88,7 +92,7 @@ test("health stage A: direct view and conversation quote one dated snapshot", as
   const { health, panel, convo, reply } = await directAndConversationAgree(page, project, request, token, agentId);
   if (project === "desktop") {
     // Slot 0 traded and slot 5 exited after the owner stopped new entries.
-    await expect(panel.getByTestId("health-controls")).toContainText("STOP_NEW_ENTRIES");
+    await expect(panel.getByTestId("health-controls")).toContainText("Stop new entries");
     await expect(panel.getByTestId("health-wait")).toContainText("STOPPED:STOP_NEW_ENTRIES");
     await expect(reply).toContainText("Last trade attempt: action");
   } else {

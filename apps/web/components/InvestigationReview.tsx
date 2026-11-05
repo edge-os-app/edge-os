@@ -618,7 +618,7 @@ function TransportFacts({ transport }: { transport: TransportSummary }) {
   const dataLabel = kind === "ACTUAL" ? "real provider responses"
     : kind === "STAND_IN" || transport.clients === "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"
     ? "example responses, not provider data" : "recorded example responses";
-  const chainLimit = transport.chain_id === null ? " The server could not read the chain id."
+  const chainLimit = transport.chain_id === null ? " The server did not read the chain id."
     : transport.chain_network ? "" : ` The chain id is ${transport.chain_id}, not Monad.`;
   const chainPhrase = kind === "ACTUAL" ? "chain id checked against provider responses"
     : kind === "STAND_IN" ? "chain id checked against stand-in responses" : "chain id checked against recorded responses";
@@ -626,7 +626,7 @@ function TransportFacts({ transport }: { transport: TransportSummary }) {
     <>
       <p className="muted" data-testid="history-transport">
         {corroboration.class === "NONE"
-          ? `The server read ${plural(transport.envio_pages_framed, "saved page")}. The receipt check did not finish, so it shows no match or mismatch.`
+          ? `The server read ${plural(transport.envio_pages_framed, "saved page")}. No receipt comparison finished.`
           : `The server read ${plural(transport.envio_pages_framed, "saved page")} and checked ${plural(corroboration.sample_size, "receipt")} of ${corroboration.population_size}. It found ${plural(corroboration.mismatches, "mismatch", "mismatches")}.`}
         {chainLimit}
         {" "}The source returned {dataLabel}. Results are descriptive and grant no trading permission.
@@ -646,7 +646,7 @@ function TransportFacts({ transport }: { transport: TransportSummary }) {
           <dt>Chain check</dt><dd className="mono">{chainPhrase}: {transport.chain_id === null ? "not read" : `${transport.chain_id}${transport.chain_network ? ` (${transport.chain_network})` : " (not Monad)"}`}</dd>
           <dt>Corroboration</dt><dd className="mono">{corroboration.class}, {corroboration.sample_size} of {corroboration.population_size} checked, {corroboration.mismatches} mismatches{transport.corroboration_reason ? ` (${transport.corroboration_reason})` : ""}</dd>
           <dt>Client calls</dt><dd className="mono">{Object.entries(transport.client_calls).map(([name, count]) => `${name} ${count}`).join(", ")}</dd>
-          <dt>Recorded declarations</dt><dd className="mono">{transport.recorded_declarations.join(", ").replaceAll("_", " ") || "none"}</dd>
+          <dt>Recorded declarations, not read by the application</dt><dd className="mono">{transport.recorded_declarations.join(", ").replaceAll("_", " ") || "none"}</dd>
         </dl>
       </Details>
     </>

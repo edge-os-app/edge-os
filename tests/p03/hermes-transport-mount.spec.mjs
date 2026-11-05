@@ -30,7 +30,7 @@ const outcome = (page) => page.getByTestId("outcome");
 const rows = (page) => page.getByTestId("attempts").locator("li[data-attempt]");
 async function openAttempts(page) {
   const details = page.getByTestId("attempts");
-  if (!(await details.evaluate((el) => el.open))) await details.locator("summary").click();
+  if (!(await details.evaluate((el) => el.open))) await details.locator(":scope > summary").click();
 }
 async function submit(page, token, text) {
   await injectAuth(page, token);
@@ -78,7 +78,7 @@ test("a request runs the mounted Hermes once, shows its attempt and usage, is sa
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toBeVisible();
   await expect(page.getByTestId("revision")).toContainText("Read back from the database");
-  const revision = (await page.getByTestId("revision-id").innerText()).trim();
+  const revision = (await page.getByTestId("revision-id").textContent()).trim();
   await openAttempts(page);
   await expect(rows(page)).toHaveCount(1); // adopting and saving started no other attempt
   await expect(rows(page).first()).toHaveAttribute("data-attempt", attempt);
@@ -116,8 +116,8 @@ test("a lost provider reply is an unknown outcome, is not accepted and is not re
   script({ case: "concrete-thesis", transport_fault: "lost_reply" });
   const id = await submit(page, tokens.a, THESIS);
 
-  await expect(page.getByRole("heading", { name: "We do not know if the interpreter finished" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Try the interpreter again" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "We do not know if the research agent finished" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Try the research agent again" })).toHaveCount(0);
   await openAttempts(page);
   await expect(rows(page)).toHaveCount(1);
   await expect(rows(page).first()).toContainText("Outcome unknown");

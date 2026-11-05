@@ -198,7 +198,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
         </div>
       ) : null}
       <dl className="kv">
-        <dt>Data</dt><dd className="mono">{dataset ? `${dataset.source_id} · simulated fills` : "p13.wc01/1 · synthetic only"}</dd>
+        <dt>Data</dt><dd className="mono">{dataset ? `${dataset.source_id} · simulated fills` : "Example data only"}</dd>
         <dt>Window</dt><dd>{dataset ? `${windowStart} to ${windowEnd}` : timingProfile === DELAYED_TIMING_PROFILE ? "2026-10-01 12:10 to 12:35 UTC" : "2026-10-01 12:05 to 12:35 UTC"}</dd>
         <dt>Starting capital (quote)</dt><dd>1000. This fixed amount will be used for a new run.</dd>
         <dt>Starting base amount</dt><dd>0</dd>
@@ -208,6 +208,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
         <dt>Saved cost source</dt><dd>{strategy.cost_assumptions.source_ref}; fee {strategy.cost_assumptions.fee_rate}; slippage {strategy.cost_assumptions.slippage_rate}</dd>
         <dt>What is not modelled</dt><dd>Gas, spread, extra impact, and capacity are not modelled.</dd>
       </dl>
+      {dataset ? null : <Details summary="Details"><p className="mono">p13.wc01/1 · synthetic only</p></Details>}
 
       {(["entry", "exit"] as const).map((field) => (
         <fieldset className="spot-replay-field" key={field}>

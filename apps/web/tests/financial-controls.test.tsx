@@ -163,7 +163,7 @@ describe("agent authority", () => {
     mocks.consent.mockResolvedValue(consent({ activation: { state: "UNAVAILABLE", reason: "CONTROLLED_TERMS_MISMATCH", evidence_class: null } }));
     render(<AgentAuthority agentId="agent-a" />);
     const line = await screen.findByTestId("activation-state");
-    expect(line).toHaveTextContent("do not cover");
+    expect(line).toHaveTextContent("do not match the prepared trade");
     expect(line).not.toHaveTextContent("No approved trade route");
   });
 

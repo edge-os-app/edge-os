@@ -110,7 +110,8 @@ describe("operating-release source", () => {
         summary: { ...summary, unavailable_states: unavailable }, transport: { ...transport, ...facts } } });
     mocks.jobs.mockResolvedValue({ jobs: [
       job("job-a", ["SOURCE_UNAVAILABLE", "PARTIAL_COVERAGE"], { chain_id: null, chain_network: null, clients: "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT" }),
-      job("job-b", [], { chain_id: 1, chain_network: null })] });
+      job("job-b", [], { chain_id: 1, chain_network: null, corroboration_reason: "CHAIN_NOT_MONAD",
+        corroboration: { class: "NONE", sample_size: 0, population_size: 24, mismatches: 8 } })] });
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
     await user.click(await screen.findByRole("button", { name: "Open this rule" }));
     const limits = await screen.findAllByTestId("history-dataset-limits");
@@ -119,9 +120,12 @@ describe("operating-release source", () => {
     for (const line of limits) expect(line.closest("details")).toBeNull();
     const facts = screen.getAllByTestId("history-transport");
     expect(facts[0]).toHaveTextContent("not provider data");
-    expect(facts[0]).toHaveTextContent("The receipt check did not finish");
-    expect(facts[0]).not.toHaveTextContent("0 receipts");
-    expect(facts[0]).toHaveTextContent("could not read the chain id");
+    for (const line of facts) {
+      expect(line).toHaveTextContent("No receipt comparison finished.");
+      expect(line).not.toHaveTextContent(/mismatch/);
+      expect(line).not.toHaveTextContent("0 receipts");
+    }
+    expect(facts[0]).toHaveTextContent("did not read the chain id");
     expect(facts[1]).toHaveTextContent("recorded example responses");
     expect(facts[1]).not.toHaveTextContent("The source returned recorded responses");
     expect(facts[1]).toHaveTextContent("The chain id is 1, not Monad.");

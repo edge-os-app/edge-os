@@ -107,6 +107,7 @@ describe("deriveHistoryPlan", () => {
     const result = refusal({ start: "2026-10-22T07:35:00Z", end: "2026-10-22T08:00:00Z" }, 1);
     expect(result.reason).toContain("at most 1 usable decision");
     expect(result.reason).not.toContain("1 usable decisions");
+    expect(result.reason).toContain("for an outperform rule");
   });
 
   it("refuses a window too short for the required three partitions", () => {

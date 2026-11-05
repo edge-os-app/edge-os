@@ -308,6 +308,8 @@ export const INCREMENTAL_VOLUME_STATUS: Record<string, string> = {
 
 /** `apps/api/src/edge_os_api/execution/models.py:251` evaluation outcomes. */
 export const EVALUATION_OUTCOME: Record<string, string> = {
+  // `apps/api/src/edge_os_api/execution/worker.py:801` saves the action status when a cancel is refused.
+  ...ADMISSION_STATUS,
   SIGNAL: "Signal",
   NO_SIGNAL: "No signal",
   INELIGIBLE: "Not eligible",
@@ -320,7 +322,9 @@ export const EVALUATION_OUTCOME: Record<string, string> = {
   SUBMITTED_REVERTED: "submitted reverted",
   SUBMITTED_UNKNOWN: "submitted, outcome unknown",
   DENIED_UNSENT: "refused, not sent",
-  // `apps/api/src/edge_os_api/execution/worker.py:806-815` queue states saved as the job outcome.
+  // `apps/api/src/edge_os_api/execution/worker.py:633,706,806-815` outcomes saved for an unsent or queued action.
+  INTENT_EXPIRED: "Expired, not sent",
+  DEPLOYMENT_ENDED: "Operation ended, not sent",
   REVALIDATION_DENIED: "Refused by revalidation",
   SUBMISSION_NOT_OWNED: "Not owned",
   CLAIMED: "Claimed",

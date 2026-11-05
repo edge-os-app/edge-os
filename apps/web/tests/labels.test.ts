@@ -12,7 +12,8 @@ describe("provider use labels", () => {
 });
 
 describe("job outcome labels", () => {
-  it.each(["REVALIDATION_DENIED", "SUBMISSION_NOT_OWNED", "CLAIMED", "BREACHED", "RECONCILE_MISMATCH"])(
+  it.each(["REVALIDATION_DENIED", "SUBMISSION_NOT_OWNED", "CLAIMED", "BREACHED", "RECONCILE_MISMATCH",
+    "INTENT_EXPIRED", "DEPLOYMENT_ENDED", "SUBMISSION_UNKNOWN", "PROPOSED"])(
     "states the queue outcome %s instead of an unknown state", (code) => {
       expect(plain(EVALUATION_OUTCOME, code, "Unknown state")).not.toBe("Unknown state");
     });

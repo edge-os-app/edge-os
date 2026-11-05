@@ -20,7 +20,7 @@ test("declare first, then waiting, cancel, retry and budget denial", async ({ pa
   const url = page.url();
   const intakeId = decodeURIComponent(url.split("/").pop() ?? "").split("?")[0];
   const section = await historySection(page, url);
-  await expect(section).toContainText("SYNTHETIC recording");
+  await expect(section).toContainText("Saved recordings only: every source here is example data replayed on this server.");
   await expect(section.getByTestId("research-budget")).toContainText("provider requests");
 
   const hypothesis = `Rises keep rising on the recorded pool (${project})`;
