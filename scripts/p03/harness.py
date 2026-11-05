@@ -253,7 +253,9 @@ def api_python() -> str:
 
 
 def base_env() -> dict[str, str]:
-    return {"PATH": os.environ.get("PATH", os.defpath), "HOME": os.environ.get("HOME", "/tmp"), "LANG": "en_US.UTF-8"}
+    # A linked worktree shares a `.venv` whose editable install names another checkout; children must run this one.
+    return {"PATH": os.environ.get("PATH", os.defpath), "HOME": os.environ.get("HOME", "/tmp"), "LANG": "en_US.UTF-8",
+            "PYTHONPATH": str(API_DIR / "src")}
 
 
 def api_env(*, database_url: str, public_pem: str, previous_pem: str | None, cors: list[str],

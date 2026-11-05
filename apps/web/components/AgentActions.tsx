@@ -95,7 +95,7 @@ export function AgentActions({ agentId }: { agentId: string }) {
         <p className="muted" data-testid="actions-mode">{view.provider_mode === "fixture"
           ? "Authored fixture market, quotes, transport and receipts. No transaction is signed or sent."
           : view.provider_mode === "controlled"
-          ? "One controlled action requires its exact release and qualified current observations. Exit and recurring execution are unavailable."
+          ? "One controlled action needs its exact release and an approved decision basis. This release runs only when you start it, so it needs no market observation."
           : "No qualified execution route exists in this build. Evaluations end unavailable and nothing is submitted."}</p>
         <p>Each run evaluates the saved rules once for the current five-minute slot. It is not continuous trading.</p>
         {error ? <p role="alert" className="status err">{error}</p> : null}
@@ -180,6 +180,10 @@ function ActionLineage({ detail, busy, onReconcile }: { detail: ActionDetail; bu
       <dl className="kv">
         <dt>Operation</dt><dd>{detail.operation}</dd>
         <dt>Decision</dt><dd>{detail.decision.status} at <time dateTime={detail.decision.decision_at}>{detail.decision.decision_at}</time></dd>
+        {detail.decision.basis === "OWNER_TRIGGER" && <>
+          <dt>Decision basis</dt>
+          <dd>You started this one action. It was checked against the permission you signed and the release limits. No market rule chose it. <span className="mono">OWNER_TRIGGER</span></dd>
+        </>}
         <dt>Execution revision</dt><dd className="mono">{detail.revision_id}</dd>
         <dt>Consent (mandate)</dt><dd className="mono">{detail.mandate_id}</dd>
         <dt>Quantity</dt><dd>{formatRaw(detail.payload.quantity.raw, detail.payload.quantity.decimals)} <span className="mono">{detail.payload.quantity.asset_id}</span></dd>

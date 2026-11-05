@@ -19,7 +19,7 @@ from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import select, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from edge_os_api.admission.accounting import ACQUISITIONS
@@ -72,6 +72,7 @@ from edge_os_api.execution.types import (
     utc_iso,
 )
 
+_OWNER_TRIGGER_ATTEMPT_INDEX = "uq_execution_decisions_owner_trigger"
 _PRIORITY = {"EXIT": 0, "ENTRY": 1}
 _TERMINAL_QUEUE = {
     "SUBMITTED_CONFIRMED", "SUBMITTED_REVERTED", "REVALIDATION_DENIED",
@@ -189,6 +190,51 @@ class ExecutionService:
                 session.rollback()
                 raise
         return _decision_view(row)
+
+    def authorize_owner_trigger(
+        self,
+        verified_owner_id: uuid.UUID,
+        revision: FrozenRevision,
+        *,
+        agent_id: str,
+        wallet_id: str,
+        network_id: str,
+        decision_at: dt.datetime,
+        release_id: str,
+        binding_sha256: str,
+        attempt: int,
+    ) -> SavedDecisionView | None:
+        """Save one owner-triggered attempt. No market observation and no rule evaluation.
+
+        The basis comes from saved rows only. The caller reads `attempt` with the proof that every earlier attempt
+        is released. The partial unique index allows each number once per owner, agent, wallet and network, so
+        concurrent triggers cannot both proceed: the loser gets None and no decision.
+        """
+        inputs = {"basis": "OWNER_TRIGGER", "release_id": release_id, "binding_sha256": binding_sha256,
+                  "attempt": attempt}
+        row = DecisionRow(
+            decision_id=uuid.uuid4(), owner_id=verified_owner_id, agent_id=agent_id, wallet_id=wallet_id,
+            network_id=network_id, strategy_id=revision.strategy_id, revision_id=revision.revision_id,
+            content_hash=revision.content_hash, manifest_hash=revision.manifest_hash,
+            market_binding_id=revision.market_binding_id, decision_at=decision_at, status="SIGNAL",
+            operation="ENTRY", decision_basis="OWNER_TRIGGER", owner_trigger_attempt=attempt,
+            reasons=["OWNER_TRIGGERED_ONE_ACTION"],
+            rule_results=[{"rule": "owner_trigger", "state": "AUTHORIZED",
+                           "reasons": ["OWNER_TRIGGERED_ONE_ACTION"]}],
+            inputs_hash=canonical_hash(inputs), inputs=inputs, created_at=self._clock())
+        with self._factory() as session:
+            try:
+                session.add(row)
+                session.commit()
+                return _decision_view(row)
+            except IntegrityError as error:
+                session.rollback()
+                if error.orig.diag.constraint_name != _OWNER_TRIGGER_ATTEMPT_INDEX:
+                    raise
+                return None
+            except SQLAlchemyError:
+                session.rollback()
+                raise
 
     def retrieve_decisions(
         self,
@@ -318,7 +364,7 @@ class ExecutionService:
         approval: ApprovalSnapshot,
         context: AdmissionContext,
         revision: FrozenRevision,
-        inputs: EvaluationInputs,
+        inputs: EvaluationInputs | None,
         quote: ActionQuote | None,
         transport: SubmissionTransport,
         now: dt.datetime | None = None,
@@ -415,7 +461,7 @@ class ExecutionService:
     def _begin_submission(
         self, owner: uuid.UUID, agent_id: str, wallet_id: str, network_id: str,
         approval: ApprovalSnapshot, context: AdmissionContext, revision: FrozenRevision,
-        inputs: EvaluationInputs, quote: ActionQuote | None, transport: SubmissionTransport,
+        inputs: EvaluationInputs | None, quote: ActionQuote | None, transport: SubmissionTransport,
         now: dt.datetime,
     ) -> tuple[TickResult | PreparedSubmission, ActionIntent | None, uuid.UUID | None, uuid.UUID | None]:
         with self._factory() as session:
@@ -626,7 +672,7 @@ class ExecutionService:
     def _revalidate(
         self, session: Session, owner: uuid.UUID, entry: QueueRow, intent_row: IntentRow,
         action_intent: ActionIntent, approval: ApprovalSnapshot, context: AdmissionContext,
-        revision: FrozenRevision, inputs: EvaluationInputs, quote: ActionQuote | None, now: dt.datetime,
+        revision: FrozenRevision, inputs: EvaluationInputs | None, quote: ActionQuote | None, now: dt.datetime,
     ) -> RevalidationOutcome:
         decision = session.execute(select(DecisionRow).where(
             DecisionRow.owner_id == owner, DecisionRow.decision_id == entry.decision_id,
@@ -658,17 +704,19 @@ class ExecutionService:
         if checked > now or now - checked > _CONTEXT_FRESHNESS:
             return denied("STALE_CONTEXT", "STALE_CONTEXT")
 
-        # Qualified submission-time observations for the exact revision and market.
-        # Re-evaluate the rules with the current inputs and require the same eligible
-        # operation; a newer NO_SIGNAL, a changed or missing quote, or an unqualified
-        # observation denies with zero transport calls. This checks changes before
-        # the next-decision boundary as well as at it.
-        if inputs.observed_at() > now or now - inputs.observed_at() > _CONTEXT_FRESHNESS:
-            return denied("STALE_INPUTS", "STALE_INPUTS")
-        current = evaluate(revision, inputs)
-        if current.status != "SIGNAL" or current.operation != entry.operation:
-            identity = f"INPUTS_CHANGED:{current.status}:{current.operation or ''}"
-            return denied("INPUTS_CHANGED", identity)
+        # Qualified submission-time observations for the exact revision and market. The one owner-triggered
+        # action has no market observation: its saved basis replaces only this rule check. Every other saved
+        # basis still requires current inputs and the same eligible operation.
+        if inputs is None:
+            if decision.decision_basis != "OWNER_TRIGGER":
+                return denied("INPUTS_MISSING", "INPUTS_MISSING")
+        else:
+            if inputs.observed_at() > now or now - inputs.observed_at() > _CONTEXT_FRESHNESS:
+                return denied("STALE_INPUTS", "STALE_INPUTS")
+            current = evaluate(revision, inputs)
+            if current.status != "SIGNAL" or current.operation != entry.operation:
+                identity = f"INPUTS_CHANGED:{current.status}:{current.operation or ''}"
+                return denied("INPUTS_CHANGED", identity)
 
         # Explicit current action-quote evidence for the exact action. A current
         # rule signal is not a current action quote. The authored quote must match

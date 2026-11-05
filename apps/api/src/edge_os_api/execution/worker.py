@@ -28,7 +28,7 @@ from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
@@ -45,6 +45,8 @@ from edge_os_api.execution.connected_identity import (AdoptedConsent, ConnectedA
 from edge_os_api.execution.current_holdings import HoldingsUnavailable
 from edge_os_api.execution.models import (DecisionRow, EvaluationJobRow, EvaluationOutcomeRow, IntentRow, QueueRow,
                                           RecurringDeploymentRow, SubmissionAttemptRow)
+from edge_os_api.execution.owner_trigger import (ALREADY_USED, OWNER_TRIGGER, RULE, OwnerTriggerBasis, SavedAttempt,
+                                                 next_attempt, owner_trigger_basis, prior_refusal)
 from edge_os_api.execution.original_transaction import (TRANSPORT_ID as ORIGINAL_TRANSPORT_ID,
                                                         Leg, OriginalClients, OriginalContext,
                                                         OriginalTransactionTransport, RouteProfile,
@@ -347,7 +349,7 @@ class ConnectedExecution:
             return
         assert agent is not None and consent is not None
         if job.state == "QUEUED":
-            self._decide(job, agent)
+            self._decide(job, agent, consent)
         elif job.state == "DECIDED":
             self._enqueue(job, agent, consent)
         elif job.state == "ENQUEUED":
@@ -396,7 +398,54 @@ class ConnectedExecution:
         """Each entry opens its own position, so a closed or cancelled position never blocks a later entry."""
         return f"{agent.agent_id}:{agent.revision.revision_id}:{decision_id}"
 
-    def _decide(self, job: EvaluationJobRow, agent: ConnectedAgent) -> None:
+    def _owner_trigger_basis(self, job: EvaluationJobRow, agent: ConnectedAgent,
+                             consent: AdoptedConsent) -> OwnerTriggerBasis:
+        """The saved basis for this job. Only the exact owner-triggered release and permission can skip the market."""
+        runtime = self._ports.controlled.get(agent.agent_id) if self._ports.mode == "controlled" else None
+        if runtime is None:
+            return OwnerTriggerBasis(RULE)
+        attempts, foreign_intent = self._saved_attempts(job, agent, consent)
+        return owner_trigger_basis(
+            release=runtime.binding.release.content(), deployment_id=job.deployment_id,
+            consent_adoption_id=str(consent.adoption_id), job_consent_adoption_id=str(job.consent_adoption_id),
+            consent_hash=consent.consent_hash, job_consent_hash=job.consent_hash,
+            market_proof=runtime.binding.proofs().get("market_proof_sha256"),
+            market_profile=runtime.binding.market_profile(),
+            refusal=prior_refusal(attempts, binding_sha256=runtime.binding.sha256, foreign_intent=foreign_intent),
+            attempt=next_attempt(attempts))
+
+    def _saved_attempts(self, job: EvaluationJobRow, agent: ConnectedAgent,
+                        consent: AdoptedConsent) -> tuple[tuple[SavedAttempt, ...], bool]:
+        """Every saved owner-triggered attempt on this wallet, and whether the permission has an intent outside them."""
+        with self._factory() as session:
+            decisions = session.execute(select(
+                DecisionRow.decision_id, DecisionRow.owner_trigger_attempt, DecisionRow.inputs).where(
+                DecisionRow.owner_id == job.owner_id, DecisionRow.agent_id == agent.agent_id,
+                DecisionRow.wallet_id == agent.wallet_id, DecisionRow.network_id == agent.network_id,
+                DecisionRow.decision_basis == OWNER_TRIGGER)).all()
+            decision_ids = [row.decision_id for row in decisions]
+            # Jobs first: a finished job writes no later intent, so a stale read cannot look like a release.
+            jobs = session.execute(select(EvaluationJobRow.decision_id, EvaluationJobRow.state).where(
+                EvaluationJobRow.owner_id == job.owner_id, EvaluationJobRow.decision_id.in_(decision_ids))).all()
+            intents = session.execute(select(IntentRow.decision_id, IntentRow.action_id).where(
+                IntentRow.owner_id == job.owner_id, IntentRow.agent_id == agent.agent_id,
+                IntentRow.wallet_id == agent.wallet_id, IntentRow.network_id == agent.network_id,
+                or_(IntentRow.mandate_id == str(consent.adoption_id), IntentRow.decision_id.in_(decision_ids)))).all()
+            action_ids = [row.action_id for row in intents]
+            queue = dict(session.execute(select(QueueRow.action_id, QueueRow.state).where(
+                QueueRow.owner_id == job.owner_id, QueueRow.action_id.in_(action_ids))).tuples().all())
+            submitted = session.execute(select(SubmissionAttemptRow.action_id).where(
+                SubmissionAttemptRow.owner_id == job.owner_id,
+                SubmissionAttemptRow.action_id.in_(action_ids))).scalars().all()
+        action_of = {row.decision_id: row.action_id for row in intents}
+        attempts = tuple(SavedAttempt(
+            number=row.owner_trigger_attempt, binding_sha256=row.inputs["binding_sha256"],
+            job_states=tuple(saved.state for saved in jobs if saved.decision_id == row.decision_id),
+            has_intent=row.decision_id in action_of, queue_state=queue.get(action_of.get(row.decision_id)),
+            submission_attempts=submitted.count(action_of.get(row.decision_id))) for row in decisions)
+        return attempts, any(row.decision_id not in decision_ids for row in intents)
+
+    def _decide(self, job: EvaluationJobRow, agent: ConnectedAgent, consent: AdoptedConsent) -> None:
         with self._factory() as session:
             existing = session.execute(select(DecisionRow).where(
                 DecisionRow.owner_id == job.owner_id, DecisionRow.agent_id == job.agent_id,
@@ -412,6 +461,26 @@ class ConnectedExecution:
             self._finish_unavailable(job, saved.reason or "OBSERVATIONS_UNAVAILABLE")
             return
         if decision_id is None:
+            basis = self._owner_trigger_basis(job, agent, consent)
+            if basis.basis == OWNER_TRIGGER:
+                if basis.refusal is not None:
+                    self._terminate(job, "DENIED", basis.refusal)
+                    return
+                runtime = self._ports.controlled[agent.agent_id]
+                release_id = runtime.binding.release.content()["release_id"]
+                view = self._services.execution.authorize_owner_trigger(
+                    job.owner_id, agent.revision, agent_id=agent.agent_id, wallet_id=agent.wallet_id,
+                    network_id=agent.network_id, decision_at=job.decision_slot, release_id=release_id,
+                    binding_sha256=runtime.binding.sha256, attempt=basis.attempt)
+                if view is None:
+                    # Another trigger took this attempt number after this job read the saved attempts.
+                    self._terminate(job, "DENIED", ALREADY_USED)
+                    return
+                provenance = {**job.provenance, "decision_basis": OWNER_TRIGGER, "release_id": release_id,
+                              "binding_sha256": runtime.binding.sha256}
+                self._save_outcome(job, "SIGNAL", None, view.decision_id, None, None, self._clock(), provenance)
+                self._update(job.job_id, state="DECIDED", decision_id=view.decision_id, provenance=provenance)
+                return
             position_open = self._position(agent) is not None
             now = self._clock()
             try:
@@ -635,16 +704,21 @@ class ConnectedExecution:
         with self._factory() as session:
             intent = session.execute(select(IntentRow).where(
                 IntentRow.owner_id == job.owner_id, IntentRow.action_id == job.action_id)).scalar_one()
+            decision_basis = session.execute(select(DecisionRow.decision_basis).where(
+                DecisionRow.owner_id == job.owner_id, DecisionRow.decision_id == job.decision_id)).scalar_one()
         payload = intent.payload
+        owner_triggered = decision_basis == OWNER_TRIGGER
+        quote_request = QuoteRequest(
+            operation=intent.operation, quote_asset_id=agent.quote.asset_id, quote_decimals=agent.quote.decimals,
+            base_asset_id=agent.base.asset_id, base_decimals=agent.base.decimals,
+            quote_input_raw=(payload["input"]["quote_input"] or {}).get("raw"),
+            base_input_raw=payload["quantity"]["raw"] if intent.operation == "EXIT" else None, observed_at=now,
+            owner_id=str(job.owner_id), agent_id=agent.agent_id, consent_adoption_id=str(job.consent_adoption_id))
         try:
-            observed = self._observe(agent, job.decision_slot, intent.operation == "EXIT")
+            observed = None if owner_triggered else self._observe(
+                agent, job.decision_slot, intent.operation == "EXIT")
             context = self._holdings(agent, now)
-            terms_quote = self._ports.quotes.quote(QuoteRequest(
-                operation=intent.operation, quote_asset_id=agent.quote.asset_id, quote_decimals=agent.quote.decimals,
-                base_asset_id=agent.base.asset_id, base_decimals=agent.base.decimals,
-                quote_input_raw=(payload["input"]["quote_input"] or {}).get("raw"),
-                base_input_raw=payload["quantity"]["raw"] if intent.operation == "EXIT" else None, observed_at=now,
-                owner_id=str(job.owner_id), agent_id=agent.agent_id, consent_adoption_id=str(job.consent_adoption_id)))
+            terms_quote = self._ports.quotes.quote(quote_request)
         except ProviderUnavailable as error:
             # A submission-stage outage keeps the saved action queued; a later pass ticks the same action.
             self._update(job.job_id, reason=f"WAITING:{str(error).upper() or 'PROVIDER'}_UNAVAILABLE")
@@ -656,15 +730,17 @@ class ConnectedExecution:
         # The observations read at submission meet the same boundary as the decision's: exact market and slot, complete
         # provenance, a forward class and collection inside the current slot. A saved decision never qualifies a
         # degraded later reading. The action stays saved and unsent; the reason is kept, and a later pass in the slot
-        # may read again (the intent expires at the next slot and is then released).
+        # may read again (the intent expires at the next slot and is then released). The one owner-triggered action
+        # has no market observation; its saved basis replaces only this check.
         problem = None
-        if observed.provenance.get("market_binding_id") != agent.revision.market_binding_id:
-            problem = "OBSERVATIONS_WRONG_MARKET"
-        elif observed.inputs.observed_at() != job.decision_slot:
-            problem = "OBSERVATIONS_WRONG_TIME"
-        else:
-            problem, _ = observation_problem(observed.provenance, job.decision_slot, now, self._qualification,
-                                             runtime=self._ports.controlled.get(agent.agent_id))
+        if not owner_triggered:
+            if observed.provenance.get("market_binding_id") != agent.revision.market_binding_id:
+                problem = "OBSERVATIONS_WRONG_MARKET"
+            elif observed.inputs.observed_at() != job.decision_slot:
+                problem = "OBSERVATIONS_WRONG_TIME"
+            else:
+                problem, _ = observation_problem(observed.provenance, job.decision_slot, now, self._qualification,
+                                                 runtime=self._ports.controlled.get(agent.agent_id))
         if problem is not None:
             self._update(job.job_id, reason=f"WAITING:SUBMISSION_{problem}",
                          provenance={**job.provenance, "submission_observations": {
@@ -707,7 +783,8 @@ class ConnectedExecution:
             return
         tick = self._services.execution.tick(
             job.owner_id, agent_id=agent.agent_id, wallet_id=agent.wallet_id, network_id=agent.network_id,
-            approval=approval, context=context, revision=agent.revision, inputs=observed.inputs, quote=action_quote,
+            approval=approval, context=context, revision=agent.revision,
+            inputs=None if owner_triggered else observed.inputs, quote=action_quote,
             transport=transport, now=now)
         if tick.status == "IDLE" or (tick.selected_action_id not in (None, job.action_id)):
             queue = self._queue(job.owner_id, job.action_id)

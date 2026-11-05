@@ -1,8 +1,10 @@
 """Public imports and frozen repository resources after domain organization."""
 
+import subprocess
 from importlib import import_module
 from pathlib import Path
 
+import harness
 from pytest import MonkeyPatch
 
 
@@ -29,6 +31,13 @@ def test_domain_imports_and_shared_metadata() -> None:
     }
 
 
+def test_harness_child_processes_import_this_checkout() -> None:
+    child = subprocess.run([harness.api_python(), "-c", "import edge_os_api; print(edge_os_api.__file__)"],
+                           cwd=harness.API_DIR, env=harness.base_env(), capture_output=True, text=True, timeout=60)
+    assert child.returncode == 0, child.stderr
+    assert Path(child.stdout.strip()) == harness.API_DIR / "src" / "edge_os_api" / "__init__.py"
+
+
 def test_resource_paths_are_independent_of_working_directory(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     repository = Path(__file__).resolve().parents[3]
     api_root = repository / "apps" / "api"
@@ -39,7 +48,7 @@ def test_resource_paths_are_independent_of_working_directory(tmp_path: Path, mon
     comparisons = import_module("edge_os_api.research.comparison_runs")
     replays = import_module("edge_os_api.replay.saved_runs")
     assert database.API_ROOT == api_root
-    assert database.script_head() == "0013"
+    assert database.script_head() == "0014"
     assert records.REPO_ROOT == repository
     records.verify_frozen_files()
     assert compiler.CONTRACT_PATH == repository / "docs/contracts/p06/contract.json"

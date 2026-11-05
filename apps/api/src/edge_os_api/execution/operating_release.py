@@ -359,6 +359,23 @@ APPROVED_CONTROL_DECISIONS: frozenset[tuple[str, str, str]] = frozenset({
      "4eaa956243fd0d92d767f73620e89b5685538b34bd4c7bab77259f0d17efc8bb"),
 })
 
+# Reviewed binding decisions. A binding market proof is normally a provider proof. The one owner-triggered release
+# has no forward market source, so the builder chose option B (COMMON1 2026-10-30, ANSWER1). The triple is
+# code-owned; a release file alone can never approve it. The artifact hash is the file hash, never hand-typed.
+OWNER_TRIGGER_RELEASE_ID = "actual-inapp-wmon-moe-20261022/1"
+OWNER_TRIGGER_DECISION_REASON = "NO_FORWARD_SOURCE_BUILDER_DECISION"
+APPROVED_BINDING_DECISIONS: frozenset[tuple[str, str, str]] = frozenset({
+    ("market_proof_sha256", OWNER_TRIGGER_DECISION_REASON,
+     "780668a764ee1eaec9bf0e1643e441efe3df4caaaaa54ddbc2ca88696d853567"),
+})
+
+
+def binding_decision_qualified(proof: str | None, release: Mapping[str, Any]) -> bool:
+    """A market proof is a builder decision only for the exact owner-triggered release and the code-owned triple."""
+    return (proof is not None and release.get("release_id") == OWNER_TRIGGER_RELEASE_ID
+            and any(entry[0] == "market_proof_sha256" and entry[2] == proof
+                    for entry in APPROVED_BINDING_DECISIONS))
+
 
 def _decision_reason(value: Any) -> bool:
     """A fixed, code-shaped reason such as FEE_VALUES_NOT_PROVIDER_BOUND."""
