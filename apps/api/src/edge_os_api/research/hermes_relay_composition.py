@@ -11,10 +11,11 @@ destination), the job image, the relay channel and ONE `TokenPrice` built from t
 price object is the one the ledger reserves and settles with and the one the relay runner checks the provider cost with.
 
 A release is composed only from a code-owned definition in `RELEASE_DEFINITIONS` whose record SHA-256 is in the relay's
-trusted registry `relay_admission.APPROVED_ACTUAL_RELEASES`. Both name only the adopted release `hermes-first-call-1`.
-Binding it reads no file, and nothing opens an engine, key, socket or Docker command before the operator's handoff for
-exactly that release is read. A ledger cap sees one database only: the shared USD 2.00 ceiling still needs an external
-reconciliation before the first actual call. No setting, environment value, file or request adds a definition.
+trusted registry `relay_admission.APPROVED_ACTUAL_RELEASES`. Several may be approved. The operator's handoff selects one
+by record hash; there is no default, so no handoff means no start. Binding reads no file, and nothing opens an engine,
+key, socket or Docker command before that handoff is read. The ledger is shared: every route counts against the one
+USD 2.00 ceiling. Spend outside this database is not seen. No setting, environment value, file or request adds a
+definition.
 Production needs an approved hosted deployment record that names this exact release; the registry is empty in this
 candidate, so production stays refused. The application holds no provider key: the relay holds it. The owner and saved
 request of each grant are read from the saved attempt row and must equal those the RESERVED reservation copied from it;
@@ -106,10 +107,17 @@ class RelayApplicationDefinition:
     # The smallest output limit worth a call (relay CONTRACT A9). None, the default: every call reserves and grants the
     # record's full limit. A value lets a reservation lower one call's limit to the remaining budget, never below it.
     min_output_tokens: int | None = None
+    # Who sells the calls of a record that names no routing, as its price snapshot names them. A routed record's
+    # seller is its one routed provider, so a routed definition names none.
+    seller: str | None = None
 
 
-# The one approved release, hermes-first-call-1. Its record and price bytes are the frozen files in
-# docs/qualification/hermes-actual-operation/release/, held here so that binding reads no file.
+_PINNED_IMAGES = (("linux/arm64", "sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0"),
+                  ("linux/amd64", "sha256:42541c05f27ee56bfe02ce9d7223728c0432a040abef6515fff67a7f992f9aff"))
+
+# The approved releases. An operator handoff selects one by record hash; the order selects nothing. Record and price
+# bytes are the frozen files, held here so that binding reads no file: hermes-first-call-1 in
+# docs/qualification/hermes-actual-operation/release/, orbio-first-call-1 in docs/qualification/orbio-release/.
 RELEASE_DEFINITIONS: tuple[RelayApplicationDefinition, ...] = (RelayApplicationDefinition(
     record=(b'{"allowed_fields":["model","messages","stream","response_format","provider","reasoning",'
             b'"max_tokens","session_id","prompt_cache_options"],'
@@ -128,12 +136,31 @@ RELEASE_DEFINITIONS: tuple[RelayApplicationDefinition, ...] = (RelayApplicationD
     price_snapshot=(b'{"completion_usd_per_million":"10","model":"openai/gpt-6.1-sol","prompt_usd_per_million":"2",'
                     b'"provider":"openai"}'),
     response_format=interpretation_response_format(),
-    images=(("linux/arm64", "sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0"),
-            ("linux/amd64", "sha256:42541c05f27ee56bfe02ce9d7223728c0432a040abef6515fff67a7f992f9aff")),
+    images=_PINNED_IMAGES,
     channel_root="edge-os-research",
     global_cap_usd=Decimal("2.00"),  # the one shared USD 2.00 model and data ceiling, not a Hermes allocation
     owner_cap_usd=Decimal("2.00"),
-),)
+), RelayApplicationDefinition(
+    record=(b'{"allowed_fields":["model","messages","stream","response_format","reasoning","max_tokens","session_id","'
+            b'prompt_cache_options"],"approval":{"path":"docs/qualification/orbio-release/orbio_first_call_approval.js'
+            b'on","sha256":"22e9ccdc52de423f8c612bc59376bec38357a47134f2c130b50a75e7c9e23e48"},"ca_bundle_sha256":"22b'
+            b'557a27055b33606b6559f37703928d3e4ad79f110b407d04986e1843543d1","destination":{"host":"api.orbio.so","pat'
+            b'h":"/api/v1/chat/completions","port":443},"kind":"ACTUAL","max_reply_bytes":262144,"max_request_bytes":6'
+            b'5536,"max_tokens":4096,"model":"openai/gpt-6.1-sol","price_snapshot_sha256":"4f83b00bd51b0614f1da551c762'
+            b'ce8969f27c5bb26bf5edf8a3f6e3412f982dc","prompt_cache_options":{"mode":"explicit"},"provider":null,"reaso'
+            b'ning":{"effort":"low"},"recorded_reply_headers":["X-Orbio-Balance","X-Orbio-Ignored-Parameters"],"releas'
+            b'e_id":"orbio-first-call-1","response_format_sha256":"cdffe6fd07f14b796cae3f97268148f6ad8893100b8080e1bc6'
+            b'52c7d3e9cbc60","route_id":"orbio-openrouter-managed","stream":false,"timeout_seconds":90}'),
+    record_sha256="041f588d3b9564fd605d00d2204083cbfc4e4cd3307906656345a73118ac563f",
+    price_snapshot=(b'{"completion_usd_per_million":"10.5","model":"openai/gpt-6.1-sol","prompt_usd_per_millio'
+                    b'n":"2.1","provider":"orbio"}'),
+    response_format=interpretation_response_format(),
+    images=_PINNED_IMAGES,
+    channel_root="edge-os-research",
+    global_cap_usd=Decimal("2.00"),  # the same shared ceiling: both routes count against the one settings row
+    owner_cap_usd=Decimal("2.00"),
+    seller="orbio",
+))
 
 
 @dataclass(frozen=True)
@@ -156,8 +183,10 @@ class HermesApplicationRelease:
     def unchanged(self) -> bool:
         """The owned request shape is still exactly the bound one and still the record's."""
         required = self.policy.required_extra
+        routing = self.actual.provider
         return (hmac.compare_digest(hashlib.sha256(_canonical(required)).hexdigest(), self.required_extra_sha256)
-                and _canonical(required["provider"]) == _canonical(self.actual.provider)
+                and ("provider" not in required if routing is None
+                     else _canonical(required["provider"]) == _canonical(routing))
                 and _canonical(required.get("reasoning")) == _canonical(self.actual.reasoning)
                 and _canonical(required.get("prompt_cache_options")) == _canonical(self.actual.prompt_cache_options))
 
@@ -193,20 +222,26 @@ def _owned(value: Any) -> Any:
     return json.loads(_canonical(value))
 
 
-def _rate(snapshot: Mapping[str, Any], name: str, ceiling: Any) -> Decimal:
-    """A snapshot rate: a positive plain decimal string, at most the routing `max_price` for the same tokens."""
+def _plain_rate(snapshot: Mapping[str, Any], name: str) -> Decimal:
+    """A snapshot rate: a positive plain decimal string."""
     value = snapshot[name]
     if not isinstance(value, str) or not DECIMAL.fullmatch(value) or Decimal(value) <= 0:
         raise _Refused(f"{name} must be a positive plain decimal string")
+    return Decimal(value)
+
+
+def _rate(snapshot: Mapping[str, Any], name: str, ceiling: Any) -> Decimal:
+    """A snapshot rate of a routed record: a plain rate, at most the routing `max_price` for the same tokens."""
+    value = _plain_rate(snapshot, name)
     if isinstance(ceiling, bool) or not isinstance(ceiling, (int, float, str)):
         raise _Refused("routing max_price must give a number for prompt and completion")
     try:
         limit = Decimal(str(ceiling))
     except InvalidOperation as error:
         raise _Refused("routing max_price must give a number for prompt and completion") from error
-    if not limit.is_finite() or Decimal(value) > limit:
+    if not limit.is_finite() or value > limit:
         raise _Refused(f"{name} is above the routing max_price")
-    return Decimal(value)
+    return value
 
 
 def _price(definition: RelayApplicationDefinition, actual: ActualRelease, expected_sha256: str) -> TokenPrice:
@@ -216,7 +251,14 @@ def _price(definition: RelayApplicationDefinition, actual: ActualRelease, expect
     snapshot = _strict_object(definition.price_snapshot, "price snapshot")
     if set(snapshot) != SNAPSHOT_FIELDS:
         raise _Refused("the price snapshot must have exactly the frozen fields")
-    if snapshot["model"] != actual.release.model or snapshot["provider"] != actual.provider["only"][0]:
+    if snapshot["model"] != actual.release.model:
+        raise _Refused("the price snapshot must price the record's model at its one routed provider")
+    if actual.provider is None:  # no routing object on the wire, so no ceiling to compare with: the rates are the seller's
+        if snapshot["provider"] != definition.seller:
+            raise _Refused("the price snapshot must price the record's model at its named seller")
+        return TokenPrice(_plain_rate(snapshot, "prompt_usd_per_million"),
+                          _plain_rate(snapshot, "completion_usd_per_million"))
+    if snapshot["provider"] != actual.provider["only"][0]:
         raise _Refused("the price snapshot must price the record's model at its one routed provider")
     ceiling = actual.provider["max_price"]
     return TokenPrice(_rate(snapshot, "prompt_usd_per_million", ceiling.get("prompt")),
@@ -274,9 +316,15 @@ def bind_release(definition: RelayApplicationDefinition) -> HermesApplicationRel
         actual = load_actual_release(definition.record, definition.record_sha256)
     except ValueError as error:  # includes ActualReleaseUnapproved
         raise _Refused(f"the release record is refused: {type(error).__name__}") from error
+    routing = actual.provider
+    if (routing is None) != isinstance(definition.seller, str) or definition.seller == "":
+        raise _Refused("a release names a seller exactly when its record names no routing")
+    seller = routing["only"][0] if routing is not None else definition.seller
     record = _strict_object(definition.record, "release record")
     price = _price(definition, actual, record["price_snapshot_sha256"])
-    extra: dict[str, Any] = {"stream": False, "provider": _owned(actual.provider)}
+    extra: dict[str, Any] = {"stream": False}
+    if routing is not None:
+        extra["provider"] = _owned(routing)
     if actual.reasoning is not None:
         extra["reasoning"] = _owned(actual.reasoning)
     if actual.prompt_cache_options is not None:
@@ -304,7 +352,7 @@ def bind_release(definition: RelayApplicationDefinition) -> HermesApplicationRel
     approval = record["approval"]
     config = HermesInterpreterConfig(
         model=release.model, route=release.route_id, max_output_tokens=release.max_output_tokens, runtime_label="LIVE",
-        live_release=LiveRelease(release_id=release.release_id, provider=actual.provider["only"][0],
+        live_release=LiveRelease(release_id=release.release_id, provider=seller,
                                  model=release.model, budget_usd=str(definition.global_cap_usd),
                                  recorded_in=approval["path"]))
     return HermesApplicationRelease(
@@ -376,7 +424,7 @@ def compose_application(release: HermesApplicationRelease, engine: Engine, *, en
         raise _Refused("the relay endpoint must serve this release's channel root")
     if not isinstance(run_id, str) or not relay_admission.IDENTIFIER.fullmatch(run_id):
         raise _Refused("run_id must be 1-64 letters, digits or ._:-")
-    spend = PostgresSpendLedger(make_session_factory(engine), release.limits)
+    spend = PostgresSpendLedger(make_session_factory(engine), release.limits, route_id=release.actual.release.route_id)
     job = build_relay_job(release.route, release=release.actual.release, endpoint=endpoint,
                           subject_for=_subject(engine), policy=release.policy, ledger=spend,
                           scope_for=_intake_scope(engine), image=release.image, run_id=run_id,
@@ -388,11 +436,8 @@ def compose_application(release: HermesApplicationRelease, engine: Engine, *, en
     return HermesApplication(release, job.runner, job.supervision, spend, engine)
 
 
-def _approved_definition() -> RelayApplicationDefinition | None:
-    approved = [item for item in RELEASE_DEFINITIONS if item.record_sha256 in relay_admission.APPROVED_ACTUAL_RELEASES]
-    if len(approved) > 1:
-        raise _Refused("an application serves at most one approved release")
-    return approved[0] if approved else None
+def _approved_definitions() -> list[RelayApplicationDefinition]:
+    return [item for item in RELEASE_DEFINITIONS if item.record_sha256 in relay_admission.APPROVED_ACTUAL_RELEASES]
 
 
 def _read_bounded(path: Path) -> bytes:
@@ -420,18 +465,37 @@ def _absolute(value: Any, label: str) -> Path:
     return Path(value)
 
 
-def _handoff(path: Path, expected_sha256: str, release: HermesApplicationRelease) -> tuple[RelayEndpoint, Path]:
-    """The relay endpoint and job evidence folder the operator started for exactly this release.
-
-    The handoff (`edge-os.relay-operator-handoff/1`, written once by the lane-1 operator) approves nothing: the release
-    comes only from the code-owned definition. Every identity in it must equal the bound release's; its record path is
-    never read, because the approved record bytes are the definition's own.
-    """
+def _verified_handoff(path: Path, expected_sha256: str) -> dict[str, Any]:
+    """The handoff's object, only if its bytes have the SHA-256 the trusted configuration owner gave."""
     raw = _read_bounded(path)
     if not isinstance(expected_sha256, str) or not hmac.compare_digest(hashlib.sha256(raw).hexdigest(),
                                                                       expected_sha256):
         raise _Refused("the operator handoff bytes do not have the named hash")
-    handoff = _strict_object(raw, "operator handoff")
+    return _strict_object(raw, "operator handoff")
+
+
+def _selected_definition(path: Path, expected_sha256: str) -> RelayApplicationDefinition:
+    """The one approved definition the operator's handoff names by record hash.
+
+    The handoff selects and approves nothing: it can name only a code-owned definition whose hash is also in the relay's
+    trusted registry. Anything else is refused, and no default exists.
+    """
+    record = _verified_handoff(path, expected_sha256).get("release_record")
+    named = record.get("sha256") if isinstance(record, dict) else None
+    matches = [item for item in _approved_definitions() if item.record_sha256 == named]
+    if len(matches) != 1:
+        raise _Refused("the operator handoff names no approved release")
+    return matches[0]
+
+
+def _handoff(path: Path, expected_sha256: str, release: HermesApplicationRelease) -> tuple[RelayEndpoint, Path]:
+    """The relay endpoint and job evidence folder the operator started for exactly this release.
+
+    The handoff (`edge-os.relay-operator-handoff/1`, written once by the lane-1 operator) approves nothing: the release
+    comes only from the code-owned definition it selected. Every identity in it must equal the bound release's; its record path is
+    never read, because the approved record bytes are the definition's own.
+    """
+    handoff = _verified_handoff(path, expected_sha256)
     if set(handoff) != HANDOFF_FIELDS or handoff["format"] != HANDOFF_FORMAT:
         raise _Refused("the operator handoff must have exactly the frozen fields and format")
     actual = release.actual
@@ -469,8 +533,8 @@ def open_hermes_application(settings: Settings, *, handoff_path: Path, handoff_s
     relay release and record hash; the registry is empty in this candidate, so production stays refused.
 
     `handoff_path` and `handoff_sha256` are the line the relay operator printed at start, given by the application's
-    trusted configuration owner. The handoff is read only after an approved definition is found, and it is never
-    written. Each API process uses its own stable `run_id`; a restarted process reuses it to recover its dead turns.
+    trusted configuration owner. They select which approved release this application serves, so without them nothing
+    starts. The handoff is read only when an approved definition exists, and it is never written. Each API process uses its own stable `run_id`; a restarted process reuses it to recover its dead turns.
     The application never stops, restarts or removes relay resources: `close` disposes only its own engine.
     """
     deployment = None
@@ -484,9 +548,9 @@ def open_hermes_application(settings: Settings, *, handoff_path: Path, handoff_s
                                "qualified")
     if settings.interpreter != "hermes_local":
         raise MountRefused("the Hermes relay application needs EDGE_OS_INTERPRETER=hermes_local")
-    definition = _approved_definition()
-    if definition is None:
+    if not _approved_definitions():
         return None
+    definition = _selected_definition(handoff_path, handoff_sha256)
     release = bind_release(definition)
     if settings.env == "production" and (deployment is None or not deployment.admits_hermes_relay(
             release.actual.release.release_id, definition.record_sha256)):

@@ -43,9 +43,9 @@ def raw_of(value: dict[str, Any]) -> tuple[bytes, str]:
 # --- the record names the destination -----------------------------------------------------------------------------
 
 
-def test_the_registry_approves_exactly_one_release_the_adopted_openrouter_record() -> None:
+def test_the_registry_still_approves_the_adopted_openrouter_record() -> None:
     raw = RECORD.read_bytes()
-    assert relay_admission.APPROVED_ACTUAL_RELEASES == frozenset({hashlib.sha256(raw).hexdigest()})
+    assert hashlib.sha256(raw).hexdigest() in relay_admission.APPROVED_ACTUAL_RELEASES
     actual = load_actual_release(raw, hashlib.sha256(raw).hexdigest())
     assert (actual.destination.host, actual.destination.port, actual.destination.path) == (
         "openrouter.ai", 443, "/api/v1/chat/completions")

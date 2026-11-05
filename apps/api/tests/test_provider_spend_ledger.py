@@ -29,12 +29,17 @@ from spend_ledger import (  # noqa: E402
 
 PRICE = TokenPrice(Decimal("2.00"), Decimal("7.50"))
 RESERVATION = Decimal("0.054848")
+ROUTE = "route-test"
 BOUNDS = {"max_input_tokens": 12_064, "max_output_tokens": 4_096}
 TASK = '{"task":"interpret","original_request":"Buy when price is up 1%"}'
 
 
 def limits(global_cap: str = "0.20", owner_cap: str = "0.20", price: TokenPrice = PRICE) -> SpendLimits:
     return SpendLimits(global_cap_usd=Decimal(global_cap), owner_cap_usd=Decimal(owner_cap), price=price)
+
+
+def ledger(session_factory, given: SpendLimits) -> PostgresSpendLedger:
+    return PostgresSpendLedger(session_factory, given, route_id=ROUTE)
 
 
 @pytest.fixture
@@ -46,7 +51,7 @@ def empty_spend_ledger(factory) -> None:
     from sqlalchemy import text
     with factory() as session:
         session.execute(text("TRUNCATE usage_local.provider_spend_events, usage_local.provider_spend_reservations, "
-                             "usage_local.provider_spend_settings"))
+                             "usage_local.provider_spend_route_prices, usage_local.provider_spend_settings"))
         session.commit()
 
 
@@ -80,7 +85,7 @@ def attempts(client, factory):
 
 
 def test_a_reservation_records_the_worst_case_and_one_past_the_cap_writes_nothing(clean_spend, attempts, owner_a) -> None:
-    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.10"))
+    spend = ledger(clean_spend, limits(global_cap="0.10"))
     first, second, third = attempts.new(owner_a), attempts.new(owner_a), attempts.new(owner_a)
 
     assert spend.reserve(first, scope="s1", **BOUNDS).amount_usd == RESERVATION
@@ -93,7 +98,7 @@ def test_a_reservation_records_the_worst_case_and_one_past_the_cap_writes_nothin
 
 
 def test_each_owner_has_a_cap_and_every_owner_together_shares_the_global_cap(clean_spend, attempts, owner_a, owner_b) -> None:
-    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.15", owner_cap="0.11"))
+    spend = ledger(clean_spend, limits(global_cap="0.15", owner_cap="0.11"))
     a1, a2, a3 = attempts.new(owner_a), attempts.new(owner_a), attempts.new(owner_a)
     b1, b2 = attempts.new(owner_b), attempts.new(owner_b)
 
@@ -115,7 +120,7 @@ def test_each_owner_has_a_cap_and_every_owner_together_shares_the_global_cap(cle
 
 
 def test_one_reservation_per_attempt_one_open_attempt_per_scope_and_only_saved_attempts(clean_spend, attempts, owner_a) -> None:
-    spend = PostgresSpendLedger(clean_spend, limits())
+    spend = ledger(clean_spend, limits())
     first, second = attempts.new(owner_a), attempts.new(owner_a)
     spend.reserve(first, scope="intake:1", **BOUNDS)
 
@@ -132,7 +137,7 @@ def test_one_reservation_per_attempt_one_open_attempt_per_scope_and_only_saved_a
 
 
 def test_usage_settles_exactly_and_everything_else_keeps_the_whole_reservation(clean_spend, attempts, owner_a) -> None:
-    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.30", owner_cap="0.30"))
+    spend = ledger(clean_spend, limits(global_cap="0.30", owner_cap="0.30"))
     exact, invalid, lost, unsent = (attempts.new(owner_a) for _ in range(4))
     for index, attempt in enumerate((exact, invalid, lost, unsent)):
         spend.reserve(attempt, scope=f"scope-{index}", **BOUNDS)
@@ -155,7 +160,7 @@ def test_usage_settles_exactly_and_everything_else_keeps_the_whole_reservation(c
 
 def test_late_evidence_settles_unknown_liability_once_and_a_disagreement_keeps_the_higher_charge(
         clean_spend, attempts, owner_a) -> None:
-    spend = PostgresSpendLedger(clean_spend, limits())
+    spend = ledger(clean_spend, limits())
     lost = attempts.new(owner_a)
     spend.reserve(lost, scope="s", **BOUNDS)
     spend.mark_unknown(lost, reason="Killed")
@@ -171,21 +176,21 @@ def test_late_evidence_settles_unknown_liability_once_and_a_disagreement_keeps_t
 def test_a_changed_cap_refuses_new_reservations_until_a_recorded_change_and_old_ones_still_settle(
         clean_spend, attempts, owner_a) -> None:
     held, waiting, after = attempts.new(owner_a), attempts.new(owner_a), attempts.new(owner_a)
-    PostgresSpendLedger(clean_spend, limits()).reserve(held, scope="held", **BOUNDS)
+    ledger(clean_spend, limits()).reserve(held, scope="held", **BOUNDS)
 
-    raised = PostgresSpendLedger(clean_spend, limits(global_cap="5.00", owner_cap="5.00"))  # a restart with new caps
+    raised = ledger(clean_spend, limits(global_cap="5.00", owner_cap="5.00"))  # a restart with new caps
     with pytest.raises(LedgerConfigMismatch):
         raised.reserve(waiting, scope="waiting", **BOUNDS)
     assert raised.settle(held, input_tokens=1_423, output_tokens=611).cost_usd == Decimal("0.0074285")
     with pytest.raises(LedgerConfigMismatch):  # prices never change, even through a later process
-        PostgresSpendLedger(clean_spend, limits(price=TokenPrice(Decimal("1.00"), Decimal("7.50")))).reserve(
+        ledger(clean_spend, limits(price=TokenPrice(Decimal("1.00"), Decimal("7.50")))).reserve(
             waiting, scope="waiting", **BOUNDS)
 
     raised.change_caps(global_cap_usd=Decimal("0.06"), owner_cap_usd=Decimal("0.06"), reason="ticket test lowers the cap")
     with pytest.raises(CapExceeded):  # 0.0074285 + 0.054848 > 0.06: the recorded cap applies, whatever is configured
         raised.reserve(waiting, scope="waiting", **BOUNDS)
     raised.change_caps(global_cap_usd=Decimal("0.07"), owner_cap_usd=Decimal("0.07"), reason="ticket test raises it")
-    assert PostgresSpendLedger(clean_spend, limits()).reserve(waiting, scope="waiting", **BOUNDS).amount_usd == RESERVATION
+    assert ledger(clean_spend, limits()).reserve(waiting, scope="waiting", **BOUNDS).amount_usd == RESERVATION
     with pytest.raises(CapExceeded):
         raised.reserve(after, scope="after", **BOUNDS)
     with pytest.raises(ValueError):
@@ -195,11 +200,11 @@ def test_a_changed_cap_refuses_new_reservations_until_a_recorded_change_and_old_
 def test_a_new_process_view_of_the_database_sees_the_same_liability(clean_spend, attempts, owner_a, settings) -> None:
     from edge_os_api.core.database import make_engine, make_session_factory
     first = attempts.new(owner_a)
-    PostgresSpendLedger(clean_spend, limits()).reserve(first, scope="s", **BOUNDS)
+    ledger(clean_spend, limits()).reserve(first, scope="s", **BOUNDS)
 
     engine = make_engine(settings.database_url)
     try:
-        reopened = PostgresSpendLedger(make_session_factory(engine), limits())
+        reopened = ledger(make_session_factory(engine), limits())
         assert reopened.state(first) == "RESERVED" and reopened.committed_usd() == RESERVATION
         with pytest.raises(ScopeBlocked):
             reopened.reserve(attempts.new(owner_a), scope="s", **BOUNDS)
@@ -228,7 +233,7 @@ def test_two_api_processes_contending_for_the_last_capacity_never_pass_either_ca
     assert len(results) == 8 and len(granted) == 3
     assert {r["outcome"] for r in results} == {"RESERVED", "CapExceeded"}
     assert all(len(granted & set(mine)) <= 2 for mine in owners.values())
-    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.20", owner_cap="0.11"))
+    spend = ledger(clean_spend, limits(global_cap="0.20", owner_cap="0.11"))
     assert spend.committed_usd() == RESERVATION * 3 and {u.attempt_id for u in spend.unresolved()} == granted
 
 
@@ -238,7 +243,7 @@ def test_a_downgrade_below_0013_is_refused_while_any_reservation_exists_and_keep
 
     import harness
     held = attempts.new(owner_a)
-    spend = PostgresSpendLedger(clean_spend, limits())
+    spend = ledger(clean_spend, limits())
     spend.reserve(held, scope="s", **BOUNDS)
     spend.mark_unknown(held, reason="TransportLost")
 
@@ -249,11 +254,12 @@ def test_a_downgrade_below_0013_is_refused_while_any_reservation_exists_and_keep
     assert spend.state(held) == "UNKNOWN" and spend.committed_usd() == RESERVATION
 
     empty_spend_ledger(clean_spend)  # no reservation left, but a recorded cap decision is history too
-    PostgresSpendLedger(clean_spend, limits()).change_caps(global_cap_usd=Decimal("0.30"), owner_cap_usd=Decimal("0.30"),
+    ledger(clean_spend, limits()).change_caps(global_cap_usd=Decimal("0.30"), owner_cap_usd=Decimal("0.30"),
                                                            reason="recorded decision")
     again = subprocess.run([sys.executable, "-m", "alembic", "downgrade", "0012"], cwd=harness.API_DIR, env=env,
                            capture_output=True, text=True, timeout=180)
-    assert again.returncode != 0 and "downgrade below 0013 refused" in again.stdout + again.stderr
+    # A settings row with no route price stops at 0015, before 0013's own refusal: the decision is kept either way.
+    assert again.returncode != 0 and "downgrade below 0015 refused" in again.stdout + again.stderr
 
 
 # --- The per-call output limit (ORBIO_CREDIT_DESIGN 2b) ----------------------------------------------------------------
@@ -272,7 +278,7 @@ def recorded(factory, attempt: str) -> tuple[list[tuple], list[str]]:
 
 
 def test_the_owner_headroom_lowers_the_output_limit_inside_the_reservation(clean_spend, attempts, owner_a) -> None:
-    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.20", owner_cap="0.05"))
+    spend = ledger(clean_spend, limits(global_cap="0.20", owner_cap="0.05"))
     attempt = attempts.new(owner_a)
 
     reservation = spend.reserve(attempt, scope="s1", **BOUNDS, min_output_tokens=1)
@@ -284,7 +290,7 @@ def test_the_owner_headroom_lowers_the_output_limit_inside_the_reservation(clean
 
 
 def test_the_global_headroom_lowers_the_output_limit_when_it_is_the_smaller(clean_spend, attempts, owner_a) -> None:
-    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.04", owner_cap="0.20"))
+    spend = ledger(clean_spend, limits(global_cap="0.04", owner_cap="0.20"))
     attempt = attempts.new(owner_a)
     reservation = spend.reserve(attempt, scope="s1", **BOUNDS, min_output_tokens=1)
     # (40,000,000 - 24,128,000) / 7,500 = 2,116.3, so 2,116 output tokens: 39,998,000 nano-USD
@@ -293,7 +299,7 @@ def test_the_global_headroom_lowers_the_output_limit_when_it_is_the_smaller(clea
 
 
 def test_a_call_over_budget_is_refused_before_anything_is_written(clean_spend, attempts, owner_a) -> None:
-    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.20", owner_cap="0.05"))
+    spend = ledger(clean_spend, limits(global_cap="0.20", owner_cap="0.05"))
     attempt = attempts.new(owner_a)
 
     with pytest.raises(CapExceeded) as refused:  # 3,450 tokens would cost 50,003,000 nano-USD: past the owner's 0.05
@@ -306,12 +312,12 @@ def test_a_call_over_budget_is_refused_before_anything_is_written(clean_spend, a
 
 
 def test_without_a_smallest_limit_the_postgres_reservation_is_exact_as_before(clean_spend, attempts, owner_a) -> None:
-    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.20", owner_cap="0.05"))
+    spend = ledger(clean_spend, limits(global_cap="0.20", owner_cap="0.05"))
     attempt = attempts.new(owner_a)
     with pytest.raises(CapExceeded) as refused:
         spend.reserve(attempt, scope="s1", **BOUNDS)
     assert refused.value.requested_usd == RESERVATION and recorded(clean_spend, attempt) == ([], [])
-    roomy = PostgresSpendLedger(clean_spend, limits())
+    roomy = ledger(clean_spend, limits())
     roomy.change_caps(global_cap_usd=Decimal("0.20"), owner_cap_usd=Decimal("0.20"), reason="test restores room")
     reservation = roomy.reserve(attempt, scope="s1", **BOUNDS)
     assert (reservation.max_output_tokens, reservation.amount_usd) == (4_096, RESERVATION)
@@ -320,7 +326,7 @@ def test_without_a_smallest_limit_the_postgres_reservation_is_exact_as_before(cl
 @pytest.mark.parametrize("smallest", [0, True, 4_097, "1"])
 def test_a_postgres_smallest_limit_outside_one_to_the_full_limit_is_refused(clean_spend, attempts, owner_a,
                                                                             smallest) -> None:
-    spend = PostgresSpendLedger(clean_spend, limits())
+    spend = ledger(clean_spend, limits())
     attempt = attempts.new(owner_a)
     with pytest.raises(ValueError):
         spend.reserve(attempt, scope="s1", **BOUNDS, min_output_tokens=smallest)
@@ -329,7 +335,7 @@ def test_a_postgres_smallest_limit_outside_one_to_the_full_limit_is_refused(clea
 
 def test_a_started_call_reserved_with_a_lowered_limit_is_never_reserved_again_after_more_headroom(
         clean_spend, attempts, owner_a) -> None:
-    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.20", owner_cap="0.05"))
+    spend = ledger(clean_spend, limits(global_cap="0.20", owner_cap="0.05"))
     attempt = attempts.new(owner_a)
     spend.reserve(attempt, scope="s1", **BOUNDS, min_output_tokens=1)
     spend.mark_unknown(attempt, reason="the host runner was killed after the start")
@@ -362,7 +368,7 @@ def test_two_processes_racing_for_the_last_headroom_with_lowered_limits_never_pa
     # 2,156 output tokens (40,298,000 nano-USD); the 6,000 nano-USD left fits no call
     assert sorted((r["outcome"], r["max_output_tokens"]) for r in results) == sorted(
         [("RESERVED", 4_096), ("RESERVED", 4_096), ("RESERVED", 2_156)] + [("CapExceeded", None)] * 3)
-    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.15", owner_cap="0.20"))
+    spend = ledger(clean_spend, limits(global_cap="0.15", owner_cap="0.20"))
     assert spend.committed_usd() == Decimal("0.149994") <= Decimal("0.15")
 
 
@@ -401,7 +407,7 @@ def test_before_first_use_the_view_is_the_configured_limits_and_nothing_is_writt
 
 def test_after_first_use_the_view_keeps_the_frozen_caps_not_the_configured_ones(clean_spend, attempts, client, owner_a) -> None:
     from edge_os_api.research.provider_spend_ledger import PostgresSpendLedger, spend_view
-    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.20", owner_cap="0.12"))
+    spend = ledger(clean_spend, limits(global_cap="0.20", owner_cap="0.12"))
     spend.reserve(attempts.new(owner_a), scope="s1", **BOUNDS)
     with clean_spend() as session:
         view = spend_view(session, owner_of(client, owner_a), limits(global_cap="9", owner_cap="9"))
@@ -411,7 +417,7 @@ def test_after_first_use_the_view_keeps_the_frozen_caps_not_the_configured_ones(
 def test_held_liability_is_used_budget_and_the_smaller_headroom_is_what_is_available(
         clean_spend, attempts, client, owner_a, owner_b) -> None:
     from edge_os_api.research.provider_spend_ledger import PostgresSpendLedger, spend_view
-    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.20", owner_cap="0.12"))
+    spend = ledger(clean_spend, limits(global_cap="0.20", owner_cap="0.12"))
     settled, lost, released, other = (attempts.new(owner_a), attempts.new(owner_a), attempts.new(owner_a),
                                       attempts.new(owner_b))
     spend.reserve(settled, scope="s1", **BOUNDS)
@@ -439,7 +445,7 @@ def test_held_liability_is_used_budget_and_the_smaller_headroom_is_what_is_avail
 
 
 def test_a_call_over_the_global_headroom_is_refused_against_the_global_cap(clean_spend, attempts, owner_a, owner_b) -> None:
-    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.07", owner_cap="0.20"))
+    spend = ledger(clean_spend, limits(global_cap="0.07", owner_cap="0.20"))
     spend.reserve(attempts.new(owner_b), scope="b1", **BOUNDS)  # 0.054848 of the 0.07 everyone shares
     attempt = attempts.new(owner_a)
 

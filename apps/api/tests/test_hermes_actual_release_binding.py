@@ -53,7 +53,7 @@ def canonical(value: Any) -> bytes:
 
 
 def adopted() -> composition.RelayApplicationDefinition:
-    [given] = composition.RELEASE_DEFINITIONS
+    [given] = [item for item in composition.RELEASE_DEFINITIONS if item.record_sha256 == RECORD_SHA256]
     return given
 
 
@@ -78,10 +78,10 @@ def no_effects(monkeypatch: pytest.MonkeyPatch) -> None:
 # --- the ordinary registries hold exactly the adopted release --------------------------------------------------------
 
 
-def test_the_ordinary_registries_hold_exactly_the_one_adopted_record() -> None:
-    assert relay_admission.APPROVED_ACTUAL_RELEASES == frozenset({RECORD_SHA256})
-    assert [item.record_sha256 for item in composition.RELEASE_DEFINITIONS] == [RECORD_SHA256]
-    assert composition._approved_definition() is adopted()
+def test_the_ordinary_registries_hold_the_adopted_record_first() -> None:
+    assert RECORD_SHA256 in relay_admission.APPROVED_ACTUAL_RELEASES
+    assert composition.RELEASE_DEFINITIONS[0].record_sha256 == RECORD_SHA256
+    assert adopted() in composition._approved_definitions()
 
 
 def test_the_frozen_release_files_are_the_code_owned_bytes() -> None:
@@ -162,7 +162,7 @@ def test_composing_the_adopted_release_opens_nothing(tmp_path: Path, monkeypatch
     app = compose_application(bind_release(adopted()), lazy_engine(), endpoint=endpoint(tmp_path / "relay",
                                                                                          "edge-os-research"),
                               run_id="rc-binding", evidence_dir=tmp_path / "jobs")
-    assert app.spend._configured.price is app.release.price and app.supervision.image == IMAGE
+    assert app.spend._price is app.release.price and app.supervision.image == IMAGE
     assert list(tmp_path.iterdir()) == []
 
 
@@ -226,7 +226,7 @@ def test_an_explicitly_empty_registry_refuses_the_adopted_record(monkeypatch: py
     monkeypatch.setattr(relay_admission, "APPROVED_ACTUAL_RELEASES", frozenset())
     with pytest.raises(MountRefused, match="ActualReleaseUnapproved"):
         bind_release(adopted())
-    assert composition._approved_definition() is None
+    assert composition._approved_definitions() == []
 
 
 def test_no_environment_value_adds_a_release(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -235,7 +235,7 @@ def test_no_environment_value_adds_a_release(monkeypatch: pytest.MonkeyPatch) ->
         monkeypatch.setenv(name, hashlib.sha256(raw).hexdigest())
     with pytest.raises(relay_admission.ActualReleaseUnapproved):
         relay_admission.load_actual_release(raw, hashlib.sha256(raw).hexdigest())
-    assert relay_admission.APPROVED_ACTUAL_RELEASES == frozenset({RECORD_SHA256})
+    assert hashlib.sha256(raw).hexdigest() not in relay_admission.APPROVED_ACTUAL_RELEASES
 
 
 def test_the_default_application_still_needs_the_operator_handoff_before_any_engine(unreachable,  # noqa: F811

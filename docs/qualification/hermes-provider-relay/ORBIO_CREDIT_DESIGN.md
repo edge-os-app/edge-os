@@ -35,7 +35,7 @@ Bounds in the same files that are **not** model-spend caps, listed so that none 
 - `EDGE_OS_RESEARCH_BUDGET_*` (`core/settings.py:116-120`: provider requests 16, compute seconds 900, Nansen credits 50 per owner) and `EDGE_OS_USAGE_GLOBAL_*` (`:121-125`: 100,000 / 10,000,000 / 10,000). These are **counts** for investigation jobs (history and Nansen report jobs), not money. They are reserved through `usage/quota.py:192-224` and settled through `:227-257`, built in `research/investigation_jobs.py:140-154`, reserved at `:311-312` and `:408`, and shown by `GET /research/budget` (`main.py:448-451` -> `investigation_jobs.py:167-168` -> `quota.view`, `usage/quota.py:260-282`). Interpretation (model) turns do not use them.
 - `cumulative_cap_usd: "0.75"` in `scripts/hermes_interpretation/qualification_identities.py:31`: an identity value of an earlier qualification package, not wired into the application.
 - `MAX_USD_CEILING = Decimal("2.00")` in `execution/original_transaction.py:80` and `execution/inapp_trade_release.py:34`, and the `operator_trade` limits: trade notional, not model spend.
-- The `hermes_relay_composition.py:16-17` docstring: a ledger cap sees one database only. The shared USD 2.00 ceiling still needs an external reconciliation before the first actual call. That obligation stands unchanged.
+- The `hermes_relay_composition.py:16-17` docstring: a ledger cap sees one database only. Superseded on 2026-11-05 by contract A10: one ledger database now serves every route, so the cap check sees OpenRouter and Orbio spend together.
 
 ### 1.2 Where reservation and settlement happen
 

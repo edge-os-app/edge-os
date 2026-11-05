@@ -270,7 +270,9 @@ def _check_actual(route: TransportRoute, actual: ActualRelease, policy: GuardPol
     if (route.endpoint_url, route.max_reply_bytes) != (actual.endpoint_url, actual.release.max_reply_bytes):
         raise ValueError("the ACTUAL route must be the record's endpoint and reply bound")
     extra = dict(policy.required_extra)
-    expected = {"stream": False, "provider": actual.provider}
+    expected: dict[str, Any] = {"stream": False}
+    if actual.provider is not None:
+        expected["provider"] = actual.provider
     if actual.reasoning is not None:
         expected["reasoning"] = actual.reasoning
     if actual.prompt_cache_options is not None:

@@ -30,7 +30,7 @@ Foreign and unknown objects are never killed, removed, mounted or adopted, and a
 id just inspected (a volume by its name) and is then checked; only a stop that ends clean writes `stopped.json`.
 
 ACTUAL is accepted only through `relay_admission.load_actual_release` with its default registry, which names only the
-adopted release record: every other ACTUAL configuration is refused, and the configured image id must equal the release
+adopted release records: every other ACTUAL configuration is refused, and the configured image id must equal the release
 definition's pinned id for this host platform. The operator never reads the provider key; it only
 checks the file is outside the repository and readable by its owner only. No key, key path or environment value is written to the handoff or printed.
 `read_handoff` is the operator's strict reader of its own handoff (format `edge-os.relay-operator-handoff/1`).

@@ -7,9 +7,13 @@ the full reservation as liability. Only `release_unsent` frees a reservation, an
 evidence is recorded by `reconcile`; it never frees liability and never charges twice.
 
 Every write is one transaction that first locks the single settings row, so all writes are serialized across threads
-and processes, as `BEGIN IMMEDIATE` serializes the SQLite file. Caps and prices are frozen in that row at first use. A
-different configured cap or price later refuses new reservations (`LedgerConfigMismatch`) until `change_caps` records an
-explicit decision; existing reservations always settle at the frozen prices.
+and processes, as `BEGIN IMMEDIATE` serializes the SQLite file. Caps are frozen in that row at first use, and they are
+shared: the cap check sums every route's liability. A different configured cap later refuses new reservations
+(`LedgerConfigMismatch`) until `change_caps` records an explicit decision.
+
+Each ledger instance serves one route. A route's token price is frozen at that route's first reservation, and a different
+configured price for that route later refuses new reservations with the same error. A reservation saves its route, and it
+always settles at its own route's frozen price, whichever route the settling process serves.
 
 A reservation names a saved interpretation attempt: its owner and saved request are copied from that row inside the
 reserving transaction. That row is append-only (an immutability trigger rejects updates and deletes), so the copy cannot
@@ -94,10 +98,9 @@ class SpendLimits:
 
 
 @dataclass(frozen=True)
-class _Frozen:
+class _Caps:
     global_cap: int
     owner_cap: int
-    price: TokenPrice
 
 
 def _nano(amount: Decimal, label: str) -> int:
@@ -119,11 +122,14 @@ def _now() -> dt.datetime:
 
 
 class PostgresSpendLedger:
-    def __init__(self, session_factory: Callable[[], Session], limits: SpendLimits) -> None:
-        """No I/O: nothing is read or written until the first call."""
+    def __init__(self, session_factory: Callable[[], Session], limits: SpendLimits, *, route_id: str) -> None:
+        """No I/O: nothing is read or written until the first call. `route_id` is the release record's route."""
+        if not isinstance(route_id, str) or not route_id:
+            raise ValueError("a spend ledger serves one named route")
         self._factory = session_factory
-        self._configured = _Frozen(_nano(limits.global_cap_usd, "the global cap"),
-                                   _nano(limits.owner_cap_usd, "the owner cap"), limits.price)
+        self._route_id = route_id
+        self._price = limits.price
+        self._configured = _Caps(_nano(limits.global_cap_usd, "the global cap"), _nano(limits.owner_cap_usd, "the owner cap"))
 
     @contextmanager
     def _write(self) -> Iterator[Session]:
@@ -132,29 +138,43 @@ class PostgresSpendLedger:
             yield session
             session.commit()
 
-    def _locked(self, session: Session, *, check: bool) -> _Frozen:
-        """Freeze the settings at first use, then lock them: every write waits here, in every process.
+    def _locked(self, session: Session, *, check: bool) -> _Caps:
+        """Freeze the caps at first use, then lock them: every write waits here, in every process.
 
         The cap check relies on PostgreSQL's default READ COMMITTED isolation: each statement after this lock sees every
         write committed before the lock was granted. Under REPEATABLE READ the snapshot could predate the wait.
         """
         configured, now = self._configured, _now()
         session.execute(text(
-            f"INSERT INTO {SCHEMA}.provider_spend_settings VALUES (1, :g, :o, :p, :c, 'configuration-at-first-use', :now, :now) "
+            f"INSERT INTO {SCHEMA}.provider_spend_settings VALUES (1, :g, :o, 'configuration-at-first-use', :now, :now) "
             "ON CONFLICT (settings_id) DO NOTHING"),
-            {"g": configured.global_cap, "o": configured.owner_cap, "now": now,
-             "p": str(configured.price.prompt_usd_per_million), "c": str(configured.price.completion_usd_per_million)})
+            {"g": configured.global_cap, "o": configured.owner_cap, "now": now})
         row = session.execute(text(
-            f"SELECT global_cap_nano_usd, owner_cap_nano_usd, prompt_usd_per_million, completion_usd_per_million, cap_source "
+            f"SELECT global_cap_nano_usd, owner_cap_nano_usd, cap_source "
             f"FROM {SCHEMA}.provider_spend_settings WHERE settings_id = 1 FOR UPDATE")).one()
-        frozen = _Frozen(row[0], row[1], TokenPrice(Decimal(row[2]), Decimal(row[3])))
+        frozen = _Caps(row[0], row[1])
         if check:
-            if frozen.price != configured.price:
-                raise LedgerConfigMismatch("the spend ledger was frozen with different token prices")
-            if not row[4].startswith(OPERATOR_SOURCE) and (frozen.global_cap, frozen.owner_cap) != (
+            self._freeze_route_price(session, now)
+            if not row[2].startswith(OPERATOR_SOURCE) and (frozen.global_cap, frozen.owner_cap) != (
                     configured.global_cap, configured.owner_cap):
                 raise LedgerConfigMismatch("the configured caps differ from the frozen caps; record a cap change first")
         return frozen
+
+    def _freeze_route_price(self, session: Session, now: dt.datetime) -> None:
+        """Under the settings lock: this route's price is frozen at its first use, and it must equal the configured one."""
+        session.execute(text(
+            f"INSERT INTO {SCHEMA}.provider_spend_route_prices VALUES (:r, :p, :c, :now) ON CONFLICT (route_id) DO NOTHING"),
+            {"r": self._route_id, "now": now, "p": str(self._price.prompt_usd_per_million),
+             "c": str(self._price.completion_usd_per_million)})
+        if self._route_price(session, self._route_id) != self._price:
+            raise LedgerConfigMismatch("the spend ledger was frozen with different token prices for this route")
+
+    @staticmethod
+    def _route_price(session: Session, route_id: str) -> TokenPrice:
+        row = session.execute(text(
+            f"SELECT prompt_usd_per_million, completion_usd_per_million FROM {SCHEMA}.provider_spend_route_prices "
+            "WHERE route_id = :r"), {"r": route_id}).one()
+        return TokenPrice(Decimal(row[0]), Decimal(row[1]))
 
     @staticmethod
     def _event(session: Session, attempt: uuid.UUID | None, kind: str, detail: str = "", nano: int | None = None) -> None:
@@ -227,8 +247,8 @@ class PostgresSpendLedger:
         if attempt is None:
             raise AttemptNotSaved("a reservation needs the id of a saved interpretation attempt")
         with self._write() as session:
-            frozen = self._locked(session, check=True)
-            amount, limit = frozen.price.nano_usd(max_input_tokens, max_output_tokens), max_output_tokens
+            frozen, price = self._locked(session, check=True), self._price
+            amount, limit = price.nano_usd(max_input_tokens, max_output_tokens), max_output_tokens
             if session.execute(text(f"SELECT 1 FROM {SCHEMA}.provider_spend_reservations WHERE attempt_id = :a"),
                                {"a": attempt}).first():
                 raise ReservationExists(attempt_id)
@@ -243,14 +263,14 @@ class PostgresSpendLedger:
             fits = owner + amount <= frozen.owner_cap and total + amount <= frozen.global_cap
             if not fits and min_output_tokens is not None:
                 owner_room, global_room = frozen.owner_cap - owner, frozen.global_cap - total
-                fitted = fitted_output_tokens(frozen.price, max_input_tokens, max_output_tokens,
+                fitted = fitted_output_tokens(price, max_input_tokens, max_output_tokens,
                                               min(owner_room, global_room))
                 if fitted is None or fitted < min_output_tokens:
-                    smallest = frozen.price.nano_usd(max_input_tokens, min_output_tokens)
+                    smallest = price.nano_usd(max_input_tokens, min_output_tokens)
                     if owner_room <= global_room:
                         raise CapExceeded(_usd(owner), _usd(smallest), _usd(frozen.owner_cap))
                     raise CapExceeded(_usd(total), _usd(smallest), _usd(frozen.global_cap))
-                amount, limit = frozen.price.nano_usd(max_input_tokens, fitted), fitted
+                amount, limit = price.nano_usd(max_input_tokens, fitted), fitted
             if owner + amount > frozen.owner_cap:
                 raise CapExceeded(_usd(owner), _usd(amount), _usd(frozen.owner_cap))
             if total + amount > frozen.global_cap:
@@ -258,25 +278,25 @@ class PostgresSpendLedger:
             now = _now()
             session.execute(text(
                 f"INSERT INTO {SCHEMA}.provider_spend_reservations VALUES "
-                "(:a, :o, :i, :s, 'RESERVED', :n, NULL, :mi, :mo, :now, :now)"),
+                "(:a, :o, :i, :s, 'RESERVED', :n, NULL, :mi, :mo, :now, :now, :r)"),
                 {"a": attempt, "o": saved[0], "i": saved[1], "s": scope, "n": amount, "mi": max_input_tokens,
-                 "mo": limit, "now": now})
+                 "mo": limit, "now": now, "r": self._route_id})
             self._event(session, attempt, "RESERVED", scope, amount)
         return Reservation(attempt_id, scope, _usd(amount), limit)
 
     def settle(self, attempt_id: str, *, input_tokens: object, output_tokens: object) -> Settlement:
         """Replace the reservation with the exact charge. Unusable usage keeps the whole reservation as liability."""
         with self._write() as session:
-            frozen = self._locked(session, check=False)
+            self._locked(session, check=False)
             attempt, row = self._row(session, attempt_id)
             if row["state"] == "SETTLED":
-                return self._compare_evidence(session, frozen, attempt, row, input_tokens, output_tokens)
+                return self._compare_evidence(session, attempt, row, input_tokens, output_tokens)
             if row["state"] != "RESERVED":
                 raise NotReserved(f"{attempt_id} is {row['state']}")
             if not _valid_usage(input_tokens, output_tokens):
                 self._to_unknown(session, attempt, "INVALID_USAGE")
                 return Settlement("UNKNOWN", _usd(row["reserved"]))
-            return self._charge(session, frozen, attempt, row, input_tokens, output_tokens, "")  # type: ignore[arg-type]
+            return self._charge(session, attempt, row, input_tokens, output_tokens, "")  # type: ignore[arg-type]
 
     def mark_unknown(self, attempt_id: str, *, reason: str) -> None:
         """The outcome is not known. The full reservation stays as liability and its scope stays blocked."""
@@ -302,12 +322,12 @@ class PostgresSpendLedger:
         if not _valid_usage(input_tokens, output_tokens):
             raise ValueError("late evidence needs whole token counts, with at least one input token")
         with self._write() as session:
-            frozen = self._locked(session, check=False)
+            self._locked(session, check=False)
             attempt, row = self._row(session, attempt_id)
             if row["state"] == "SETTLED":
-                return self._compare_evidence(session, frozen, attempt, row, input_tokens, output_tokens)
+                return self._compare_evidence(session, attempt, row, input_tokens, output_tokens)
             kind = "RECONCILED" if row["state"] in ("RESERVED", "UNKNOWN") else "CONFLICTING_EVIDENCE"
-            return self._charge(session, frozen, attempt, row, input_tokens, output_tokens, source, kind)
+            return self._charge(session, attempt, row, input_tokens, output_tokens, source, kind)
 
     def change_caps(self, *, global_cap_usd: Decimal, owner_cap_usd: Decimal, reason: str) -> None:
         """The only way to change a frozen cap: an explicit, recorded decision. Prices never change."""
@@ -328,20 +348,20 @@ class PostgresSpendLedger:
     def _row(session: Session, attempt_id: str) -> tuple[uuid.UUID, dict[str, Any]]:
         attempt = _attempt(attempt_id)
         found = None if attempt is None else session.execute(text(
-            f"SELECT state, reserved_nano_usd, charged_nano_usd FROM {SCHEMA}.provider_spend_reservations "
+            f"SELECT state, reserved_nano_usd, charged_nano_usd, route_id FROM {SCHEMA}.provider_spend_reservations "
             "WHERE attempt_id = :a FOR UPDATE"), {"a": attempt}).first()
         if attempt is None or found is None:
             raise NotReserved(f"{attempt_id} has no reservation")
-        return attempt, {"state": found[0], "reserved": found[1], "charged": found[2]}
+        return attempt, {"state": found[0], "reserved": found[1], "charged": found[2], "route_id": found[3]}
 
     def _to_unknown(self, session: Session, attempt: uuid.UUID, reason: str) -> None:
         session.execute(text(f"UPDATE {SCHEMA}.provider_spend_reservations SET state = 'UNKNOWN', updated_at = :now "
                              "WHERE attempt_id = :a"), {"a": attempt, "now": _now()})
         self._event(session, attempt, "UNKNOWN", reason)
 
-    def _charge(self, session: Session, frozen: _Frozen, attempt: uuid.UUID, row: dict[str, Any], input_tokens: int,
+    def _charge(self, session: Session, attempt: uuid.UUID, row: dict[str, Any], input_tokens: int,
                 output_tokens: int, detail: str, kind: str = "SETTLED") -> Settlement:
-        cost = frozen.price.nano_usd(input_tokens, output_tokens)
+        cost = self._route_price(session, row["route_id"]).nano_usd(input_tokens, output_tokens)
         session.execute(text(f"UPDATE {SCHEMA}.provider_spend_reservations SET state = 'SETTLED', charged_nano_usd = :c, "
                              "updated_at = :now WHERE attempt_id = :a"), {"a": attempt, "c": cost, "now": _now()})
         self._event(session, attempt, kind, detail, cost)
@@ -349,13 +369,13 @@ class PostgresSpendLedger:
             self._event(session, attempt, "OVERRUN", "the charge passed its reservation", cost)
         return Settlement("SETTLED", _usd(cost))
 
-    def _compare_evidence(self, session: Session, frozen: _Frozen, attempt: uuid.UUID, row: dict[str, Any],
+    def _compare_evidence(self, session: Session, attempt: uuid.UUID, row: dict[str, Any],
                           input_tokens: object, output_tokens: object) -> Settlement:
         charged: int = row["charged"]
         if not _valid_usage(input_tokens, output_tokens):
             self._event(session, attempt, "INVALID_EVIDENCE", "unusable usage after settlement")
             return Settlement("SETTLED", _usd(charged))
-        cost = frozen.price.nano_usd(input_tokens, output_tokens)  # type: ignore[arg-type]
+        cost = self._route_price(session, row["route_id"]).nano_usd(input_tokens, output_tokens)  # type: ignore[arg-type]
         if cost == charged:
             self._event(session, attempt, "DUPLICATE_EVIDENCE", "", cost)
             return Settlement("SETTLED", _usd(charged))
