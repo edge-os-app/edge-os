@@ -220,7 +220,6 @@ export const STOP_SCOPE: Record<string, string> = {
   AGENT_WALLET_NETWORK: "This agent's wallet and network",
 };
 
-/** `apps/api/src/edge_os_api/core/request_schemas.py:204` (partition roles). */
 // Reasons an investigation job ends UNAVAILABLE: apps/api/src/edge_os_api/research/investigation_jobs.py:804,814,890.
 // Other reasons are release refusals (:779); they use the caller's fallback, and the raw reason stays in Details.
 export const JOB_UNAVAILABLE_REASON: Record<string, string> = {
@@ -229,6 +228,7 @@ export const JOB_UNAVAILABLE_REASON: Record<string, string> = {
   history_source_unavailable: "The declared source is not available, so nothing was collected. The full reservation is released.",
 };
 
+/** `apps/api/src/edge_os_api/core/request_schemas.py:204` (partition roles). */
 export const PARTITION_ROLE: Record<string, string> = {
   DESCRIPTIVE: "Descriptive",
   TRAINING: "Training",

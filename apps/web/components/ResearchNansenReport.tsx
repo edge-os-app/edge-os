@@ -17,11 +17,12 @@ const STATE_COPY: Record<string, string> = {
   CANCELLED: "Cancelled. Anything already collected is kept.",
   DEADLINE_EXCEEDED: "Stopped at its deadline. Anything already collected is kept.",
   BUDGET_EXHAUSTED: "Refused: your research budget cannot reserve this report. Nothing was collected.",
-  UNAVAILABLE: "The outcome is unknown. It is never run again; the reserved amounts stay held.",
+  UNAVAILABLE: "This job is unavailable. The reason is in Details.",
   FAILED: "Failed. The reserved amounts stay held.",
 };
-// Ends where nothing was sent: everything was released, so no amount is held.
+// The saved reason decides what is true: only an unknown outcome keeps the reserved amounts held.
 const REASON_COPY: Record<string, string> = {
+  nansen_outcome_unknown: "The outcome is unknown. It is never run again; the reserved amounts stay held.",
   nansen_research_unavailable: "Not run: this server no longer has the Nansen connection. Nothing was sent; the reserved amounts were released.",
   nansen_composition_failed: "Not run: the connection could not be prepared. Nothing was sent; the reserved amounts were released.",
 };

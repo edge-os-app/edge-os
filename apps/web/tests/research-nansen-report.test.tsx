@@ -59,6 +59,17 @@ describe("Nansen token report", () => {
     expect(screen.getByRole("button", { name: "Save and reserve this report" })).toBeDisabled();
   });
 
+  it.each([
+    ["nansen_outcome_unknown", "The outcome is unknown. It is never run again; the reserved amounts stay held."],
+    ["operating_release_credential_unavailable", "This job is unavailable. The reason is in Details."],
+  ])("states the true outcome of an unavailable report job: %s", async (reason, sentence) => {
+    mocks.list.mockResolvedValue({ available: true, jobs: [job({ state: "UNAVAILABLE", terminal_reason: reason, nansen_report: null })] });
+    render(<ResearchNansenReport intakeId="intake-1" />);
+    const card = await screen.findByTestId("nansen-job");
+    expect(card).toHaveTextContent(sentence);
+    expect(card).toHaveTextContent(reason);
+  });
+
   it("reopens the saved report with the exact question, findings, gaps and an authored label", async () => {
     mocks.list.mockResolvedValue({ jobs: [job()] });
     mocks.open.mockResolvedValue(record);
