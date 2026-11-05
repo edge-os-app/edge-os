@@ -73,7 +73,7 @@ describe("direct agent health", () => {
     expect(facts.getByTestId("health-last-evaluation")).toHaveTextContent("collected Unknown");
     expect(facts.getByTestId("health-last-attempt")).toHaveTextContent("act-1");
     expect(facts.getByTestId("health-pending")).toHaveTextContent("act-9");
-    expect(facts.getByTestId("health-warnings")).toHaveTextContent("an earlier action is unsettled (1 action)");
+    expect(facts.getByTestId("health-warnings")).toHaveTextContent("1 earlier action not settled");
     expect(facts.getByTestId("health-warnings")).toHaveTextContent("monitoring pending: yes");
     expect(document.body).toHaveTextContent("ACCOUNT_RECOVERY_OPEN_OR_UNKNOWN");
     expect(facts.getByTestId("health-controls")).toHaveTextContent("Stop new entries");
@@ -94,7 +94,7 @@ describe("direct agent health", () => {
     render(<AgentHealthPanel agentId="agent-a" />);
     const warnings = await screen.findByTestId("health-warnings");
     expect(warnings).toHaveTextContent("Recovery warning: none; monitoring pending: no.");
-    expect(warnings).not.toHaveTextContent("unsettled");
+    expect(warnings).not.toHaveTextContent("not settled");
     expect(screen.getByTestId("health-unknowns")).toHaveTextContent(/^None$/);
   });
 

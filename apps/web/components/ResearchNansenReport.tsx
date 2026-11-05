@@ -39,7 +39,7 @@ function evidenceCopy(evidenceClass: string): string {
 }
 
 function releaseLabel(state: NansenReleaseState | null): { text: string; proof: string | null } {
-  if (state === null) return { text: "Reading the Nansen data setup…", proof: null };
+  if (state === null) return { text: "Reading the locked research setup…", proof: null };
   if (state.mode === "legacy") return { text: AUTHORED_LABEL, proof: null };
   if (state.mode === "blocked") return {
     text: "The locked research setup for Nansen reports could not be read. Each saved report keeps its own label.", proof: null };
@@ -156,7 +156,7 @@ export function ResearchNansenReport({ intakeId }: { intakeId: string }) {
       {label.proof ? <Details summary="Details"><p className="mono">{label.proof}</p></Details> : null}
       {!available ? <p className="status stop" data-testid="nansen-unavailable">This server cannot run Nansen reports. Saved reports still open below; a new request is refused before anything is reserved.</p> : null}
       {release?.mode === "blocked" ? <p className="status stop" data-testid="nansen-release-blocked">{release.reason} A new report
-        cannot be requested until the server has a valid data setup. Saved reports still open below.</p> : null}
+        cannot be requested until the server has a valid locked research setup. Saved reports still open below.</p> : null}
       {fixed ? <ReleasedRequest release={fixed} /> : null}
       {legacy ? <>
       <div className="field">

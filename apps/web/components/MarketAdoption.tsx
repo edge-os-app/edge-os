@@ -5,7 +5,7 @@ import { api, ApiError } from "../lib/api";
 import { payloadBindingText, payloadBindingUsable } from "../lib/types";
 import type { DatasetSummary, MarketAdoptionBody } from "../lib/api";
 import { Details } from "./Details";
-import { EVIDENCE_CLASS, plain } from "../lib/labels";
+import { EVIDENCE_CLASS, deliveryCheckText, plain } from "../lib/labels";
 
 interface Props {
   intakeId: string;
@@ -154,13 +154,14 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
             <dt>Market direction</dt><dd>{String(binding.orientation)}</dd>
             <dt>Format versions</dt><dd>{String(binding.event_schema_version)}; {String(binding.amount_conversion_version)}</dd>
             <dt>Evidence check</dt><dd>{plain(EVIDENCE_CLASS, String(binding.evidence_class), "unknown data label")}</dd>
-            <dt>Delivery check</dt><dd data-testid="market-adoption-binding">The saved data {chosen.payload_binding?.status === "PASS" ? "matches the recorded delivery. It does not prove where the data came from." : "does not match the recorded delivery. Do not use it as a market."}</dd>
+            <dt>Delivery check</dt><dd data-testid="market-adoption-binding">{deliveryCheckText(chosen.payload_binding?.status)}</dd>
             <dt>Quote unit</dt><dd className="mono">{chosen.quote_unit}</dd>
           </dl>
           <Details summary="Details"><dl className="kv">
             <dt>Saved data ID</dt><dd className="mono">{chosen.dataset_id}</dd>
             <dt>Source ID</dt><dd className="mono">{chosen.source_id}</dd>
-            <dt>Data label</dt><dd className="mono">{chosen.evidence_class}</dd>
+            <dt>Data label</dt><dd className="mono">{chosen.evidence_class} · {chosen.content_label}</dd>
+            <dt>Evidence check</dt><dd className="mono">binding label {String(binding.evidence_class)}</dd>
             <dt>Route</dt><dd className="mono">{String(binding.data_route)}</dd>
             <dt>Qualification</dt><dd className="mono">{String(binding.qualification)}</dd>
             <dt>Format versions</dt><dd className="mono">{String(binding.event_schema_version)}; {String(binding.amount_conversion_version)}</dd>

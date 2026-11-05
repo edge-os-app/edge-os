@@ -10,7 +10,7 @@ import { ResearchNansenReport } from "./ResearchNansenReport";
 import { declarationRelease, describeRelease, releaseBounds, sourceRelease, transportRelease } from "../lib/research-release";
 import { Details } from "./Details";
 import { plural } from "../lib/plural";
-import { CLAIM_STATUS, DIRECTION, EVIDENCE_CLASS, PARTITION_ROLE, PROVIDER_USE, REPORT_OUTCOME, STATISTICAL_STATUS, VERDICT, plain } from "../lib/labels";
+import { CLAIM_STATUS, DATASET_LIMIT, DIRECTION, EVIDENCE_CLASS, PARTITION_ROLE, PROVIDER_USE, REPORT_OUTCOME, STATISTICAL_STATUS, VERDICT, deliveryCheckText, plain } from "../lib/labels";
 import { deriveHistoryPlan, historyUnknowns } from "../lib/history-declaration";
 import type { HistoryDirection, HistoryPlan } from "../lib/history-declaration";
 
@@ -615,15 +615,20 @@ function TransportFacts({ transport }: { transport: TransportSummary }) {
   const corroboration = transport.corroboration;
   const release = transportRelease(transport);
   const kind = release?.operating_release?.kind;
-  const dataLabel = kind === "ACTUAL" ? "real provider responses" : kind === "STAND_IN"
-    ? "example responses, not provider data" : "recorded responses";
+  const dataLabel = kind === "ACTUAL" ? "real provider responses"
+    : kind === "STAND_IN" || transport.clients === "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT"
+    ? "example responses, not provider data" : "recorded example responses";
+  const chainLimit = transport.chain_id === null ? " The server could not read the chain id."
+    : transport.chain_network ? "" : ` The chain id is ${transport.chain_id}, not Monad.`;
   const chainPhrase = kind === "ACTUAL" ? "chain id checked against provider responses"
     : kind === "STAND_IN" ? "chain id checked against stand-in responses" : "chain id checked against recorded responses";
   return (
     <>
       <p className="muted" data-testid="history-transport">
-        The server read {plural(transport.envio_pages_framed, "saved page")} and checked {plural(corroboration.sample_size, "receipt")}
-        {" "}of {corroboration.population_size}. It found {plural(corroboration.mismatches, "mismatch", "mismatches")}.
+        {corroboration.class === "NONE"
+          ? `The server read ${plural(transport.envio_pages_framed, "saved page")}. The receipt check did not finish, so it shows no match or mismatch.`
+          : `The server read ${plural(transport.envio_pages_framed, "saved page")} and checked ${plural(corroboration.sample_size, "receipt")} of ${corroboration.population_size}. It found ${plural(corroboration.mismatches, "mismatch", "mismatches")}.`}
+        {chainLimit}
         {" "}The source returned {dataLabel}. Results are descriptive and grant no trading permission.
       </p>
       <Details summary="Details">
@@ -848,7 +853,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
             <div className="card" key={item.declaration.record_id}>
               <strong>{item.declaration.content.edge_spec.hypothesis}</strong>
               <span className="muted">{plain(DIRECTION, item.declaration.content.configuration.direction, "Unknown")}</span>
-              <Details summary="Details"><p className="mono">Source {item.declaration.content.configuration.source.source_id}</p></Details>
+              <Details summary="Details"><p className="mono">Source {item.declaration.content.configuration.source.source_id} · direction {item.declaration.content.configuration.direction}</p></Details>
               <button className="btn btn-secondary" type="button" onClick={() => void open(item)} disabled={busy}>Open this rule</button>
             </div>
           ))}
@@ -859,7 +864,7 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
         <div className="stack" data-testid="history-declaration">
           <h4>Rule {selected.declaration.record_id.slice(0, 8)}</h4>
           <dl className="kv">
-            <dt>Saved before data</dt><dd>{selected.declaration.content.declaration_state.startsWith("DECLARED") ? "Yes" : "Unknown"}; provider queries {selected.access_history[0]?.provider_queries ?? 0}</dd>
+            <dt>Saved before data</dt><dd>{selected.declaration.content.declaration_state === "PRE_OUTCOME_DECLARED" ? "Yes" : "Unknown"}; provider queries {selected.access_history[0]?.provider_queries ?? 0}</dd>
             <dt>Reserved per job</dt><dd>{plural(selected.declaration.content.configuration.resource_bounds.provider_requests, "provider request")}, {plural(selected.declaration.content.configuration.resource_bounds.compute_seconds, "compute second")}</dd>
           </dl>
           <Details summary="Details">
@@ -885,10 +890,11 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
               <p className="muted">Provider requests: reserved {job.budget.reserved?.provider_requests ?? 0}, consumed {job.budget.consumed?.provider_requests ?? 0}, released {job.budget.released?.provider_requests ?? 0}, unknown liability {job.budget.unknown_liability?.provider_requests ?? 0}.</p>
               {job.dataset?.transport ? <TransportFacts transport={job.dataset.transport} /> : null}
               {job.dataset ? <p>Saved data {job.dataset.dataset_id.slice(0, 8)}: {plain(VERDICT, job.dataset.summary.verdict.overall, "Unknown verdict")}. Provider use: {plain(PROVIDER_USE, job.dataset.summary.provider_requests_state, "Unknown")}.</p> : null}
+              {job.dataset ? <p data-testid="history-dataset-limits">Limits: {job.dataset.summary.unavailable_states.map((state) => plain(DATASET_LIMIT, state, "unknown limit")).join(", ") || "none"}.</p> : null}
               {job.dataset ? <Details summary="Details"><p className="mono">Data {job.dataset.dataset_id} · status {job.dataset.summary.status} · verdict {job.dataset.summary.verdict.overall} · binding {job.dataset.summary.binding_state}{job.dataset.summary.unavailable_states.length ? ` · ${job.dataset.summary.unavailable_states.join(", ")}` : ""} · provider use {job.dataset.summary.provider_requests_state}</p>
                 <p className="mono">Data label {job.dataset.summary.evidence_class} · {job.dataset.summary.content_label}; source {job.dataset.summary.source_id}</p></Details> : null}
               {job.dataset?.payload_binding && job.dataset.payload_binding.status !== "NOT_REQUIRED"
-                ? <><p data-testid="history-payload-binding" data-status={job.dataset.payload_binding.status}>The saved data {job.dataset.payload_binding.status === "PASS" ? "matches the recorded delivery. It does not prove where the data came from." : "does not match the recorded delivery. Do not use it as a market or a replay."}</p>
+                ? <><p data-testid="history-payload-binding" data-status={job.dataset.payload_binding.status}>{deliveryCheckText(job.dataset.payload_binding.status)}</p>
                   <Details summary="Details"><p className="mono" style={{ overflowWrap: "anywhere" }}>{payloadBindingText(job.dataset.payload_binding)}</p></Details></> : null}
               {RUNNING.has(job.state) && !job.cancel_requested_at ? <button className="btn btn-secondary" type="button" onClick={() => void cancel(job)} disabled={busy}>Cancel this job</button> : null}
               {!RUNNING.has(job.state) && job.state !== "REPORTED" ? <button className="btn btn-secondary" type="button" onClick={() => void startJob(true)} disabled={busy}>Retry as a new job</button> : null}
@@ -917,7 +923,8 @@ export function HistoryInvestigation({ intakeId, interpretationRevisionId }: { i
                 {item.title}{item.available === false ? " (not available on this server)" : ""}</option>)}
             </select>
           </div>
-          {source ? <p className="muted">{plain(EVIDENCE_CLASS, source.evidence_class, "unknown data label")}. Pool <span className="mono">{source.market.pool_address}</span>; window {source.window.start} to {source.window.end}.</p> : null}
+          {source ? <><p className="muted">{plain(EVIDENCE_CLASS, source.evidence_class, "unknown data label")}. Pool <span className="mono">{source.market.pool_address}</span>; window {source.window.start} to {source.window.end}.</p>
+            <Details summary="Details"><p className="mono">{source.evidence_class} · {source.content_label}</p></Details></> : null}
           {sourceRelease(source) ? <><p className="muted" data-testid="history-source-release">The server fixes these limits and keeps the credentials. You cannot change them here.</p><Details summary="Details"><p className="muted mono" style={{ overflowWrap: "anywhere" }}>{describeRelease(sourceRelease(source)!)}</p></Details></> : null}
           {source?.transport ? <>
             <p className="muted" data-testid="history-source-transport">

@@ -23,6 +23,9 @@ export const EVIDENCE_CLASS: Record<string, string> = {
   REAL_SOURCE: "real source data",
   PROVIDER_HISTORY: "provider history",
   PROVIDER_UNQUALIFIED: "unverified provider data",
+  // `apps/api/src/edge_os_api/execution/connected_identity.py:45,245` approval labels.
+  SYNTHETIC_FIXTURE_QUALIFICATION: "example data (not real)",
+  PROVIDER_ACTUAL_QUALIFICATION: "real provider data",
 };
 
 /** `apps/api/src/edge_os_api/nansen_research/report_builder.py:189-211`. */
@@ -44,6 +47,7 @@ export const VERDICT: Record<string, string> = {
 
 /** `apps/api/src/edge_os_api/funding/types.py:44`. */
 export const FLOW_STATE: Record<string, string> = {
+  REQUESTED: "Requested",
   PENDING: "Pending",
   CONFIRMED: "Confirmed",
   FAILED: "Failed",
@@ -125,12 +129,26 @@ export const RECORD_KIND: Record<string, string> = {
   PERMISSION_SNAPSHOT: "Permission",
 };
 
-/** `apps/api/src/edge_os_api/research/history_payload_binding.py:12,63` payload binding states. */
+/** `apps/api/src/edge_os_api/research/history_payload_binding.py:12-13,62` payload binding states. */
 export const PAYLOAD_BINDING_STATUS: Record<string, string> = {
-  PASS: "matches",
-  MISMATCH: "does not match",
-  INCOMPLETE: "is not complete",
-  NOT_REQUIRED: "is not required",
+  PASS: "The saved data matches the recorded delivery. It does not prove where the data came from.",
+  MISMATCH: "The saved data does not match the recorded delivery. Do not use it as a market or a replay.",
+  INCOMPLETE: "The delivery check did not finish. Do not use this data as a market or a replay.",
+  NOT_REQUIRED: "This saved data needs no delivery check.",
+};
+
+/** A response without the field keeps the not-required display, as `payloadBindingText` does. */
+export function deliveryCheckText(status: string | null | undefined): string {
+  return plain(PAYLOAD_BINDING_STATUS, status ?? "NOT_REQUIRED",
+    "The delivery check state is unknown. Do not use this data as a market or a replay.");
+}
+
+/** `apps/api/src/edge_os_api/research/history_dataset.py:320-328` limits of a saved dataset. */
+export const DATASET_LIMIT: Record<string, string> = {
+  SOURCE_UNAVAILABLE: "the source was unavailable",
+  PARTIAL_COVERAGE: "coverage is partial",
+  VERDICT_LIMITED: "the verdict is limited",
+  VERDICT_UNRESOLVED: "the verdict is unresolved",
 };
 
 /** `apps/api/src/edge_os_api/recovery/types.py:66` (operation) — this build uses ENTRY and EXIT. */
@@ -196,8 +214,9 @@ export const STOP_MODE: Record<string, string> = {
   HALT_ALL_SWAPS: "Halt all swaps",
 };
 
-/** `apps/web/lib/financial.ts:170` sends scope AGENT_WALLET_NETWORK for a stop. */
+/** `apps/api/src/edge_os_api/stops/models.py:36` stop scopes. */
 export const STOP_SCOPE: Record<string, string> = {
+  POSITION: "This position",
   AGENT_WALLET_NETWORK: "This agent's wallet and network",
 };
 
@@ -301,6 +320,12 @@ export const EVALUATION_OUTCOME: Record<string, string> = {
   SUBMITTED_REVERTED: "submitted reverted",
   SUBMITTED_UNKNOWN: "submitted, outcome unknown",
   DENIED_UNSENT: "refused, not sent",
+  // `apps/api/src/edge_os_api/execution/worker.py:806-815` queue states saved as the job outcome.
+  REVALIDATION_DENIED: "Refused by revalidation",
+  SUBMISSION_NOT_OWNED: "Not owned",
+  CLAIMED: "Claimed",
+  BREACHED: "Breached",
+  RECONCILE_MISMATCH: "Reconciliation mismatch",
 };
 
 /** `apps/api/src/edge_os_api/accounts/service_projection.py:91` permission_state values. */
@@ -337,7 +362,7 @@ export const HEALTH_FIELD: Record<string, string> = {
 
 /** `apps/api/src/edge_os_api/agent_health/snapshot.py:213-224` warning kinds. */
 export const HEALTH_WARNING_KIND: Record<string, string> = {
-  ACCOUNT_RECOVERY_OPEN_OR_UNKNOWN: "an earlier action is unsettled",
+  ACCOUNT_RECOVERY_OPEN_OR_UNKNOWN: "not settled",
 };
 
 /** `apps/api/src/edge_os_api/nansen_research/models.py:74-94` (holder and flow query values). */

@@ -93,6 +93,40 @@ describe("operating-release source", () => {
     expect(await screen.findByTestId("history-declaration-release")).toHaveTextContent(`stand-in-native/1 · ${"a".repeat(64)}`);
   });
 
+  it("states saved data limits and failed transport checks in the main text", async () => {
+    const user = userEvent.setup();
+    mocks.historySources.mockResolvedValue({ label: "SYNTHETIC", mode: "recorded", sources: [SOURCE] });
+    mocks.historyList.mockResolvedValue({ declarations: [DECLARATION] });
+    const summary = { source_id: SOURCE.source_id, status: "PARTIAL", stop_reason: "TIMEOUT", verdict: { overall: "LIMITED" },
+      binding_state: "UNAVAILABLE_LIMITED_DATA", provider_requests: null, provider_requests_state: "UNKNOWN",
+      evidence_class: "RECORDED_NATIVE_RESPONSE", content_label: "SYNTHETIC_FIXTURE" };
+    const transport = { envio_pages_framed: 1, client_calls: { ENVIO_HYPERSYNC: 1 }, recorded_declarations: [], client_classes: {},
+      corroboration: { class: "NONE", sample_size: 0, population_size: 24, mismatches: 0 }, corroboration_reason: "CHAIN_READ_FAILED" };
+    const job = (id: string, unavailable: string[], facts: Record<string, unknown>) => ({ job_id: id, declaration_id: "rel-decl-1",
+      request_key: id, operation_id: "o", state: "DEADLINE_EXCEEDED", terminal_reason: null,
+      budget: { reserved: { provider_requests: 7 }, consumed: { provider_requests: 7 } }, deadline_at: "",
+      cancel_requested_at: null, created_at: "", events: [], report: null,
+      dataset: { dataset_id: `ds-${id}`, content_sha256: "s", hashes_verified: {}, payload_binding: null,
+        summary: { ...summary, unavailable_states: unavailable }, transport: { ...transport, ...facts } } });
+    mocks.jobs.mockResolvedValue({ jobs: [
+      job("job-a", ["SOURCE_UNAVAILABLE", "PARTIAL_COVERAGE"], { chain_id: null, chain_network: null, clients: "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT" }),
+      job("job-b", [], { chain_id: 1, chain_network: null })] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await user.click(await screen.findByRole("button", { name: "Open this rule" }));
+    const limits = await screen.findAllByTestId("history-dataset-limits");
+    expect(limits[0]).toHaveTextContent("the source was unavailable, coverage is partial");
+    expect(limits[1]).toHaveTextContent("Limits: none");
+    for (const line of limits) expect(line.closest("details")).toBeNull();
+    const facts = screen.getAllByTestId("history-transport");
+    expect(facts[0]).toHaveTextContent("not provider data");
+    expect(facts[0]).toHaveTextContent("The receipt check did not finish");
+    expect(facts[0]).not.toHaveTextContent("0 receipts");
+    expect(facts[0]).toHaveTextContent("could not read the chain id");
+    expect(facts[1]).toHaveTextContent("recorded example responses");
+    expect(facts[1]).not.toHaveTextContent("The source returned recorded responses");
+    expect(facts[1]).toHaveTextContent("The chain id is 1, not Monad.");
+  });
+
   it("labels a release job's transport facts as stand-in responses with hashes kept", async () => {
     const user = userEvent.setup();
     mocks.historySources.mockResolvedValue({ label: "SYNTHETIC", mode: "recorded", sources: [SOURCE] });
@@ -138,11 +172,16 @@ describe("operating-release source", () => {
           provider_requests_state: "MEASURED_CLIENT_CALLS", evidence_class: "RELEASE_STAND_IN_RESPONSE",
           content_label: "SYNTHETIC_FIXTURE" },
         payload_binding: binding(status, reason) } });
-    mocks.jobs.mockResolvedValue({ jobs: [job("job-pass", "PASS", null), job("job-bad", "MISMATCH", "BUCKET_2:PAYLOAD_DIFFERS")] });
+    mocks.jobs.mockResolvedValue({ jobs: [job("job-pass", "PASS", null), job("job-bad", "MISMATCH", "BUCKET_2:PAYLOAD_DIFFERS"),
+      job("job-part", "INCOMPLETE", "BINDING_EVENT_MISSING")] });
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
     await user.click(await screen.findByRole("button", { name: "Open this rule" }));
     const lines = await screen.findAllByTestId("history-payload-binding");
-    expect(lines.map((line) => line.getAttribute("data-status"))).toEqual(["PASS", "MISMATCH"]);
+    expect(lines.map((line) => line.getAttribute("data-status"))).toEqual(["PASS", "MISMATCH", "INCOMPLETE"]);
+    expect(lines[2]).toHaveTextContent("did not finish");
+    expect(lines[2]).not.toHaveTextContent("does not match");
+    expect(screen.getByTestId("history-declaration")).toHaveTextContent("Saved before dataYes");
+    expect(screen.getByText(/direction DESCRIPTIVE/).closest("details")).not.toBeNull();
     expect(lines[0]).toHaveTextContent("matches the recorded delivery");
     expect(document.body).toHaveTextContent("not provider provenance");
     expect(lines[1]).toHaveTextContent("does not match the recorded delivery");

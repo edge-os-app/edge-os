@@ -139,6 +139,7 @@ describe("agent authority", () => {
     await userEvent.click(screen.getByRole("button", { name: "Review exact terms" }));
     const summary = await screen.findByTestId("consent-review");
     expect(summary).toHaveTextContent("Allocation500 monad-testnet:10143/0x2222");
+    expect(screen.getByText(/purpose TRIAL/).closest("details")).not.toBeNull();
     const terms = mocks.review.mock.calls[0][1];
     expect(terms.allowances.map((item: { name: string }) => item.name)).toEqual(["quote_input", "base_inventory", "per_action_gas", "per_exit_gas"]);
     expect(terms.allocation[0].asset_id).toBe(QUOTE.asset_id);
@@ -153,9 +154,34 @@ describe("agent authority", () => {
   });
 
   it("explains why no action can run when the build has no qualified route", async () => {
-    mocks.consent.mockResolvedValue(consent({ activation: { state: "UNAVAILABLE", reason: "activation unavailable", evidence_class: null } }));
+    mocks.consent.mockResolvedValue(consent({ activation: { state: "UNAVAILABLE", reason: "ACTIVATION_UNAVAILABLE", evidence_class: null } }));
     render(<AgentAuthority agentId="agent-a" />);
     expect(await screen.findByTestId("activation-state")).toHaveTextContent("No approved trade route");
+  });
+
+  it("states the real cause when the terms do not cover the prepared trade", async () => {
+    mocks.consent.mockResolvedValue(consent({ activation: { state: "UNAVAILABLE", reason: "CONTROLLED_TERMS_MISMATCH", evidence_class: null } }));
+    render(<AgentAuthority agentId="agent-a" />);
+    const line = await screen.findByTestId("activation-state");
+    expect(line).toHaveTextContent("do not cover");
+    expect(line).not.toHaveTextContent("No approved trade route");
+  });
+
+  it("claims no route fact for an unmapped refusal and keeps the reason in Details", async () => {
+    mocks.consent.mockResolvedValue(consent({ activation: { state: "UNAVAILABLE", reason: "release refused: new text", evidence_class: null } }));
+    render(<AgentAuthority agentId="agent-a" />);
+    const line = await screen.findByTestId("activation-state");
+    expect(line).toHaveTextContent("Unavailable. The reason is in Details.");
+    expect(line).not.toHaveTextContent("No approved trade route");
+    expect(screen.getByText(/release refused: new text/).closest("details")).not.toBeNull();
+  });
+
+  it("names the example qualification label instead of an unknown label", async () => {
+    mocks.consent.mockResolvedValue(consent({ activation: { state: "FIXTURE_QUALIFIED", reason: null, evidence_class: "SYNTHETIC_FIXTURE_QUALIFICATION" } }));
+    render(<AgentAuthority agentId="agent-a" />);
+    const line = await screen.findByTestId("activation-state");
+    expect(line).toHaveTextContent("example data (not real)");
+    expect(line).not.toHaveTextContent("unknown data label");
   });
 });
 
@@ -231,6 +257,7 @@ describe("deposit reference recovery", () => {
       transaction_reference: null, reason: null, created_at: "t", updated_at: "t" }] }));
     await userEvent.click(screen.getByRole("button", { name: "Check saved funding" }));
     await waitFor(() => expect(screen.getByTestId("funding-flows")).toHaveTextContent(saved));
+    expect(screen.getByText(/flow state PENDING/).closest("details")).not.toBeNull();
     mocks.prepareDeposit.mockResolvedValueOnce({});
     await userEvent.type(screen.getByLabelText(/Amount in base units/), "7");
     await userEvent.click(screen.getByRole("button", { name: "Save deposit plan" }));

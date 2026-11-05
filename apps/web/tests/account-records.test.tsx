@@ -428,6 +428,19 @@ describe("direct account records", () => {
     expect(window.location.hash).toBe("#/research/intake-record-id?source=source-record-id");
   });
 
+  it("keeps the raw type of an unsupported source in Details", async () => {
+    const context: AgentContextRecord = { owner_id: "owner-a", agent_id: "agent-a", memory_version: 3, state: "ACTIVE", entries: [
+      { context_id: "lesson-other", kind: "LESSON", status: "ADOPTED", text: "Other source.", source_refs: ["other-source-id"] },
+    ] };
+    mocks.resolveSource.mockResolvedValueOnce({ source_record_id: "other-source-id", source_record_type: "ExoticRecord",
+      destination_type: "UNSUPPORTED", destination_record_id: null });
+    const user = userEvent.setup();
+    render(<AgentContext record={context} onChange={vi.fn()} onClose={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Open source record" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("no detail view");
+    expect(screen.getByText(/source type ExoticRecord/).closest("details")).not.toBeNull();
+  });
+
   it("keeps saved context visible when a source cannot be owner-verified", async () => {
     const context: AgentContextRecord = { owner_id: "owner-a", agent_id: "agent-a", memory_version: 3, state: "ACTIVE", entries: [
       { context_id: "lesson-private", kind: "LESSON", status: "ADOPTED", text: "Saved context remains unchanged.", source_refs: ["foreign-source-id"] },

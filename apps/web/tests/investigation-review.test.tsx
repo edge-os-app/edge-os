@@ -427,6 +427,7 @@ describe("recorded-history investigation", () => {
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
     await screen.findByRole("option", { name: SOURCE.title }); // the catalog loads after the label renders
     await user.selectOptions(screen.getByLabelText("Saved source"), SOURCE.source_id);
+    expect(screen.getByText(/RECORDED_RESPONSE · SYNTHETIC_FIXTURE/).closest("details")).not.toBeNull();
     const save = screen.getByRole("button", { name: "Save history rule" });
     expect(save).toBeDisabled();
     await user.type(screen.getByLabelText("Your hypothesis in your own words"), "Rises continue");
@@ -630,7 +631,7 @@ describe("native recorded source (SOURCE-LOCAL)", () => {
     expect(option).toBeDisabled();
     await user.click(await screen.findByRole("button", { name: "Open this rule" }));
     const facts = await screen.findByTestId("history-transport");
-    expect(facts).toHaveTextContent("recorded responses");
+    expect(facts).toHaveTextContent("not provider data");
     expect(document.body).toHaveTextContent("authored responses served on this server");
     expect(document.body).toHaveTextContent("HttpEnvioQueryClient");
     expect(facts).not.toHaveTextContent("Native recording, replayed locally");

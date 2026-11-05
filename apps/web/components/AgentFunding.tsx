@@ -139,6 +139,7 @@ export function AgentFunding({ agentId }: { agentId: string }) {
         <ul data-testid="funding-flows">{view.flows.map((flow) => <li key={flow.flow_id}>
           {plain(FLOW_STATE, flow.state, "Unknown")} · {formatRaw(flow.asset.raw, flow.asset.decimals)} <span className="mono">{flow.asset.asset_id}</span> · reference {flow.reference}
           {flow.transaction_reference && <> · observed event <span className="mono">{flow.transaction_reference}</span></>}
+          <Details summary="Details"><p className="mono">flow state {flow.state}</p></Details>
         </li>)}</ul>
         {view.deposit_balances.length > 0 && <dl className="kv" data-testid="funding-credited">
           {view.deposit_balances.map((balance) => <Fragment key={balance.asset_id}>

@@ -35,15 +35,18 @@ export function AgentContext({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [sourceError, setSourceError] = useState("");
+  const [unsupportedSourceType, setUnsupportedSourceType] = useState("");
   const [pendingIntent, setPendingIntent] = useState<ContextIntent | null>(null);
   const [notice, setNotice] = useState("");
 
   async function openSource(sourceId: string) {
     setSourceError("");
+    setUnsupportedSourceType("");
     try {
       const source = await resolveContextSource(sourceId);
       if (source.destination_type === "UNSUPPORTED" || !source.destination_record_id) {
         setSourceError("This saved source type has no detail view. Your context is unchanged.");
+        setUnsupportedSourceType(source.source_record_type);
         return;
       }
       if (source.destination_type === "RESEARCH") {
@@ -119,6 +122,7 @@ export function AgentContext({
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
       {sourceError && <p role="alert">{sourceError}</p>}
+      {unsupportedSourceType && <Details summary="Details"><p className="mono">source type {unsupportedSourceType}</p></Details>}
       {pendingIntent && <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={busy}
         onClick={() => void reconcile()}>{busy ? "Checking saved context…" : "Check saved context"}</button>}
       {!record.entries.length && <p>No saved context entries.</p>}

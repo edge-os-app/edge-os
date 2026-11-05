@@ -8,7 +8,7 @@ import type { SpotReplayBody, SpotReplayDependency, SpotReplayRecord, SpotReplay
 import { ReplayResult } from "./ReplayResult";
 import { Details } from "./Details";
 import { plural } from "../lib/plural";
-import { EVIDENCE_CLASS, plain } from "../lib/labels";
+import { EVIDENCE_CLASS, deliveryCheckText, plain } from "../lib/labels";
 
 type FieldName = "entry" | "exit";
 type Series = SpotReplayDependency["series"];
@@ -181,7 +181,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
       {dataset ? (
         <div className="stack" data-testid="spot-replay-history-source" style={{ overflowWrap: "anywhere" }}>
           <p className="status stop">Simulated fills on {datasetClass === "provider" ? "saved provider history" : datasetClass === "synthetic" ? "saved recorded history" : "saved history"} {dataset.dataset_id.slice(0, 8)}: {plain(EVIDENCE_CLASS, dataset.evidence_class, "unknown data label")}. {datasetClass === "provider" ? "These prices are saved provider history, not synthetic." : datasetClass === "synthetic" ? "These prices are synthetic recorded responses, not observed market history." : `${dataset.evidence_class} is an unrecognized saved evidence class, so this view claims neither observed history nor synthetic prices.`} The replay runs only if this revision uses the same market. Data after {dataset.readable_until} is protected and cannot be replayed.</p>
-          <p data-testid="spot-replay-history-binding">The saved data {dataset.payload_binding?.status === "PASS" ? "matches the recorded delivery. It does not prove where the data came from." : "does not match the recorded delivery. Do not use it as a replay."}</p>
+          <p data-testid="spot-replay-history-binding">{deliveryCheckText(dataset.payload_binding?.status)}</p>
           <Details summary="Details"><dl className="kv">
             <dt>Saved data ID</dt><dd className="mono">{dataset.dataset_id}</dd>
             <dt>Data label</dt><dd className="mono">{dataset.evidence_class} · {dataset.content_label}</dd>

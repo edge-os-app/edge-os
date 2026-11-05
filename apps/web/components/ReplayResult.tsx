@@ -52,7 +52,7 @@ export function ReplayResult({ replay }: Props) {
     <section className={`status ${result.status === "COMPLETE" ? "ok" : "stop"}`} data-testid="spot-replay-result"
       aria-labelledby="spot-replay-result-title">
       <h3 id="spot-replay-result-title">Saved replay: {result.status === "COMPLETE" ? "complete" : "unavailable"}</h3>
-      {delayed ? <p data-testid="spot-replay-delayed-note"><strong>Delayed hypothetical replay (300 s decision delay)</strong>. Each fill uses the next bucket&rsquo;s stale historical close, a hypothetical price, not a tradable quote.</p> : null}
+      {delayed ? <p data-testid="spot-replay-delayed-note"><strong>Delayed hypothetical replay (300 s decision delay)</strong>. Each fill uses the next period&rsquo;s stale historical close, a hypothetical price, not a tradable quote.</p> : null}
       {result.reason ? <><p role="alert">{result.reason.detail}</p><Details summary="Details"><p className="mono">{result.reason.code} at {result.reason.path}</p></Details></> : null}
       <section className="spot-replay-summary" aria-labelledby="spot-replay-summary-title">
         <h4 id="spot-replay-summary-title">Replay summary</h4>

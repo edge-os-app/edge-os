@@ -52,7 +52,7 @@ function Facts({ health }: { health: AgentHealth }) {
       <dt>Pending reconciliation</dt>
       <dd data-testid="health-pending">{"action_ids" in canonical ? (canonical.action_ids.join(", ") || "None") + " (producer unsettled queue)" : "Unknown"}</dd>
       <dt>Separate warnings</dt>
-      <dd data-testid="health-warnings">Recovery warning: {recovery.action_ids.length === 0 ? "none" : `${plain(HEALTH_WARNING_KIND, recovery.kind, "a warning is recorded")} (${plural(recovery.action_ids.length, "action")})`}; monitoring pending: {monitoring.pending ? "yes" : "no"}.</dd>
+      <dd data-testid="health-warnings">Recovery warning: {recovery.action_ids.length === 0 ? "none" : `${plural(recovery.action_ids.length, "earlier action")} ${plain(HEALTH_WARNING_KIND, recovery.kind, "with an unknown warning")}`}; monitoring pending: {monitoring.pending ? "yes" : "no"}.</dd>
       <dt>Stops and removal</dt>
       <dd data-testid="health-controls">{[...health.controls.stops.map((s) => `${s.mode === "STOP_NEW_ENTRIES" ? "Stop new entries" : s.mode === "HALT_ALL_SWAPS" ? "Halt all swaps" : "Stop"} since ${s.created_at}`),
         ...health.controls.removals.map((r) => `Removal ${plain(REMOVAL_STATE, r.state, "Unknown")} (requested ${r.requested_at}, updated ${r.updated_at})`)].join("; ") || "None"}</dd>

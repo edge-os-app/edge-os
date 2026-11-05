@@ -14,6 +14,8 @@ const ACTIVATION_COPY: Record<string, string> = {
   TERMS_INCOMPLETE: "A required limit is missing, so no action can run.",
   TERMS_ASSET_MISMATCH: "A limit names an asset outside this version's market, so no action can run.",
   AGENT_NOT_READY: "The agent has no confirmed wallet bound to an exact saved version.",
+  CONTROLLED_TERMS_MISMATCH: "The adopted terms do not cover the prepared trade, so no action can run.",
+  OPERATIONAL_QUALIFICATION_UNAVAILABLE: "A required proof for the locked setup is missing, so no action can run.",
 };
 
 const LIMITS = [
@@ -132,7 +134,7 @@ export function AgentAuthority({ agentId }: { agentId: string }) {
             ? `Example qualification (${plain(EVIDENCE_CLASS, activation.evidence_class, "unknown data label")}). Example actions can run under these exact terms; this is not live authority.`
             : activation?.state === "CONTROLLED_QUALIFIED"
             ? `One controlled action is qualified (${plain(EVIDENCE_CLASS, activation.evidence_class, "unknown data label")}) under its exact setup. Exit and recurring execution are unavailable.`
-            : ACTIVATION_COPY[activation?.reason ?? ""] ?? (activation?.state === "UNAVAILABLE" ? ACTIVATION_COPY.ACTIVATION_UNAVAILABLE : "Unavailable. The reason is in Details.")}
+            : ACTIVATION_COPY[activation?.reason ?? ""] ?? "Unavailable. The reason is in Details."}
         </p>
         {activation ? <Details summary="Details"><p className="mono">state {activation.state} · reason {activation.reason ?? "none"} · data label {activation.evidence_class ?? "none"}</p></Details> : null}
         {controlledMode && !controlled && <p>No prepared trade is available. You cannot review terms yet.</p>}
@@ -225,7 +227,7 @@ function ReviewSummary({ review }: { review: ConsentReview }) {
     <div data-testid="consent-review">
       <h3>Reviewed permission</h3>
       <dl className="kv">
-                <dt>Purpose</dt><dd>{terms.operating_purpose === "TRIAL" ? "Trial" : terms.operating_purpose === "ONGOING" ? "Ongoing" : "Unknown"}{terms.trial_objective ? ` — ${terms.trial_objective}` : ""}</dd>
+        <dt>Purpose</dt><dd>{terms.operating_purpose === "TRIAL" ? "Trial" : terms.operating_purpose === "ONGOING" ? "Ongoing" : "Unknown"}{terms.trial_objective ? ` — ${terms.trial_objective}` : ""}</dd>
         {terms.allocation.map((amount) => <Fragment key={`alloc-${amount.asset_id}`}><dt>Allocation</dt>
           <dd>{formatRaw(amount.raw, amount.decimals)} <span className="mono">{amount.asset_id}</span></dd></Fragment>)}
         {terms.allowances.map((term) => <Fragment key={term.name}><dt>{term.name}</dt>
@@ -240,7 +242,7 @@ function ReviewSummary({ review }: { review: ConsentReview }) {
       </dl>
       {review.content.unknowns && review.content.unknowns.length > 0 &&
         <p className="muted">Unknown at review: {review.content.unknowns.join(", ")}</p>}
-      <Details summary="Details"><p className="mono">review hash {review.review_hash} · route {terms.route.adapter} · evidence code {terms.evidence.status}</p></Details>
+      <Details summary="Details"><p className="mono">review hash {review.review_hash} · purpose {terms.operating_purpose} · route {terms.route.adapter} · evidence code {terms.evidence.status}</p></Details>
     </div>
   );
 }

@@ -77,6 +77,19 @@ describe("recorded market adoption", () => {
     expect(screen.getByText(/cannot supply a market/)).toBeInTheDocument();
   });
 
+  it("does not reject usable data without a binding and keeps both data labels in Details", async () => {
+    const user = userEvent.setup();
+    mocks.datasets.mockResolvedValue({ datasets: [qualified] });
+    renderAdoption();
+    await user.selectOptions(await screen.findByLabelText("Saved data"), qualified.dataset_id);
+    const line = screen.getByTestId("market-adoption-binding");
+    expect(line).toHaveTextContent("needs no delivery check");
+    expect(line).not.toHaveTextContent("Do not use");
+    const raw = screen.getByText(/RECORDED_RESPONSE · SYNTHETIC_FIXTURE/);
+    expect(raw.closest("details")).not.toBeNull();
+    expect(screen.getByText(/binding label SYNTHETIC_FIXTURE/).closest("details")).not.toBeNull();
+  });
+
   it("never carries the old amount: both amounts start empty and adoption stays disabled", async () => {
     const user = userEvent.setup();
     renderAdoption();

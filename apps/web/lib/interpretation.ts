@@ -164,7 +164,7 @@ export function readingOf(facts: ReadingFacts): FirstReading | null {
 
 const READING_TAG: Record<string, string> = {
   UNREAD: "Saved, not read yet", RUNNING_OR_STOPPED: "Attempt not finished", READ_NOT_SAVED: "Read, not saved yet",
-  UNAVAILABLE: "Interpreter did not answer", MALFORMED_OUTPUT: "Answer not usable", OUTCOME_UNKNOWN: "Outcome unknown",
+  UNAVAILABLE: "Research agent did not answer", MALFORMED_OUTPUT: "Answer not usable", OUTCOME_UNKNOWN: "Outcome unknown",
 };
 
 function describeReading(facts: ReadingFacts): Omit<FirstReading, "tag"> | null {

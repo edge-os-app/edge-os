@@ -16,7 +16,7 @@ export function InterpretationAttempts({ attempts, modelCost = null, lateResults
       {modelCost && <p data-testid="model-cost-total">Total model cost: {describeModelCost(modelCost)}</p>}
       <details open={open} data-testid="attempts">
         <summary>Research agent reads ({attempts.length})</summary>
-        <ol className="attempts" aria-label="Interpreter attempts for this request, oldest first">
+        <ol className="attempts" aria-label="Research agent attempts for this request, oldest first">
           {attempts.map((a) => {
             const rows: [string, string][] = [
               ["Result", ATTEMPT_STATUS_LABEL[a.status] + (a.error_class ? ` (${a.error_class})` : "")],

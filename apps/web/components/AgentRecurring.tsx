@@ -152,7 +152,7 @@ export function AgentRecurring({ agentId }: { agentId: string }) {
               {item.evaluation ? ` · evaluation ${item.evaluation.outcome}${item.evaluation.reason ? ` (${item.evaluation.reason})` : ""} · data label ${item.evaluation.evidence_class ?? "none"}` : ""}
               {item.submission ? ` · submission ${item.submission.state}/${item.submission.outcome ?? "none"}` : ""}
             </li>)}
-            {view?.deployment ? <li className="mono">permission hash {view.deployment.identity.consent_hash} · end reason {view.deployment.end_reason ?? "none"} · wait {view.wait_reason ?? "none"} · no next reason {view.producer?.no_next_reason ?? "none"}</li> : null}
+            {view?.deployment ? <li className="mono">deployment state {view.deployment.state} · permission hash {view.deployment.identity.consent_hash} · end reason {view.deployment.end_reason ?? "none"} · wait {view.wait_reason ?? "none"} · no next reason {view.producer?.no_next_reason ?? "none"}</li> : null}
           </ul></Details>
           {deployment.state === "ACTIVE" && <div className="btn-row">
             <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={busy || uncertain}

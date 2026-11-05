@@ -55,6 +55,7 @@ describe("recurring operation", () => {
     expect(key).toMatch(/^ui-/);
     expect(await screen.findByText("Recurring operation started. The scheduler saves each slot's evaluation.")).toBeDefined();
     expect(await screen.findByTestId("recurring-deployment")).toHaveAttribute("data-state", "ACTIVE");
+    expect(screen.getByText(/deployment state ACTIVE/).closest("details")).not.toBeNull();
   });
 
   it("shows the durable scheduler record: next slot, missed slots, input and submission times", async () => {

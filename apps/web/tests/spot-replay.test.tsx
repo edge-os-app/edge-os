@@ -415,6 +415,21 @@ describe("RG05 replay on a saved recorded history", () => {
     expect(screen.getByTestId("spot-replay-history-binding")).toHaveTextContent("matches the recorded delivery");
   });
 
+  it("does not tell the user to avoid usable data that needs no delivery check", async () => {
+    const user = userEvent.setup();
+    const unbound = { ...dataset, dataset_id: "d0000000-0000-4000-8000-000000000004", source_id: "recorded-unbound/1",
+      payload_binding: bindingState("NOT_REQUIRED", null) };
+    mocks.datasets.mockResolvedValue({ datasets: [unbound] });
+    render(<SpotReplayPanel strategy={{ strategy_id: "strategy-1", data_inputs: ["price"], sizing: { amount: "50", unit: "QUOTE:0xbb" }, warmup_buckets: 3,
+      cost_assumptions: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" } } as never}
+      strategyId="strategy-1" strategyRevisionId="22222222-2222-4222-8222-222222222222" />);
+    await screen.findByRole("option", { name: /recorded-unbound/ });
+    await user.selectOptions(screen.getByLabelText("Price data"), unbound.dataset_id);
+    const line = screen.getByTestId("spot-replay-history-binding");
+    expect(line).toHaveTextContent("needs no delivery check");
+    expect(line).not.toHaveTextContent("Do not use");
+  });
+
   it("reopens a saved replay with its saved binding lineage and profile identity", () => {
     const saved = structuredClone(replay);
     (saved.content.inputs as unknown as Record<string, unknown>).profile_sha256 = "p".repeat(64);
