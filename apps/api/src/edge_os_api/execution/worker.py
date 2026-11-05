@@ -424,13 +424,14 @@ class ConnectedExecution:
                 DecisionRow.wallet_id == agent.wallet_id, DecisionRow.network_id == agent.network_id,
                 DecisionRow.decision_basis == OWNER_TRIGGER)).all()
             decision_ids = [row.decision_id for row in decisions]
+            # Jobs first: a finished job writes no later intent, so a stale read cannot look like a release.
+            jobs = session.execute(select(EvaluationJobRow.decision_id, EvaluationJobRow.state).where(
+                EvaluationJobRow.owner_id == job.owner_id, EvaluationJobRow.decision_id.in_(decision_ids))).all()
             intents = session.execute(select(IntentRow.decision_id, IntentRow.action_id).where(
                 IntentRow.owner_id == job.owner_id, IntentRow.agent_id == agent.agent_id,
                 IntentRow.wallet_id == agent.wallet_id, IntentRow.network_id == agent.network_id,
                 or_(IntentRow.mandate_id == str(consent.adoption_id), IntentRow.decision_id.in_(decision_ids)))).all()
             action_ids = [row.action_id for row in intents]
-            jobs = session.execute(select(EvaluationJobRow.decision_id, EvaluationJobRow.state).where(
-                EvaluationJobRow.owner_id == job.owner_id, EvaluationJobRow.decision_id.in_(decision_ids))).all()
             queue = dict(session.execute(select(QueueRow.action_id, QueueRow.state).where(
                 QueueRow.owner_id == job.owner_id, QueueRow.action_id.in_(action_ids))).tuples().all())
             submitted = session.execute(select(SubmissionAttemptRow.action_id).where(

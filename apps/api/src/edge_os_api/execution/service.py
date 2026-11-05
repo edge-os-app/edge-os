@@ -72,6 +72,7 @@ from edge_os_api.execution.types import (
     utc_iso,
 )
 
+_OWNER_TRIGGER_ATTEMPT_INDEX = "uq_execution_decisions_owner_trigger"
 _PRIORITY = {"EXIT": 0, "ENTRY": 1}
 _TERMINAL_QUEUE = {
     "SUBMITTED_CONFIRMED", "SUBMITTED_REVERTED", "REVALIDATION_DENIED",
@@ -226,8 +227,10 @@ class ExecutionService:
                 session.add(row)
                 session.commit()
                 return _decision_view(row)
-            except IntegrityError:
+            except IntegrityError as error:
                 session.rollback()
+                if error.orig.diag.constraint_name != _OWNER_TRIGGER_ATTEMPT_INDEX:
+                    raise
                 return None
             except SQLAlchemyError:
                 session.rollback()

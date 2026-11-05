@@ -118,6 +118,26 @@ def test_an_expired_unsent_action_does_not_use_up_the_action(case, monkeypatch):
     assert len(case.acquired) == 1
 
 
+def test_a_restart_after_the_decision_commit_resumes_the_same_attempt(case, monkeypatch):
+    real, left = ConnectedExecution._save_outcome, [1]
+
+    def stopped(self, *args, **kwargs):
+        if left[0] > 0:
+            left[0] -= 1
+            raise RuntimeError("fake stop after the decision commit")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(ConnectedExecution, "_save_outcome", stopped)
+    scheduled = ff.schedule(case.client, case.headers, case.agent, "stopped-after-decision")
+    with pytest.raises(RuntimeError):
+        run_job(case.client, scheduled.json())
+    assert attempts(case) == [1]
+    resumed = run_job(case.client, scheduled.json())
+    assert resumed["state"] == "SUBMITTED", resumed
+    assert attempts(case) == [1]
+    assert len(case.acquired) == 1
+
+
 def test_a_running_attempt_keeps_the_action_used(case, monkeypatch):
     stop_before_submit_once(monkeypatch)
     scheduled = ff.schedule(case.client, case.headers, case.agent, "still-running")
