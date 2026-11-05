@@ -650,12 +650,12 @@ test("a failed load of a saved request keeps the retry button, focus and a visib
   await expect(page.locator("button.card-open").first()).toBeVisible();
   await page.route("**/v1/research/requests/*", (route) => route.request().method() === "GET" ? route.fulfill(unavailable) : route.continue());
   await page.locator("button.card-open").first().click();
-  await expect(alerts(page)).toContainText("could not be loaded");
+  await expect(alerts(page)).toContainText("A required service is unavailable. Retry later.");
   const retry = page.getByRole("button", { name: "Try again" });
   await retry.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("button", { name: "Try again", exact: true })).toBeVisible(); // the second attempt has finished (and failed)
-  await expect(alerts(page)).toContainText("could not be loaded"); // a second failure is still shown, never a silent state
+  await expect(alerts(page)).toContainText("A required service is unavailable. Retry later."); // a second failure is still shown, never a silent state
   await expect(page.getByRole("button", { name: "Try again", exact: true })).toBeFocused();
   await page.unroute("**/v1/research/requests/*");
   await page.keyboard.press("Enter");
