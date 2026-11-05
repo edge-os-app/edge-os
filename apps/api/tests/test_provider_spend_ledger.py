@@ -384,6 +384,30 @@ def test_a_ledger_that_was_never_used_has_no_budget_rather_than_a_zero_one(clean
     assert model_budget(None) is None
 
 
+def test_before_first_use_the_view_is_the_configured_limits_and_nothing_is_written(clean_spend, client, owner_a) -> None:
+    from sqlalchemy import text
+
+    from edge_os_api.research.interpretation_workflow import model_budget
+    from edge_os_api.research.provider_spend_ledger import spend_view
+    with clean_spend() as session:
+        view = spend_view(session, owner_of(client, owner_a), limits(global_cap="0.20", owner_cap="0.12"))
+        assert session.execute(text("SELECT count(*) FROM usage_local.provider_spend_settings")).scalar_one() == 0
+    assert view == {"owner_cap": 120_000_000, "global_cap": 200_000_000, "settled": 0, "held": 0, "held_calls": 0,
+                    "available": 120_000_000}
+    assert model_budget(view) == {"unit": "CREDIT", "state": "SET", "owner_cap_credit": "0.12", "global_cap_credit": "0.2",
+                                  "settled_credit": "0", "held_credit": "0", "held_calls": 0, "available_credit": "0.12",
+                                  "over_credit": "0"}
+
+
+def test_after_first_use_the_view_keeps_the_frozen_caps_not_the_configured_ones(clean_spend, attempts, client, owner_a) -> None:
+    from edge_os_api.research.provider_spend_ledger import PostgresSpendLedger, spend_view
+    spend = PostgresSpendLedger(clean_spend, limits(global_cap="0.20", owner_cap="0.12"))
+    spend.reserve(attempts.new(owner_a), scope="s1", **BOUNDS)
+    with clean_spend() as session:
+        view = spend_view(session, owner_of(client, owner_a), limits(global_cap="9", owner_cap="9"))
+    assert (view["owner_cap"], view["global_cap"], view["held_calls"]) == (120_000_000, 200_000_000, 1)
+
+
 def test_held_liability_is_used_budget_and_the_smaller_headroom_is_what_is_available(
         clean_spend, attempts, client, owner_a, owner_b) -> None:
     from edge_os_api.research.provider_spend_ledger import PostgresSpendLedger, spend_view
@@ -411,7 +435,7 @@ def test_held_liability_is_used_budget_and_the_smaller_headroom_is_what_is_avail
     from edge_os_api.research.interpretation_workflow import model_budget
     assert model_budget(mine) == {"unit": "CREDIT", "state": "SET", "owner_cap_credit": "0.12", "global_cap_credit": "0.2",
                                   "settled_credit": "0.0074285", "held_credit": "0.054848", "held_calls": 1,
-                                  "available_credit": "0.0577235"}
+                                  "available_credit": "0.0577235", "over_credit": "0"}
 
 
 def test_a_call_over_the_global_headroom_is_refused_against_the_global_cap(clean_spend, attempts, owner_a, owner_b) -> None:

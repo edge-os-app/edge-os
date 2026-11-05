@@ -105,7 +105,7 @@ describe("the saved request page", () => {
 
 const heldUnknown: AttemptSpend = { state: "UNKNOWN", charge_usd: "0.17216" };
 const budget: ModelBudget = { unit: "CREDIT", state: "SET", owner_cap_credit: "2", global_cap_credit: "2", settled_credit: "0.02784",
-  held_credit: "0.17216", held_calls: 1, available_credit: "1.8" };
+  held_credit: "0.17216", held_calls: 1, available_credit: "1.8", over_credit: "0" };
 
 describe("CREDIT amounts", () => {
   it("prints the exact stored decimal with the CREDIT unit and refuses anything else", () => {
@@ -136,6 +136,20 @@ describe("CREDIT amounts", () => {
     expect(describeModelBudget({ ...budget, available_credit: "not-a-number" })).toBe("unknown");
     expect(describeModelBudget({ ...budget, held_calls: 1.5 })).toBe("unknown");
     expect(describeModelBudget({ unit: "CREDIT", state: "UNKNOWN" })).toBe("unknown"); // could not be read: not 0, not "not set"
+  });
+
+  it("shows the configured limits before the ledger's first use", () => {
+    expect(describeModelBudget({ ...budget, settled_credit: "0", held_credit: "0", held_calls: 0, available_credit: "2" })).toBe(
+      "available 2 of 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT");
+  });
+
+  it("shows 0 available and the overrun amount after a charge passes the cap", () => {
+    const over = { ...budget, settled_credit: "2.05", held_credit: "0", held_calls: 0, available_credit: "0", over_credit: "0.05" };
+    expect(describeModelBudget(over)).toBe(
+      "0 available, over by 0.05 CREDIT; cap 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT");
+    expect(describeModelBudget({ ...over, held_credit: "0.17216", held_calls: 1 })).toBe(
+      "0 available, over by 0.05 CREDIT; cap 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT; 0.17216 CREDIT held by 1 call of unknown cost");
+    expect(describeModelBudget({ ...over, over_credit: "not-a-number" })).toBe("unknown");
   });
 });
 
@@ -169,5 +183,18 @@ describe("CREDIT on the attempts list", () => {
     render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
     expect(await screen.findByTestId("model-credit")).toHaveTextContent("Model spend: spent 0.0074285 CREDIT (USD 0.0074285)");
     expect(screen.getByTestId("model-budget")).toHaveTextContent("Model budget: available 1.8 of 2 CREDIT");
+  });
+
+  it("shows the budget on a saved request with no attempts, and no cost lines", () => {
+    render(<InterpretationAttempts attempts={[]} modelCost={cost(null, 0, 0)} modelBudget={{ ...budget, held_credit: "0", held_calls: 0, available_credit: "2" }} lateResults={[]} open={false} />);
+    expect(screen.getByTestId("model-budget")).toHaveTextContent(
+      "Model budget: available 2 of 2 CREDIT, shared by all your studies and limited by the global ceiling of 2 CREDIT");
+    expect(screen.queryByTestId("model-credit")).toBeNull();
+    expect(screen.queryByTestId("attempts")).toBeNull();
+  });
+
+  it("shows nothing with no attempts when the application reports no model cost", () => {
+    const { container } = render(<InterpretationAttempts attempts={[]} lateResults={[]} open={false} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });

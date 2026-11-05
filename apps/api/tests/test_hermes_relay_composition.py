@@ -574,6 +574,15 @@ def saved(app_client: TestClient, attempt_id: str) -> dict[str, Any]:
     return dict(zip(keys, row))
 
 
+def test_before_first_use_the_application_budget_view_is_the_releases_configured_limits(mounted, client, owner_a) -> None:
+    app, _serving = mounted("budget", StandInJob(mounted.relay))
+    owner = client.get("/v1/me", headers=owner_a).json()["user_id"]
+    with client.app.state.session_factory() as session:
+        view = app.budget_view(session, owner)
+    assert view == {"owner_cap": 150_000_000, "global_cap": 300_000_000, "settled": 0, "held": 0, "held_calls": 0,
+                    "available": 150_000_000}
+
+
 def test_a_saved_request_is_sent_once_settled_at_the_snapshot_price_reopened_elsewhere_and_denied_to_another_owner(
         mounted, owner_a, owner_b) -> None:
     job = StandInJob(mounted.relay, (reply_record(), RETURNED))

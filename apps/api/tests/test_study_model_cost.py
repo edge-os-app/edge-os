@@ -108,4 +108,4 @@ def test_a_budget_past_its_cap_shows_nothing_available_and_exact_amounts() -> No
             "held_calls": 0, "available": -1}  # an OVERRUN charge passed the cap
     assert model_budget(view) == {"unit": "CREDIT", "state": "SET", "owner_cap_credit": "2", "global_cap_credit": "2",
                                   "settled_credit": "2.000000001", "held_credit": "0", "held_calls": 0,
-                                  "available_credit": "0"}
+                                  "available_credit": "0", "over_credit": "0.000000001"}

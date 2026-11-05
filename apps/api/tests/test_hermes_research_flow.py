@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import uuid
+from decimal import Decimal
+from functools import partial
 from typing import Any
 
 import pytest
@@ -984,6 +986,24 @@ def test_an_application_with_no_spend_ledger_shows_no_budget_rather_than_a_zero_
     bundle = create(make_client(CaseRunner(turn_result(case("concrete-thesis")["provider"]))), owner_a,
                     "concrete-thesis").json()
     assert "model_budget" in bundle and bundle["model_budget"] is None  # "budget not set", never 0
+
+
+def test_before_the_ledger_is_used_the_saved_result_shows_the_configured_limits(env, migrated, owner_a) -> None:
+    from edge_os_api.research.provider_spend_ledger import SpendLimits, TokenPrice, spend_view
+    limits = SpendLimits(Decimal("0.20"), Decimal("0.12"), TokenPrice(Decimal("1"), Decimal("1")))
+    settings = load_settings({**env, "EDGE_OS_INTERPRETER": "hermes_local"})
+    with TestClient(create_app(settings, hermes_runner=CaseRunner(turn_result(case("concrete-thesis")["provider"])),
+                               spend_view=partial(spend_view, limits=limits))) as client:
+        with client.app.state.session_factory() as session:
+            session.execute(text("TRUNCATE usage_local.provider_spend_events, usage_local.provider_spend_reservations, "
+                                 "usage_local.provider_spend_settings"))
+            session.commit()
+        created = create(client, owner_a, "concrete-thesis")
+
+    assert created.status_code == 201
+    assert created.json()["model_budget"] == {"unit": "CREDIT", "state": "SET", "owner_cap_credit": "0.12",
+                                              "global_cap_credit": "0.2", "settled_credit": "0", "held_credit": "0",
+                                              "held_calls": 0, "available_credit": "0.12", "over_credit": "0"}
 
 
 def test_a_spend_view_without_the_hermes_interpreter_and_its_runner_is_refused(env, migrated) -> None:
