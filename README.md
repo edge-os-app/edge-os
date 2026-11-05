@@ -2,11 +2,11 @@
 
 **Ask a trading question in plain English. Find out if the idea holds before you risk money. Then let an agent trade it only inside limits you sign.**
 
-Edge OS is a research and trading app for meme-token traders on Monad. A research agent checks your idea against on-chain history and saves what it found. Rules that hold up can be replayed on past prices. When you go live, an agent with its own wallet trades on Kuru, and the wallet permission you approved decides what it may do.
+Edge OS is an operating system for trading edges. It starts with meme-token traders on Monad. A research agent checks your idea against on-chain history and saves what it found. Rules that hold up can be replayed on past prices. When you go live, an agent with its own wallet trades on Kuru, and the wallet permission you approved decides what it may do.
 
 [Pitch video](https://vimeo.com/1235649955) · [Technical demo](https://vimeo.com/1235648532) · [Live app](https://edgeos.fun)
 
-Built for the Monad hackathon, Onchain Finance & Trading track.
+First built for the Monad hackathon, Onchain Finance & Trading track.
 
 ## The problem
 
@@ -124,9 +124,10 @@ Edge OS starts with one job done well: short-term momentum and reversal ideas on
 | --- | --- |
 | Hackathon release | Research agent with Envio, QuickNode and Nansen data. Saved reports that can say no. Exact strategy rules with a plain-English summary. Replay on past prices. One Privy wallet per agent. Signed trading permissions with limits, expiry and stops. Agents that trade on Kuru while you are offline. Agents, Positions and Funds views, with chat over the same records. |
 | Next | A small catalog of research add-ons you can switch on per agent. Wider data coverage and more strategy templates, guided by trader sessions. |
-| After that | Liquidity providers. The same research, rules and replay for questions about pool fees, inventory and rebalancing. Live LP management once the spot path is stable. |
+| After that | Liquidity providers. The same research, rules and replay for questions about pool fees, inventory and rebalancing. This starts as research, with no live path. |
+| Later, no dates yet | Perp traders and prediction market traders, after legal review. Strategy creators who publish or license proved strategies, and users who inspect, copy or fund them. Other chains and venues. |
 
-Edge OS will not offer copy trading, a strategy marketplace, perpetuals, cross-chain trading or any promise of profit.
+Edge OS makes no promise of profit.
 
 ## Run it locally
 
