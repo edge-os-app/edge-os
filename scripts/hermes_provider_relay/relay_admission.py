@@ -38,6 +38,7 @@ APPROVED_ACTUAL_RELEASES: frozenset[str] = frozenset({"3fa94dd73e53a72ca8af6cda9
 ACTUAL_BODY_FIELDS = frozenset({"model", "messages", "stream", "response_format", "provider", "reasoning", "max_tokens",
                                 "session_id", "prompt_cache_options"})
 REQUIRED_BODY_FIELDS = frozenset({"model", "messages", "stream", "provider", "max_tokens", "session_id"})
+UNROUTED_BODY_FIELDS = REQUIRED_BODY_FIELDS - {"provider"}  # a record whose `provider` is null: the body must not carry it
 RECORD_FIELDS = frozenset({"release_id", "route_id", "kind", "approval", "destination", "ca_bundle_sha256", "model",
                            "provider", "max_tokens", "reasoning", "response_format_sha256", "stream", "allowed_fields",
                            "max_request_bytes", "max_reply_bytes", "timeout_seconds", "price_snapshot_sha256"})
@@ -46,6 +47,7 @@ RECORD_FIELDS = frozenset({"release_id", "route_id", "kind", "approval", "destin
 PROMPT_CACHE_OPTIONS = {"mode": "explicit"}
 # Every routing field this code can check. A record names its routing fields; one outside this set is refused, never
 # ignored, and none of these may be left out. A provider with other routing fields needs a reviewed change here.
+# Null, and only null, means the record names no routing: the seller routes, and nothing on the wire says how.
 KNOWN_ROUTING_FIELDS = frozenset({"only", "allow_fallbacks", "require_parameters", "data_collection", "max_price"})
 SHA256 = re.compile(r"[0-9a-f]{64}")
 _LOADING = threading.local()  # set only inside load_actual_release: the one way to build an ACTUAL release
@@ -257,7 +259,7 @@ class ActualRelease:
     release: RelayRelease
     destination: ProviderDestination
     ca_bundle_sha256: str
-    provider: dict[str, Any]
+    provider: dict[str, Any] | None  # None: the record names no routing, so the body carries none
     reasoning: dict[str, Any] | None
     response_format_sha256: str
     allowed_fields: frozenset[str]
@@ -281,7 +283,7 @@ class ActualRelease:
             return "body_not_json"
         if set(value) - self.allowed_fields:
             return "body_field_not_permitted"
-        required = REQUIRED_BODY_FIELDS | ({"reasoning"} if self.reasoning is not None else set()) | (
+        required = (UNROUTED_BODY_FIELDS if self.provider is None else REQUIRED_BODY_FIELDS) | ({"reasoning"} if self.reasoning is not None else set()) | (
             {"response_format"} if "response_format" in self.allowed_fields else set()) | (
             {"prompt_cache_options"} if self.prompt_cache_options is not None else set())
         if required - set(value):
@@ -293,7 +295,7 @@ class ActualRelease:
         if (type(value["max_tokens"]) is not int or type(limit) is not int  # noqa: E721
                 or not 1 <= limit <= self.release.max_output_tokens or value["max_tokens"] != limit):
             return "body_max_tokens_mismatch"
-        if _canonical(value["provider"]) != _canonical(self.provider):
+        if self.provider is not None and _canonical(value["provider"]) != _canonical(self.provider):
             return "body_routing_mismatch"
         if _canonical(value.get("reasoning")) != _canonical(self.reasoning):
             return "body_reasoning_mismatch"
@@ -344,6 +346,20 @@ class ActualRelease:
                       "generation_id": generation if isinstance(generation, str) and len(generation) <= 200 else None}
 
 
+def _check_routing(routing: Any) -> None:
+    """A named routing object: every known field, one provider, no fallbacks, required parameters and a price limit."""
+    if not isinstance(routing, dict):
+        raise ValueError("routing must be an object")
+    if set(routing) - KNOWN_ROUTING_FIELDS:
+        raise ValueError(f"unknown routing field refused: {sorted(set(routing) - KNOWN_ROUTING_FIELDS)}")
+    if KNOWN_ROUTING_FIELDS - set(routing):
+        raise ValueError(f"routing field missing: {sorted(KNOWN_ROUTING_FIELDS - set(routing))}")
+    if (not isinstance(routing["only"], list)
+            or len(routing["only"]) != 1 or not isinstance(routing["only"][0], str) or routing["allow_fallbacks"] is not False
+            or routing["require_parameters"] is not True or not isinstance(routing["max_price"], dict)):
+        raise ValueError("routing must name one provider, no fallbacks, required parameters and a price limit")
+
+
 def load_actual_release(raw: bytes, expected_sha256: str, *, approved: frozenset[str] | None = None) -> ActualRelease:
     """The ACTUAL release in `raw`, only if its bytes have this SHA256 and that SHA256 is approved.
 
@@ -369,19 +385,12 @@ def load_actual_release(raw: bytes, expected_sha256: str, *, approved: frozenset
     _sha256(approval["sha256"], "approval sha256")
     destination = ProviderDestination(**value["destination"])  # the approved record's own; nothing else is reachable
     routing = value["provider"]
-    if not isinstance(routing, dict):
-        raise ValueError("routing must be an object")
-    if set(routing) - KNOWN_ROUTING_FIELDS:
-        raise ValueError(f"unknown routing field refused: {sorted(set(routing) - KNOWN_ROUTING_FIELDS)}")
-    if KNOWN_ROUTING_FIELDS - set(routing):
-        raise ValueError(f"routing field missing: {sorted(KNOWN_ROUTING_FIELDS - set(routing))}")
-    if (not isinstance(routing["only"], list)
-            or len(routing["only"]) != 1 or not isinstance(routing["only"][0], str) or routing["allow_fallbacks"] is not False
-            or routing["require_parameters"] is not True or not isinstance(routing["max_price"], dict)):
-        raise ValueError("routing must name one provider, no fallbacks, required parameters and a price limit")
+    if routing is not None:
+        _check_routing(routing)
     fields = value["allowed_fields"]
-    if (not isinstance(fields, list) or not set(fields) <= ACTUAL_BODY_FIELDS or not REQUIRED_BODY_FIELDS <= set(fields)
-            or len(set(fields)) != len(fields)):
+    if (not isinstance(fields, list) or not set(fields) <= ACTUAL_BODY_FIELDS
+            or not (REQUIRED_BODY_FIELDS if routing is not None else UNROUTED_BODY_FIELDS) <= set(fields)
+            or (routing is None and "provider" in fields) or len(set(fields)) != len(fields)):
         raise ValueError("allowed_fields must be the frozen request fields")
     reasoning = value["reasoning"]
     if reasoning is not None and not isinstance(reasoning, dict):

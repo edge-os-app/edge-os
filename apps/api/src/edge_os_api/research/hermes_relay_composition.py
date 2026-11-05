@@ -106,6 +106,9 @@ class RelayApplicationDefinition:
     # The smallest output limit worth a call (relay CONTRACT A9). None, the default: every call reserves and grants the
     # record's full limit. A value lets a reservation lower one call's limit to the remaining budget, never below it.
     min_output_tokens: int | None = None
+    # Who sells the calls of a record that names no routing, as its price snapshot names them. A routed record's
+    # seller is its one routed provider, so a routed definition names none.
+    seller: str | None = None
 
 
 # The one approved release, hermes-first-call-1. Its record and price bytes are the frozen files in
@@ -156,8 +159,10 @@ class HermesApplicationRelease:
     def unchanged(self) -> bool:
         """The owned request shape is still exactly the bound one and still the record's."""
         required = self.policy.required_extra
+        routing = self.actual.provider
         return (hmac.compare_digest(hashlib.sha256(_canonical(required)).hexdigest(), self.required_extra_sha256)
-                and _canonical(required["provider"]) == _canonical(self.actual.provider)
+                and ("provider" not in required if routing is None
+                     else _canonical(required["provider"]) == _canonical(routing))
                 and _canonical(required.get("reasoning")) == _canonical(self.actual.reasoning)
                 and _canonical(required.get("prompt_cache_options")) == _canonical(self.actual.prompt_cache_options))
 
@@ -193,20 +198,26 @@ def _owned(value: Any) -> Any:
     return json.loads(_canonical(value))
 
 
-def _rate(snapshot: Mapping[str, Any], name: str, ceiling: Any) -> Decimal:
-    """A snapshot rate: a positive plain decimal string, at most the routing `max_price` for the same tokens."""
+def _plain_rate(snapshot: Mapping[str, Any], name: str) -> Decimal:
+    """A snapshot rate: a positive plain decimal string."""
     value = snapshot[name]
     if not isinstance(value, str) or not DECIMAL.fullmatch(value) or Decimal(value) <= 0:
         raise _Refused(f"{name} must be a positive plain decimal string")
+    return Decimal(value)
+
+
+def _rate(snapshot: Mapping[str, Any], name: str, ceiling: Any) -> Decimal:
+    """A snapshot rate of a routed record: a plain rate, at most the routing `max_price` for the same tokens."""
+    value = _plain_rate(snapshot, name)
     if isinstance(ceiling, bool) or not isinstance(ceiling, (int, float, str)):
         raise _Refused("routing max_price must give a number for prompt and completion")
     try:
         limit = Decimal(str(ceiling))
     except InvalidOperation as error:
         raise _Refused("routing max_price must give a number for prompt and completion") from error
-    if not limit.is_finite() or Decimal(value) > limit:
+    if not limit.is_finite() or value > limit:
         raise _Refused(f"{name} is above the routing max_price")
-    return Decimal(value)
+    return value
 
 
 def _price(definition: RelayApplicationDefinition, actual: ActualRelease, expected_sha256: str) -> TokenPrice:
@@ -216,7 +227,14 @@ def _price(definition: RelayApplicationDefinition, actual: ActualRelease, expect
     snapshot = _strict_object(definition.price_snapshot, "price snapshot")
     if set(snapshot) != SNAPSHOT_FIELDS:
         raise _Refused("the price snapshot must have exactly the frozen fields")
-    if snapshot["model"] != actual.release.model or snapshot["provider"] != actual.provider["only"][0]:
+    if snapshot["model"] != actual.release.model:
+        raise _Refused("the price snapshot must price the record's model at its one routed provider")
+    if actual.provider is None:  # no routing object on the wire, so no ceiling to compare with: the rates are the seller's
+        if snapshot["provider"] != definition.seller:
+            raise _Refused("the price snapshot must price the record's model at its named seller")
+        return TokenPrice(_plain_rate(snapshot, "prompt_usd_per_million"),
+                          _plain_rate(snapshot, "completion_usd_per_million"))
+    if snapshot["provider"] != actual.provider["only"][0]:
         raise _Refused("the price snapshot must price the record's model at its one routed provider")
     ceiling = actual.provider["max_price"]
     return TokenPrice(_rate(snapshot, "prompt_usd_per_million", ceiling.get("prompt")),
@@ -274,9 +292,15 @@ def bind_release(definition: RelayApplicationDefinition) -> HermesApplicationRel
         actual = load_actual_release(definition.record, definition.record_sha256)
     except ValueError as error:  # includes ActualReleaseUnapproved
         raise _Refused(f"the release record is refused: {type(error).__name__}") from error
+    routing = actual.provider
+    if (routing is None) != isinstance(definition.seller, str) or definition.seller == "":
+        raise _Refused("a release names a seller exactly when its record names no routing")
+    seller = routing["only"][0] if routing is not None else definition.seller
     record = _strict_object(definition.record, "release record")
     price = _price(definition, actual, record["price_snapshot_sha256"])
-    extra: dict[str, Any] = {"stream": False, "provider": _owned(actual.provider)}
+    extra: dict[str, Any] = {"stream": False}
+    if routing is not None:
+        extra["provider"] = _owned(routing)
     if actual.reasoning is not None:
         extra["reasoning"] = _owned(actual.reasoning)
     if actual.prompt_cache_options is not None:
@@ -304,7 +328,7 @@ def bind_release(definition: RelayApplicationDefinition) -> HermesApplicationRel
     approval = record["approval"]
     config = HermesInterpreterConfig(
         model=release.model, route=release.route_id, max_output_tokens=release.max_output_tokens, runtime_label="LIVE",
-        live_release=LiveRelease(release_id=release.release_id, provider=actual.provider["only"][0],
+        live_release=LiveRelease(release_id=release.release_id, provider=seller,
                                  model=release.model, budget_usd=str(definition.global_cap_usd),
                                  recorded_in=approval["path"]))
     return HermesApplicationRelease(
