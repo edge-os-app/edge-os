@@ -27,7 +27,7 @@ from egress_gateway import MAX_TUNNEL_SECONDS, host_name_refusal
 
 __all__ = ["APPROVED_ACTUAL_RELEASES", "CHANNEL_FIELDS", "ActualRelease", "ActualReleaseUnapproved", "ProviderDestination",
            "RelayRelease", "RelaySubject", "channel_refusal", "grant_refusal", "issue_grant", "load_actual_release",
-           "parse_channel_message"]
+           "parse_channel_message", "saved_reply_headers"]
 
 RELEASE_KINDS = ("AUTHORED", "ACTUAL")  # an ACTUAL release exists only through an approved record (CONTRACT A6)
 # SHA256 of approved release records. Every other ACTUAL record fails closed. hermes-first-call-1:
@@ -45,6 +45,12 @@ RECORD_FIELDS = frozenset({"release_id", "route_id", "kind", "approval", "destin
 # Optional: a record that names it sends exactly this value (automatic prompt caching off, no breakpoint); a record
 # without it keeps the earlier shape, where the body must not carry the field.
 PROMPT_CACHE_OPTIONS = {"mode": "explicit"}
+# Optional: a record that names it must name exactly these reply headers, and the relay saves them on `finished.json`. A
+# record without it saves no response header, and its `finished.json` keeps the earlier shape. Nothing else is recordable.
+RECORDABLE_REPLY_HEADERS = ("X-Orbio-Balance", "X-Orbio-Ignored-Parameters")
+MAX_REPLY_HEADER_CHARS = 256
+PROVIDER_KEY_PREFIX = "sk-orbio-"
+OPTIONAL_RECORD_FIELDS = frozenset({"prompt_cache_options", "recorded_reply_headers"})
 # Every routing field this code can check. A record names its routing fields; one outside this set is refused, never
 # ignored, and none of these may be left out. A provider with other routing fields needs a reviewed change here.
 # Null, and only null, means the record names no routing: the seller routes, and nothing on the wire says how.
@@ -265,6 +271,7 @@ class ActualRelease:
     allowed_fields: frozenset[str]
     timeout_seconds: int
     prompt_cache_options: dict[str, Any] | None = None  # PROMPT_CACHE_OPTIONS when the record names it
+    recorded_reply_headers: tuple[str, ...] = ()  # RECORDABLE_REPLY_HEADERS when the record names them
 
     @property
     def endpoint_url(self) -> str:
@@ -346,6 +353,22 @@ class ActualRelease:
                       "generation_id": generation if isinstance(generation, str) and len(generation) <= 200 else None}
 
 
+def _header_refusal(value: str, key: str) -> str | None:
+    if key in value or PROVIDER_KEY_PREFIX in value.lower():
+        return "secret"
+    if len(value) > MAX_REPLY_HEADER_CHARS:
+        return "too_long"
+    return None if all(" " <= char <= "~" for char in value) else "not_printable"
+
+
+def saved_reply_headers(named: tuple[str, ...], given: Mapping[str, str], key: str) -> dict[str, dict[str, str]]:
+    """What `finished.json` keeps of a reply's headers: the named ones only, and for a refused value only the reason."""
+    present = {name: given[name] for name in named if name in given}
+    refusals = {name: _header_refusal(value, key) for name, value in present.items()}
+    return {"reply_headers": {name: value for name, value in present.items() if refusals[name] is None},
+            "reply_headers_refused": {name: reason for name, reason in refusals.items() if reason is not None}}
+
+
 def _check_routing(routing: Any) -> None:
     """A named routing object: every known field, one provider, no fallbacks, required parameters and a price limit."""
     if not isinstance(routing, dict):
@@ -373,7 +396,7 @@ def load_actual_release(raw: bytes, expected_sha256: str, *, approved: frozenset
     if sha not in (APPROVED_ACTUAL_RELEASES if approved is None else approved):
         raise ActualReleaseUnapproved("this release record is not an approved ACTUAL release")
     value = _strict_json(raw)
-    if not isinstance(value, dict) or set(value) - {"prompt_cache_options"} != RECORD_FIELDS:
+    if not isinstance(value, dict) or set(value) - OPTIONAL_RECORD_FIELDS != RECORD_FIELDS:
         raise ValueError("the release record must have exactly the frozen fields")
     if value["kind"] != "ACTUAL" or value["stream"] is not False:
         raise ValueError("the release record must be kind ACTUAL with stream false")
@@ -400,6 +423,8 @@ def load_actual_release(raw: bytes, expected_sha256: str, *, approved: frozenset
         raise ValueError('prompt_cache_options must be exactly {"mode": "explicit"}, with no breakpoint or other field')
     if ("prompt_cache_options" in value) != ("prompt_cache_options" in fields):
         raise ValueError("allowed_fields must name prompt_cache_options exactly when the record sets it")
+    if "recorded_reply_headers" in value and value["recorded_reply_headers"] != list(RECORDABLE_REPLY_HEADERS):
+        raise ValueError(f"recorded_reply_headers must be exactly {list(RECORDABLE_REPLY_HEADERS)}")
     _bounded(value["timeout_seconds"], "timeout_seconds", 1, int(MAX_TUNNEL_SECONDS))  # the gateway closes at 120 s
     _LOADING.record = True
     try:
@@ -409,4 +434,5 @@ def load_actual_release(raw: bytes, expected_sha256: str, *, approved: frozenset
         _LOADING.record = False
     return ActualRelease(sha, release, destination, value["ca_bundle_sha256"], routing, reasoning,
                          value["response_format_sha256"], frozenset(fields), value["timeout_seconds"],
-                         dict(PROMPT_CACHE_OPTIONS) if "prompt_cache_options" in value else None)
+                         dict(PROMPT_CACHE_OPTIONS) if "prompt_cache_options" in value else None,
+                         RECORDABLE_REPLY_HEADERS if "recorded_reply_headers" in value else ())

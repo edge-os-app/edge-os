@@ -18,7 +18,7 @@ from edge_os_api.core.settings import load_settings
 from edge_os_api.research import hermes_relay_composition as composition
 from edge_os_api.research.hermes_relay_composition import open_hermes_application
 from edge_os_api.research.hermes_transport_mount import MountRefused
-from test_hermes_relay_composition import approve, definition, unreachable  # noqa: F401 - fixtures by name
+from test_hermes_relay_composition import approve, definition, handoff, unreachable, write_handoff  # noqa: F401 - fixtures by name
 from test_hosted_deployment import (  # noqa: F401 - shared record helpers
     DEPLOYMENT, approve as approve_deployment, production_env, record as deployment_record,
     write_record as write_deployment,
@@ -43,6 +43,12 @@ def hosted_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
 def open_with(settings: Any, root: Path) -> Any:
     return open_hermes_application(settings, handoff_path=root / "operator" / "handoff.json",
                                    handoff_sha256="0" * 64, run_id="hosted-unit")
+
+
+def open_selecting(settings: Any, root: Path, given: Any) -> Any:
+    """Through a handoff that selects `given`: the deployment check runs on the selected release."""
+    path, sha = write_handoff(root / "operator", handoff(root, given))
+    return open_hermes_application(settings, handoff_path=path, handoff_sha256=sha, run_id="hosted-unit")
 
 
 def no_engine(*_args: Any, **_kwargs: Any) -> None:
@@ -83,7 +89,7 @@ def test_production_refuses_a_record_naming_another_relay_release(
     monkeypatch.setattr(composition.relay_admission, "APPROVED_ACTUAL_RELEASES", frozenset({given.record_sha256}))
     settings = hosted_settings(tmp_path, monkeypatch, relay_id=OTHER_ID, relay_sha=given.record_sha256)
     with pytest.raises(MountRefused, match="does not approve"):
-        open_with(settings, tmp_path)
+        open_selecting(settings, tmp_path, given)
 
 
 def test_production_refuses_a_record_with_another_relay_record_hash(
@@ -93,7 +99,7 @@ def test_production_refuses_a_record_with_another_relay_record_hash(
     monkeypatch.setattr(composition.relay_admission, "APPROVED_ACTUAL_RELEASES", frozenset({given.record_sha256}))
     settings = hosted_settings(tmp_path, monkeypatch, relay_id="rel-app-synthetic-1", relay_sha="f" * 64)
     with pytest.raises(MountRefused, match="does not approve"):
-        open_with(settings, tmp_path)
+        open_selecting(settings, tmp_path, given)
 
 
 def test_local_admission_is_unchanged(unreachable, approve, tmp_path: Path) -> None:  # noqa: F811

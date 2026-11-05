@@ -18,7 +18,7 @@ import socket
 import ssl
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from relay_admission import ProviderDestination
 
@@ -41,6 +41,7 @@ class SentReply:
     content_type: str
     body: bytes  # at most max_reply_bytes + 1 bytes: one more than allowed shows that the reply was too large
     content_encoding: str = ""  # none is asked for; any value means the reply is refused, never decoded
+    headers: dict[str, str] = field(default_factory=dict)  # only the names the caller asked for; absent means not sent
 
 
 def connect_head(destination: ProviderDestination, attempt_id: str, expires_at: float) -> bytes:
@@ -97,7 +98,8 @@ class _GatewayConnection(http.client.HTTPSConnection):
 
 
 def send_once(destination: ProviderDestination, *, ca_file: str, key: str, body: bytes, deadline: float,
-              max_reply_bytes: int, gateway_socket: str | None = None, attempt_id: str | None = None) -> SentReply:
+              max_reply_bytes: int, gateway_socket: str | None = None, attempt_id: str | None = None,
+              reply_headers: tuple[str, ...] = ()) -> SentReply:
     """One request with ONE total deadline (a `time.time()` value) for connecting, sending and reading.
 
     A watchdog shuts the socket down `CUT_LEAD` seconds before the deadline, so a provider that drips its headers or
@@ -153,7 +155,8 @@ def send_once(destination: ProviderDestination, *, ca_file: str, key: str, body:
         if expired.is_set() or time.time() >= end:
             raise ReplyLost("the deadline passed before the reply was complete")
         return SentReply(response.status, response.getheader("content-type") or "", bytes(data),
-                         response.getheader("content-encoding") or "")
+                         response.getheader("content-encoding") or "",
+                         {name: value for name in reply_headers if (value := response.getheader(name)) is not None})
     except _GatewayRefused as refused:
         raise ReplyLost(refused.reason) from None
     except (OSError, ValueError, http.client.HTTPException) as error:

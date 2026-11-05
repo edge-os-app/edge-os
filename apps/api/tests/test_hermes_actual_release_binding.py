@@ -81,7 +81,7 @@ def no_effects(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_the_ordinary_registries_hold_exactly_the_one_adopted_record() -> None:
     assert relay_admission.APPROVED_ACTUAL_RELEASES == frozenset({RECORD_SHA256})
     assert [item.record_sha256 for item in composition.RELEASE_DEFINITIONS] == [RECORD_SHA256]
-    assert composition._approved_definition() is adopted()
+    assert adopted() in composition._approved_definitions()
 
 
 def test_the_frozen_release_files_are_the_code_owned_bytes() -> None:
@@ -226,7 +226,7 @@ def test_an_explicitly_empty_registry_refuses_the_adopted_record(monkeypatch: py
     monkeypatch.setattr(relay_admission, "APPROVED_ACTUAL_RELEASES", frozenset())
     with pytest.raises(MountRefused, match="ActualReleaseUnapproved"):
         bind_release(adopted())
-    assert composition._approved_definition() is None
+    assert composition._approved_definitions() == []
 
 
 def test_no_environment_value_adds_a_release(monkeypatch: pytest.MonkeyPatch) -> None:

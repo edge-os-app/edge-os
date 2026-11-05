@@ -11,10 +11,11 @@ destination), the job image, the relay channel and ONE `TokenPrice` built from t
 price object is the one the ledger reserves and settles with and the one the relay runner checks the provider cost with.
 
 A release is composed only from a code-owned definition in `RELEASE_DEFINITIONS` whose record SHA-256 is in the relay's
-trusted registry `relay_admission.APPROVED_ACTUAL_RELEASES`. Both name only the adopted release `hermes-first-call-1`.
-Binding it reads no file, and nothing opens an engine, key, socket or Docker command before the operator's handoff for
-exactly that release is read. A ledger cap sees one database only: the shared USD 2.00 ceiling still needs an external
-reconciliation before the first actual call. No setting, environment value, file or request adds a definition.
+trusted registry `relay_admission.APPROVED_ACTUAL_RELEASES`. Several may be approved. The operator's handoff selects one
+by record hash; there is no default, so no handoff means no start. Binding reads no file, and nothing opens an engine,
+key, socket or Docker command before that handoff is read. The ledger is shared: every route counts against the one
+USD 2.00 ceiling. A ledger cap sees one database only: that ceiling still needs an external reconciliation before the
+first actual call. No setting, environment value, file or request adds a definition.
 Production needs an approved hosted deployment record that names this exact release; the registry is empty in this
 candidate, so production stays refused. The application holds no provider key: the relay holds it. The owner and saved
 request of each grant are read from the saved attempt row and must equal those the RESERVED reservation copied from it;
@@ -412,11 +413,8 @@ def compose_application(release: HermesApplicationRelease, engine: Engine, *, en
     return HermesApplication(release, job.runner, job.supervision, spend, engine)
 
 
-def _approved_definition() -> RelayApplicationDefinition | None:
-    approved = [item for item in RELEASE_DEFINITIONS if item.record_sha256 in relay_admission.APPROVED_ACTUAL_RELEASES]
-    if len(approved) > 1:
-        raise _Refused("an application serves at most one approved release")
-    return approved[0] if approved else None
+def _approved_definitions() -> list[RelayApplicationDefinition]:
+    return [item for item in RELEASE_DEFINITIONS if item.record_sha256 in relay_admission.APPROVED_ACTUAL_RELEASES]
 
 
 def _read_bounded(path: Path) -> bytes:
@@ -444,18 +442,37 @@ def _absolute(value: Any, label: str) -> Path:
     return Path(value)
 
 
-def _handoff(path: Path, expected_sha256: str, release: HermesApplicationRelease) -> tuple[RelayEndpoint, Path]:
-    """The relay endpoint and job evidence folder the operator started for exactly this release.
-
-    The handoff (`edge-os.relay-operator-handoff/1`, written once by the lane-1 operator) approves nothing: the release
-    comes only from the code-owned definition. Every identity in it must equal the bound release's; its record path is
-    never read, because the approved record bytes are the definition's own.
-    """
+def _verified_handoff(path: Path, expected_sha256: str) -> dict[str, Any]:
+    """The handoff's object, only if its bytes have the SHA-256 the trusted configuration owner gave."""
     raw = _read_bounded(path)
     if not isinstance(expected_sha256, str) or not hmac.compare_digest(hashlib.sha256(raw).hexdigest(),
                                                                       expected_sha256):
         raise _Refused("the operator handoff bytes do not have the named hash")
-    handoff = _strict_object(raw, "operator handoff")
+    return _strict_object(raw, "operator handoff")
+
+
+def _selected_definition(path: Path, expected_sha256: str) -> RelayApplicationDefinition:
+    """The one approved definition the operator's handoff names by record hash.
+
+    The handoff selects and approves nothing: it can name only a code-owned definition whose hash is also in the relay's
+    trusted registry. Anything else is refused, and no default exists.
+    """
+    record = _verified_handoff(path, expected_sha256).get("release_record")
+    named = record.get("sha256") if isinstance(record, dict) else None
+    matches = [item for item in _approved_definitions() if item.record_sha256 == named]
+    if len(matches) != 1:
+        raise _Refused("the operator handoff names no approved release")
+    return matches[0]
+
+
+def _handoff(path: Path, expected_sha256: str, release: HermesApplicationRelease) -> tuple[RelayEndpoint, Path]:
+    """The relay endpoint and job evidence folder the operator started for exactly this release.
+
+    The handoff (`edge-os.relay-operator-handoff/1`, written once by the lane-1 operator) approves nothing: the release
+    comes only from the code-owned definition it selected. Every identity in it must equal the bound release's; its record path is
+    never read, because the approved record bytes are the definition's own.
+    """
+    handoff = _verified_handoff(path, expected_sha256)
     if set(handoff) != HANDOFF_FIELDS or handoff["format"] != HANDOFF_FORMAT:
         raise _Refused("the operator handoff must have exactly the frozen fields and format")
     actual = release.actual
@@ -493,8 +510,8 @@ def open_hermes_application(settings: Settings, *, handoff_path: Path, handoff_s
     relay release and record hash; the registry is empty in this candidate, so production stays refused.
 
     `handoff_path` and `handoff_sha256` are the line the relay operator printed at start, given by the application's
-    trusted configuration owner. The handoff is read only after an approved definition is found, and it is never
-    written. Each API process uses its own stable `run_id`; a restarted process reuses it to recover its dead turns.
+    trusted configuration owner. They select which approved release this application serves, so without them nothing
+    starts. The handoff is read only when an approved definition exists, and it is never written. Each API process uses its own stable `run_id`; a restarted process reuses it to recover its dead turns.
     The application never stops, restarts or removes relay resources: `close` disposes only its own engine.
     """
     deployment = None
@@ -508,9 +525,9 @@ def open_hermes_application(settings: Settings, *, handoff_path: Path, handoff_s
                                "qualified")
     if settings.interpreter != "hermes_local":
         raise MountRefused("the Hermes relay application needs EDGE_OS_INTERPRETER=hermes_local")
-    definition = _approved_definition()
-    if definition is None:
+    if not _approved_definitions():
         return None
+    definition = _selected_definition(handoff_path, handoff_sha256)
     release = bind_release(definition)
     if settings.env == "production" and (deployment is None or not deployment.admits_hermes_relay(
             release.actual.release.release_id, definition.record_sha256)):

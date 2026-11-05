@@ -171,13 +171,6 @@ def test_production_and_another_interpreter_are_refused_before_any_effect(unreac
     assert list(tmp_path.iterdir()) == []
 
 
-def test_two_approved_definitions_are_refused_before_the_handoff_is_read(unreachable, approve, tmp_path: Path) -> None:
-    approve(definition(), definition(record_fields={"release_id": "rel-app-synthetic-2"}))
-    with pytest.raises(MountRefused, match="at most one"):
-        open_with(unreachable, tmp_path)
-    assert list(tmp_path.iterdir()) == []
-
-
 def test_a_handoff_for_exactly_the_bound_release_gives_its_endpoint_and_evidence_folder(approve, tmp_path: Path) -> None:
     [given] = approve(definition())
     path, sha = write_handoff(tmp_path / "operator", handoff(tmp_path, given))

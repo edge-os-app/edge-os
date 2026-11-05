@@ -43,7 +43,7 @@ from provider_guard import GuardPolicy, LogicalRequest, ProviderRequestGuard  # 
 from provider_transport import TransportReply, TransportRoute, reply_refusal  # noqa: E402
 from relay_admission import (  # noqa: E402
     IDENTIFIER, ActualReleaseUnapproved, ProviderDestination, RelayRelease, channel_refusal, grant_refusal,
-    load_actual_release, parse_channel_message,
+    load_actual_release, parse_channel_message, saved_reply_headers,
 )
 from relay_transport import ReplyLost, send_once  # noqa: E402
 
@@ -403,10 +403,12 @@ class Relay:
 
     def _send(self, attempt: str, grant: dict[str, Any], body: bytes) -> None:
         began = time.time()
+        named = self.actual.recorded_reply_headers if self.actual is not None else ()
         try:
             sent = send_once(self.destination, ca_file=self.ca_file, key=self.key, body=body,
                              deadline=grant["expires_at"], max_reply_bytes=self.release.max_reply_bytes,
-                             gateway_socket=self.gateway_socket, attempt_id=attempt if self.gateway_socket else None)
+                             gateway_socket=self.gateway_socket, attempt_id=attempt if self.gateway_socket else None,
+                             reply_headers=named)
         except ReplyLost as lost:
             self._record(attempt, "finished.json", {"outcome": "lost", "error": str(lost), "seconds": time.time() - began})
             return self._reply(grant, {"attempt_id": attempt, "outcome": "lost"})
@@ -429,7 +431,8 @@ class Relay:
         self._record(attempt, "finished.json", {
             "outcome": "reply" if refused is None else "refused_reply", "refusal": refused, "status": sent.status,
             "reply_bytes": len(sent.body), "reply_sha256": hashlib.sha256(sent.body).hexdigest(), "usage": usage,
-            "cost": details.get("cost"), "generation_id": details.get("generation_id"), "seconds": time.time() - began})
+            "cost": details.get("cost"), "generation_id": details.get("generation_id"), "seconds": time.time() - began,
+            **(saved_reply_headers(named, sent.headers, self.key) if named else {})})
         if refused is not None:
             return self._reply(grant, {"attempt_id": attempt, "outcome": "refused", "refusal": refused,
                                        "before_send": False})
