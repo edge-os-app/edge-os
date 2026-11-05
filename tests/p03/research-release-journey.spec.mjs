@@ -28,14 +28,17 @@ test("declare on the operating-release source with its fixed bounds and start on
   const entry = catalog.sources.find((item) => item.title === SOURCE);
   expect(entry.available).toBe(true);
   expect(entry.evidence_class).toBe("RELEASE_STAND_IN_RESPONSE");
-  const form = section.locator("details").filter({ hasText: "Declare a new recorded-history investigation" });
-  if (!(await form.evaluate((node) => node.open))) await form.locator("summary").click();
-  await form.getByLabel("Recorded source").selectOption({ label: SOURCE });
+  const form = section.locator("details").filter({ hasText: "Start a new recorded-history investigation" });
+  if (!(await form.evaluate((node) => node.open))) await form.locator(":scope > summary").click();
+  await form.getByLabel("Saved source").selectOption({ label: SOURCE });
   const release = form.getByTestId("history-source-release");
-  await expect(release).toContainText("Operating release stand-in-loopback/1 (stand-in), RELEASE_STAND_IN_RESPONSE.");
-  await expect(release).toContainText("Stand-in responses on this server (loopback http), not provider data.");
-  await expect(release).toContainText("27 provider requests, 2 pages, 200 rows");
-  await expect(release).toContainText("Endpoint hosts: 127.0.0.1, 127.0.0.1. Credentials stay on the server.");
+  const releaseDetails = form.locator("details").filter({ hasText: "Endpoint hosts:" });
+  await expect(release).toContainText("The server fixes these limits and keeps the credentials. You cannot change them here.");
+  await expect(form.getByTestId("history-source-transport")).toContainText("Not provider data.");
+  await expect(releaseDetails).toContainText("Operating release stand-in-loopback/1 (stand-in), RELEASE_STAND_IN_RESPONSE.");
+  await expect(releaseDetails).toContainText("Stand-in responses on this server (loopback http), not provider data.");
+  await expect(releaseDetails).toContainText("27 provider requests, 2 pages, 200 rows");
+  await expect(releaseDetails).toContainText("Endpoint hosts: 127.0.0.1, 127.0.0.1. Credentials stay on the server.");
   await expect(form.getByLabel("Bound provider_requests")).toHaveValue("27");
   await expect(form.getByLabel("Bound provider_requests")).toHaveAttribute("readonly", "");
 

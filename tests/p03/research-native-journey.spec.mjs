@@ -22,10 +22,11 @@ test("declare on the native recording and start its original job", async ({ page
   const intakeId = decodeURIComponent(url.split("/").pop() ?? "").split("?")[0];
   const section = await historySection(page, url);
 
-  const form = section.locator("details").filter({ hasText: "Declare a new recorded-history investigation" });
-  if (!(await form.evaluate((node) => node.open))) await form.locator("summary").click();
-  await form.getByLabel("Recorded source").selectOption({ label: NATIVE });
-  await expect(form.getByTestId("history-source-transport")).toContainText("against recorded responses only");
+  const form = section.locator("details").filter({ hasText: "Start a new recorded-history investigation" });
+  if (!(await form.evaluate((node) => node.open))) await form.locator(":scope > summary").click();
+  await form.getByLabel("Saved source").selectOption({ label: NATIVE });
+  await expect(form.getByTestId("history-source-transport")).toContainText("against recordings only");
+  await expect(form).toContainText("against recorded responses only");
   await expect(form.getByTestId("history-source-transport")).toContainText("It needs 27 provider requests");
   await expect(form.getByLabel("Bound provider_requests")).toHaveValue("27");
 

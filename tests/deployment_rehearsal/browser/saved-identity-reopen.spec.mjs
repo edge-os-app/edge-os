@@ -99,7 +99,7 @@ test("saved report, jobs, held unknown and usage reopen without recomputation", 
   const section = page.getByTestId("history-investigation");
   await expect(section).toBeVisible();
   await expect(section.getByTestId("research-budget")).toContainText("provider requests");
-  await section.locator(".card").filter({ hasText: run.hypothesis }).getByRole("button", { name: "Open this declaration" }).click();
+  await section.locator(".card").filter({ hasText: run.hypothesis }).getByRole("button", { name: "Open this rule" }).click();
   await expect(section.getByTestId("history-declaration")).toBeVisible();
   const cards = section.getByTestId("history-job");
   await expect(cards).toHaveCount(5);

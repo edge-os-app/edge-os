@@ -76,14 +76,14 @@ export async function historySection(page, url) {
 
 /** Fill and adopt one recorded-history declaration entirely through the screen. */
 export async function declare(section, { source, hypothesis, direction = "OUTPERFORM", rules, providerRequests = "2" }) {
-  const form = section.locator("details").filter({ hasText: "Declare a new recorded-history investigation" });
-  if (!(await form.evaluate((node) => node.open))) await form.locator("summary").click();
-  await form.getByLabel("Recorded source").selectOption({ label: source });
+  const form = section.locator("details").filter({ hasText: "Start a new recorded-history investigation" });
+  if (!(await form.evaluate((node) => node.open))) await form.locator(":scope > summary").click();
+  await form.getByLabel("Saved source").selectOption({ label: source });
   await form.getByLabel("Your hypothesis in your own words").fill(hypothesis);
   await form.getByLabel("What you will check").selectOption(direction);
   for (const [index, rule] of rules.entries()) {
     if (index > 0) await form.getByRole("button", { name: "Add another rule" }).click();
-    await form.getByLabel(`Rule ${index + 1} lookback buckets`).fill(rule.lookback);
+    await form.getByLabel(`Rule ${index + 1} lookback periods`).fill(rule.lookback);
     await form.getByLabel(`Rule ${index + 1} return condition`).selectOption(rule.rise ?? "gt");
     await form.getByLabel(`Rule ${index + 1} return threshold`).fill(rule.threshold);
     await form.getByLabel(`Rule ${index + 1} volume threshold`).fill(rule.volume);
@@ -91,15 +91,23 @@ export async function declare(section, { source, hypothesis, direction = "OUTPER
   // An operating-release source fixes its bounds; the field is read-only there (pass null).
   if (providerRequests !== null) await form.getByLabel("Bound provider_requests").fill(providerRequests);
   await form.getByLabel("I reviewed and adopt every setting above before any data is read").check();
-  await form.getByRole("button", { name: "Save history declaration" }).click();
-  await expect(section.getByText("Declaration saved before any collection. No data was read.")).toBeVisible();
-  return (await section.getByTestId("history-declaration-id").innerText()).trim();
+  await form.getByRole("button", { name: "Save history rule" }).click();
+  await expect(section.getByText("Rule and limits saved before any collection. No data was read.")).toBeVisible();
+  return (await section.getByTestId("history-declaration-id").textContent()).trim();
 }
 
 export async function openDeclaration(section, hypothesis) {
-  await section.locator(".card").filter({ hasText: hypothesis }).getByRole("button", { name: "Open this declaration" }).click();
+  await section.locator(".card").filter({ hasText: hypothesis }).getByRole("button", { name: "Open this rule" }).click();
   await expect(section.getByTestId("history-declaration")).toBeVisible();
 }
+
+/** The collapsed proof values of a job's transport facts. "Chain check" is a label only that control holds. */
+export const transportDetails = (job) => job.locator("details").filter({ hasText: "Chain check" });
+
+/** One value of a Details list, found by its exact label. A closed Details keeps the value in the DOM. */
+export const detailValue = (scope, label) => scope.locator(`dt:text-is("${label}") + dd`);
+/** One permission history row, found by its exact approval ID, because the row summary now shows plain status words only. */
+export const permissionRow = (scope, approvalId) => scope.locator("li").filter({ has: scope.page().locator(`dd:text-is("${approvalId}")`) });
 
 export async function jobsFor(page, token, intakeId, declarationId) {
   const { body } = await apiGet(page, token, `/v1/research/requests/${intakeId}/history-investigations/${declarationId}/jobs`);

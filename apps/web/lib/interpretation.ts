@@ -12,16 +12,16 @@ const FAILURE_BY_CODE: Record<string, FailureKind> = {
 
 export const FAILURE_COPY: Record<FailureKind, { title: string; lead: string }> = {
   MALFORMED_OUTPUT: {
-    title: "The interpreter's answer was not usable",
-    lead: "The interpreter returned an answer that broke the rules, so none of it was used. This is not a verdict on your idea.",
+    title: "The research agent's answer was not usable",
+    lead: "The research agent returned an answer that broke the rules, so none of it was used. This is not a verdict on your idea.",
   },
   UNAVAILABLE: {
-    title: "The interpreter did not answer",
-    lead: "A system failure stopped the interpreter. This is not a verdict on your idea.",
+    title: "The research agent did not answer",
+    lead: "A system failure stopped the research agent. This is not a verdict on your idea.",
   },
   OUTCOME_UNKNOWN: {
-    title: "We do not know if the interpreter finished",
-    lead: "The interpreter may or may not have produced an answer. This attempt was not repeated, and nothing was assumed.",
+    title: "We do not know if the research agent finished",
+    lead: "The research agent may or may not have produced an answer. This read was not repeated, and nothing was assumed.",
   },
 };
 
@@ -31,8 +31,8 @@ export function systemFailure(findings: Finding[]): FailureKind | null {
 }
 
 export const RETRY_BLOCKED: Record<string, string> = {
-  attempt_in_flight: "An earlier attempt has no saved result and may still be running, so a retry is not offered.",
-  outcome_uncertain: "An earlier attempt may still finish, so a retry is not offered. Nothing was replayed.",
+  attempt_in_flight: "An earlier read has no saved result and may still be running, so a retry is not offered.",
+  outcome_uncertain: "An earlier read may still finish, so a retry is not offered. Nothing was replayed.",
   stale_reply: "Your saved meaning changed after that reply, so the reply cannot be tried again.",
 };
 
@@ -131,7 +131,7 @@ export function describeParse(parse: string | null): string {
 }
 
 export function describePurpose(attempt: Attempt, byId: Map<string, Attempt>): string {
-  const base = attempt.purpose === "INTERPRET" ? "First reading" : "Reading your reply";
+  const base = attempt.purpose === "INTERPRET" ? "First read" : "Read your reply";
   const earlier = attempt.retry_of ? byId.get(attempt.retry_of) : undefined;
   return earlier ? `${base}, retry of #${earlier.sequence}` : base;
 }
@@ -198,7 +198,7 @@ export function readingOf(facts: ReadingFacts): FirstReading | null {
 
 const READING_TAG: Record<string, string> = {
   UNREAD: "Saved, not read yet", RUNNING_OR_STOPPED: "Attempt not finished", READ_NOT_SAVED: "Read, not saved yet",
-  UNAVAILABLE: "Interpreter did not answer", MALFORMED_OUTPUT: "Answer not usable", OUTCOME_UNKNOWN: "Outcome unknown",
+  UNAVAILABLE: "Research agent did not answer", MALFORMED_OUTPUT: "Answer not usable", OUTCOME_UNKNOWN: "Outcome unknown",
 };
 
 function describeReading(facts: ReadingFacts): Omit<FirstReading, "tag"> | null {
@@ -208,15 +208,15 @@ function describeReading(facts: ReadingFacts): Omit<FirstReading, "tag"> | null 
   if (!last && facts.outcome_present) return null; // fixture interpreter: no attempts, its own outcome
   if (!last) {
     return { kind: "UNREAD", title: "Saved, not read yet", action: facts.retry_allowed ? "START" : "CHECK_AGAIN",
-      lead: "Your request is saved, but the interpreter has not read it yet. Nothing was lost, and nothing was judged." };
+      lead: "Your request is saved, but the research agent has not read it yet. Nothing was lost, and nothing was judged." };
   }
   if (last.status === "STARTED") {
-    return { kind: "RUNNING_OR_STOPPED", title: "An interpreter attempt has not finished", action: "CHECK_AGAIN",
-      lead: "An attempt was started and no result is saved. It may still be running, or it may have stopped. This page cannot tell which. Nothing was judged, and nothing is repeated while it may still run." };
+    return { kind: "RUNNING_OR_STOPPED", title: "A research-agent read has not finished", action: "CHECK_AGAIN",
+      lead: "A read was started and no result is saved. It may still be running, or it may have stopped. This page cannot tell which. Nothing was judged, and nothing is repeated while it may still run." };
   }
   if (last.status === "COMPLETED" && last.parse_result === "ACCEPTED") {
     return { kind: "READ_NOT_SAVED", title: "Your request was read, and the answer is not saved yet", action: "CHECK_AGAIN",
-      lead: "The interpreter answered and the answer was accepted. Saving it did not finish. A restart tries to save it again. If the cause stays, it stays unsaved, and this page cannot tell you why. Nothing was judged. Saving a new request is the way forward until then." };
+      lead: "The research agent answered and the answer was accepted. Saving it did not finish. A restart tries to save it again. If the cause stays, it stays unsaved, and this page cannot tell you why. Nothing was judged. Saving a new request is the way forward until then." };
   }
   if (last.status === "PROVIDER_FAILED") {
     return { kind: "FAILED", failure: "UNAVAILABLE", title: FAILURE_COPY.UNAVAILABLE.title, lead: FAILURE_COPY.UNAVAILABLE.lead,
@@ -240,17 +240,17 @@ export function replyCopy(reply: ReplyState): { title: string; body: string } {
     case "REJECTED":
       return reply.reason_code === "reply_changed_nothing"
         ? { title: "Your last reply could not be used", body: "Your reply matched what is already saved, so nothing changed. Say what you want to change, or answer one of the questions." }
-        : { title: "Your last reply could not be used", body: `The interpreter's reading broke a rule (${reply.reason_code?.replaceAll("_", " ")}), so none of it was used. ${kept}` };
+        : { title: "Your last reply could not be used", body: `The research agent's answer broke a rule (${reply.reason_code?.replaceAll("_", " ")}), so none of it was used. ${kept}` };
     case "UNCERTAIN":
-      return { title: "We do not know if your last reply was read", body: `The interpreter may or may not have read it. This attempt was not repeated, and ${kept.toLowerCase()}` };
+      return { title: "We do not know if your last reply was read", body: `The research agent may or may not have read it. This read was not repeated, and ${kept.toLowerCase()}` };
     case "PENDING_SAVE":
       return { title: "Your last reply was read but is not saved yet",
-        body: `The interpreter read it and the answer was accepted. Saving it did not finish. A restart tries to save it again. If the cause stays, it stays unsaved, and this page cannot tell you why. ${kept}` };
+        body: `The research agent read it and the answer was accepted. Saving it did not finish. A restart tries to save it again. If the cause stays, it stays unsaved, and this page cannot tell you why. ${kept}` };
     case "UNFINISHED":
       return { title: "Your last reply has no saved result",
-        body: `An attempt to read your reply was started and no result is saved. It may still be running, or it may have stopped. This page cannot tell which. ${kept} Nothing is repeated while it may still run.` };
+        body: `A read of your reply was started and no result is saved. It may still be running, or it may have stopped. This page cannot tell which. ${kept} Nothing is repeated while it may still run.` };
     default:
-      return { title: "Your last reply was not read", body: `A system failure stopped the interpreter. ${kept}` };
+      return { title: "Your last reply was not read", body: `A system failure stopped the research agent. ${kept}` };
   }
 }
 

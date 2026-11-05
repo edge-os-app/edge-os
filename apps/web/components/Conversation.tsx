@@ -48,7 +48,7 @@ export function Conversation({ context, idPrefix, showTitle = true, agentId }: {
       <div className="convo-about">
         <span className="eyebrow">About this request</span>
         <p style={{ margin: "4px 0 0" }}><strong>{text.length > 90 ? `${text.slice(0, 90)}…` : text}</strong><br />
-          <span className="muted">Revision {head.interpretation_revision_id?.slice(0, 8) ?? "none"}</span></p>
+          <span className="muted">Version {head.interpretation_revision_id?.slice(0, 8) ?? "none"}</span></p>
       </div>
       <p className="muted" style={{ margin: 0 }}>{bundle.interpreter.notice}</p>
       <div className="stack" role="log" aria-label="Clarification so far">
@@ -66,7 +66,7 @@ export function Conversation({ context, idPrefix, showTitle = true, agentId }: {
       ) : (
         <>
           <AnswerMessage message={message} surface={idPrefix} />
-          <p className="muted">No question is open for this revision.</p>
+          <p className="muted">No question is open for this version.</p>
         </>
       )}
     </>

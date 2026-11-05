@@ -68,7 +68,7 @@ describe("actual Privy wallet creation", () => {
   it("makes no SDK call when the server refuses the begin", async () => {
     mocks.begin.mockResolvedValue({ ...pending, create_permitted: false });
     await clickCreate();
-    await waitFor(() => expect(screen.getByTestId("wallet-setup-state")).toHaveTextContent("Creation pending"));
+    await waitFor(() => expect(screen.getByTestId("wallet-setup-state")).toHaveTextContent("Creating"));
     expect(mocks.sdk).not.toHaveBeenCalled();
     expect(mocks.complete).not.toHaveBeenCalled();
   });

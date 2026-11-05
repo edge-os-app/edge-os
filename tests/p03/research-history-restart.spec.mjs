@@ -4,7 +4,7 @@
  */
 import { test, expect } from "@playwright/test";
 import { tokens } from "./fixture-auth.mjs";
-import { apiGet, historySection, open, openDeclaration, saved, shot } from "./research-flow.mjs";
+import { apiGet, historySection, open, openDeclaration, saved, shot, transportDetails } from "./research-flow.mjs";
 
 test("restarted services reopen the exact research and replay records", async ({ page }, info) => {
   const project = info.project.name;
@@ -51,7 +51,8 @@ test("restarted services reopen the native report, transport facts and replay un
   await openDeclaration(section, run.hypothesis);
   const job = section.getByTestId("history-job").first();
   await expect(job).toHaveAttribute("data-state", "REPORTED");
-  await expect(job.getByTestId("history-transport")).toContainText("receipt corroboration COMPLETE, 24 of 24 checked, 0 mismatches");
+  await expect(job.getByTestId("history-transport")).toContainText("checked 24 receipts of 24. It found 0 mismatches.");
+  await expect(transportDetails(job)).toContainText("COMPLETE, 24 of 24 checked, 0 mismatches");
   const dataset = await apiGet(page, token, `/v1/research/history-datasets/${run.datasetId}`);
   expect(dataset.body.hashes_verified).toEqual({ content_sha256: true, raw_evidence_sha256: true });
   expect(dataset.body.content.transport.client_calls).toEqual({ ENVIO_HYPERSYNC: 2, QUICKNODE_JSON_RPC: 25 });

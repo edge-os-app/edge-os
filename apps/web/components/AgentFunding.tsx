@@ -3,9 +3,11 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
 import { financial, formatRaw, heldKey, peekKey, releaseKey, type FundingView } from "../lib/financial";
+import { FLOW_STATE, plain } from "../lib/labels";
+import { Details } from "./Details";
 
 const MODE_COPY: Record<string, string> = {
-  fixture: "Authored local fixture ports. Deposits and holdings here are not a wallet, a transfer or chain evidence.",
+  fixture: "Example data. Deposits and holdings here are not a wallet, a transfer or chain evidence.",
   unavailable: "Real deposit and holdings observation is unavailable in this build. Reviewed deposits stay pending and nothing is credited.",
   controlled: "Current holdings require the release's independent observer. Deposit references require separate verified evidence; a reviewed reference does not credit funds.",
 };
@@ -93,10 +95,10 @@ export function AgentFunding({ agentId }: { agentId: string }) {
 
         {!view.declaration ? (
           <div>
-            <h3>Declare funded assets</h3>
-            <p>The trading asset is the saved revision's quote token. Native MON is gas only and is never trading capital.</p>
+            <h3>Choose funded assets</h3>
+            <p>The trading asset is the saved version's quote token. Native MON is gas only and is never trading capital.</p>
             <button className="btn btn-primary" style={{ minHeight: 44 }} type="button" disabled={busy || uncertain}
-              onClick={() => void write(() => financial.declare(agentId))}>{busy ? "Saving…" : "Declare trading and gas assets"}</button>
+              onClick={() => void write(() => financial.declare(agentId))}>{busy ? "Saving…" : "Choose trading and gas assets"}</button>
           </div>
         ) : (
           <>
@@ -105,8 +107,8 @@ export function AgentFunding({ agentId }: { agentId: string }) {
               <dt>Trading capital</dt><dd className="mono">{view.declaration.trading_asset.asset_id} ({view.declaration.trading_asset.decimals} decimals)</dd>
               <dt>Native gas</dt><dd className="mono">{view.declaration.gas_asset.asset_id} ({view.declaration.gas_asset.decimals} decimals)</dd>
             </dl>
-            <h3>Review a deposit</h3>
-            <p className="muted">A reviewed deposit records what you intend to send. It is not a sent or credited transfer.</p>
+            <h3>Plan a deposit</h3>
+            <p className="muted">A saved deposit plan records what you intend to send. It is not a sent or credited transfer.</p>
             <label htmlFor={`deposit-class-${agentId}`}>Asset</label>
             <select id={`deposit-class-${agentId}`} className="input" style={{ minHeight: 44 }} value={assetClass}
               onChange={(event) => setAssetClass(event.target.value as "TRADING" | "NATIVE_GAS")}>
@@ -124,7 +126,7 @@ export function AgentFunding({ agentId }: { agentId: string }) {
                   asset_class: assetClass, raw, reference: heldKey(`deposit-${assetClass}`, agentId) }),
                 () => { releaseKey(`deposit-${assetClass}`, agentId); setRaw(""); },
                 () => releaseKey(`deposit-${assetClass}`, agentId))}>
-                {busy ? "Saving…" : "Save reviewed deposit"}
+                {busy ? "Saving…" : "Save deposit plan"}
               </button>
               <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={busy || uncertain}
                 onClick={() => void write(() => financial.reconcileDeposits(agentId))}>Check deposits</button>
@@ -133,10 +135,11 @@ export function AgentFunding({ agentId }: { agentId: string }) {
         )}
 
         <h3>Deposits</h3>
-        {!view.flows.length && <p className="muted">No reviewed deposits.</p>}
+        {!view.flows.length && <p className="muted">No saved deposit plans.</p>}
         <ul data-testid="funding-flows">{view.flows.map((flow) => <li key={flow.flow_id}>
-          {flow.state} · {formatRaw(flow.asset.raw, flow.asset.decimals)} <span className="mono">{flow.asset.asset_id}</span> · reference {flow.reference}
+          {plain(FLOW_STATE, flow.state, "Unknown")} · {formatRaw(flow.asset.raw, flow.asset.decimals)} <span className="mono">{flow.asset.asset_id}</span> · reference {flow.reference}
           {flow.transaction_reference && <> · observed event <span className="mono">{flow.transaction_reference}</span></>}
+          <Details summary="Details"><p className="mono">flow state {flow.state}</p></Details>
         </li>)}</ul>
         {view.deposit_balances.length > 0 && <dl className="kv" data-testid="funding-credited">
           {view.deposit_balances.map((balance) => <Fragment key={balance.asset_id}>
@@ -147,7 +150,8 @@ export function AgentFunding({ agentId }: { agentId: string }) {
 
         <h3>Current holdings</h3>
         {view.current_holdings.state === "UNAVAILABLE"
-          ? <p data-testid="funding-holdings">Current holdings are unavailable{view.current_holdings.reason && view.current_holdings.reason !== "HOLDINGS_UNAVAILABLE" ? ` (${view.current_holdings.reason})` : ""}. No balance is shown or assumed.</p>
+          ? <><p data-testid="funding-holdings">Current holdings are unavailable. No balance is shown or assumed.</p>
+              <Details summary="Details"><p className="mono">reason {view.current_holdings.reason ?? "none"}</p></Details></>
           : <>{view.current_holdings.observed_at && <p className="muted" data-testid="funding-holdings-observation">
               Observed <time dateTime={view.current_holdings.observed_at}>{view.current_holdings.observed_at}</time>
               {view.current_holdings.block_number != null && ` at block ${view.current_holdings.block_number}`}

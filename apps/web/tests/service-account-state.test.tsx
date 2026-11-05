@@ -37,11 +37,11 @@ describe("saved connected state (F1)", () => {
       ] });
     render(<ServiceAccountState agentId="agent-a" />);
     const list = await screen.findByRole("list", { name: "Projected records" });
-    expect(list).toHaveTextContent("DEPOSIT: 1000 monad-testnet:10143/0x2222 Not a trading result.");
+    expect(list).toHaveTextContent("Deposit: 1000 monad-testnet:10143/0x2222 Not a trading result.");
     expect(list).toHaveTextContent("Held 50 monad-testnet:10143/0x1111");
     expect(list).toHaveTextContent("unrealized result and mark unknown");
-    expect(list).toHaveTextContent("reconcile the original action before another evaluation");
-    expect(screen.getByText(/Ports: authored local fixtures/)).toBeInTheDocument();
+    expect(list).toHaveTextContent("reconcile the original action before another check");
+    expect(screen.getByText(/Connections: example data/)).toBeInTheDocument();
   });
 
   it("explains an empty state and retries a failed read", async () => {
@@ -60,7 +60,7 @@ describe("saved connected state (F1)", () => {
     render(<ServiceAccountState agentId="agent-a" />);
     expect(await screen.findByText("No connected-service state is saved for this agent.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Refresh saved state" }));
-    expect(await screen.findByRole("list", { name: "Projected records" })).toHaveTextContent("Agent: CONFIRMED");
+    expect(await screen.findByRole("list", { name: "Projected records" })).toHaveTextContent("Agent: Confirmed");
     expect(mocks.load).toHaveBeenCalledTimes(2);
   });
 });

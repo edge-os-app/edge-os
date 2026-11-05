@@ -5,7 +5,8 @@
  */
 import { test, expect } from "@playwright/test";
 import { tokens } from "./fixture-auth.mjs";
-import { apiGet, historySection, noSeriousAxe, noSidewaysScroll, open, openDeclaration, record, saved, shot } from "./research-flow.mjs";
+import { apiGet, detailValue, historySection, noSeriousAxe, noSidewaysScroll, open, openDeclaration, record, saved, shot,
+  transportDetails } from "./research-flow.mjs";
 
 const ownerToken = (project) => process.env[`P03_TOKEN_PORTS_${project.replace("-", "_").toUpperCase()}`];
 
@@ -19,12 +20,18 @@ test("HTTP-client dataset and reopened Nansen report; owner B denied", async ({ 
   const job = section.getByTestId("history-job").first();
   await expect(job).toHaveAttribute("data-state", "REPORTED");
   const facts = job.getByTestId("history-transport");
-  await expect(facts).toContainText("through the accepted P07 HTTP clients (HttpEnvioQueryClient, HttpQuickNodeRpcClient), no network. Not provider data");
-  await expect(facts).toContainText("receipt corroboration COMPLETE, 24 of 24 checked, 0 mismatches");
-  await expect(facts).toContainText("ENVIO_HYPERSYNC 2, QUICKNODE_JSON_RPC 25");
-  await expect(job).toContainText("provider usage MEASURED_CLIENT_CALLS");
+  const transport = transportDetails(job);
+  await expect(facts).toContainText("The source returned example responses, not provider data.");
+  await expect(detailValue(transport, "Transport")).toHaveText("P07_HTTP_CLIENTS_AUTHORED_TRANSPORT");
+  await expect(detailValue(transport, "Client classes")).toHaveText("HttpEnvioQueryClient, HttpQuickNodeRpcClient");
+  await expect(detailValue(transport, "Network")).toContainText("none; authored responses served on this server");
+  await expect(facts).toContainText("checked 24 receipts of 24. It found 0 mismatches.");
+  await expect(transport).toContainText("COMPLETE, 24 of 24 checked, 0 mismatches");
+  await expect(transport).toContainText("ENVIO_HYPERSYNC 2, QUICKNODE_JSON_RPC 25");
+  await expect(job).toContainText("Provider use: measured from client calls.");
   const report = job.getByTestId("history-report");
-  await expect(report).toContainText("AUTHORED_HTTP_RESPONSE; SYNTHETIC_FIXTURE; verdict QUALIFIED");
+  await expect(report).toContainText("recorded example responses; verdict Qualified");
+  await expect(report).toContainText("AUTHORED_HTTP_RESPONSE · SYNTHETIC_FIXTURE");
   const datasetId = (await report.getByTestId("history-report-dataset").innerText()).trim();
   const dataset = (await apiGet(page, token, `/v1/research/history-datasets/${datasetId}`)).body;
   expect(dataset.hashes_verified).toEqual({ content_sha256: true, raw_evidence_sha256: true });
@@ -38,14 +45,15 @@ test("HTTP-client dataset and reopened Nansen report; owner B denied", async ({ 
   const panel = page.getByTestId("nansen-report");
   const nansenJob = panel.getByTestId("nansen-job").first();
   await expect(nansenJob).toHaveAttribute("data-state", "REPORTED");
-  await expect(nansenJob.getByTestId("nansen-job-answer")).toContainText("requests KNOWN 2 · credits KNOWN 6");
+  await expect(nansenJob.getByTestId("nansen-job-answer")).toContainText("requests Known 2 · credits Known 6");
   await nansenJob.getByRole("button", { name: "Open saved report" }).click();
   const view = panel.getByTestId("nansen-report-view");
   await expect(view.getByTestId("nansen-question")).toHaveText(`Question: ${question}`);
   await expect(view.getByTestId("nansen-findings")).toContainText("Unresolved");
   await expect(view.getByTestId("nansen-coverage")).toContainText("3 holder address records (not people, not amounts)");
   await expect(view.getByTestId("nansen-coverage")).toContainText("24 of 25 flow periods · 1 missing");
-  await expect(view.getByTestId("nansen-hashes")).toContainText("Saved hashes recomputed and matched. Evidence class AUTHORED_FIXTURE.");
+  await expect(view.getByTestId("nansen-hashes")).toContainText("Saved hashes recomputed and matched.");
+  await expect(detailValue(view, "Data label")).toHaveText("AUTHORED_FIXTURE");
   const jobView = (await apiGet(page, token, `/v1/research/investigation-jobs/${run.nansenJobId}`)).body;
   const reportId = jobView.nansen_report.report_id;
   const reopened = (await apiGet(page, token, `/v1/research/nansen-reports/${reportId}`)).body;

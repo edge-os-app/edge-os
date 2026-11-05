@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../lib/api";
 import { financial, heldKey, releaseKey, type ConsentState, type RecurringProjection } from "../lib/financial";
+import { Details } from "./Details";
+import { EVALUATION_OUTCOME, SUBMISSION_STATE, plain } from "../lib/labels";
 
 const RUNNABLE = new Set(["QUEUED", "DECIDED", "ENQUEUED"]);
 
@@ -15,19 +17,19 @@ const END_COPY: Record<string, string> = {
   OWNER_ENDED: "You ended recurring operation.",
   CONSENT_EXPIRED: "The adopted terms expired.",
   CONSENT_CHANGED: "The adopted terms changed.",
-  IDENTITY_CHANGED: "The agent's wallet or saved revision changed.",
+  IDENTITY_CHANGED: "The agent's wallet or saved version changed.",
   REMOVAL_REQUESTED: "Agent removal was requested.",
-  ACTIVATION_UNAVAILABLE: "No qualified execution route exists in this build.",
+  ACTIVATION_UNAVAILABLE: "No approved trade route exists in this build.",
 };
 
 function waitText(reason: string): string {
   if (reason.startsWith("ENDED:")) {
     const why = reason.slice(6);
-    return `Ended: ${END_COPY[why] ?? why}`;
+    return `Ended: ${END_COPY[why] ?? "Unknown reason"}`;
   }
-  if (reason.startsWith("STOPPED:")) return `Stopped: ${reason.slice(8).replaceAll("_", " ").toLowerCase()} denies matching work.`;
+  if (reason.startsWith("STOPPED:")) return "Stopped: a saved stop blocks matching work.";
   if (reason.startsWith("REMOVAL:")) return "Removal denies every new submission for this wallet.";
-  return WAIT_COPY[reason] ?? reason;
+  return WAIT_COPY[reason] ?? "Unknown reason";
 }
 
 /** Recurring operation for one agent: the explicit authorization and the durable scheduler record. */
@@ -90,8 +92,8 @@ export function AgentRecurring({ agentId }: { agentId: string }) {
       {phase === "error" && <div role="alert"><p>{error}</p>
         <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" onClick={() => void load()}>Try again</button></div>}
       {phase === "loaded" && <>
-        <p className="muted">The scheduler evaluates the saved rules once per five-minute slot while you are away, and the worker
-          runs only actions your adopted terms permit. Authored fixture data only: no transaction is signed or sent, and this is
+        <p className="muted">The scheduler checks the saved rules once per five-minute slot while you are away, and the worker
+          runs only actions your adopted terms permit. Example data only: no transaction is signed or sent, and this is
           not live trading.</p>
         {error ? <p role="alert" className="status err">{error}</p> : null}
         {notice ? <p role="status" className="status">{notice}</p> : null}
@@ -101,12 +103,14 @@ export function AgentRecurring({ agentId }: { agentId: string }) {
         </div>}
 
         {!deployment && (!adoption ? <p data-testid="recurring-needs-terms">Adopt bounded terms for this agent first.</p>
-          : !qualified ? <p data-testid="recurring-unavailable">Recurring operation is unavailable: {consent?.activation.reason ?? "no qualification"}.</p>
+          : !qualified ? <><p data-testid="recurring-unavailable">Recurring operation is unavailable: {(consent?.activation.reason ?? "no qualification").replaceAll("_", " ").toLowerCase()}.</p>
+              <Details summary="Details"><p className="mono">Activation reason {consent?.activation.reason ?? "none"} · state {consent?.activation.state ?? "none"}</p></Details></>
           : <div data-testid="recurring-activate">
-              <p>Terms <span className="mono">{adoption.consent_hash}</span> (adopted <time dateTime={adoption.created_at}>{adoption.created_at}</time>).
+              <p>Terms recorded (adopted <time dateTime={adoption.created_at}>{adoption.created_at}</time>). The hash is in Details.
                 Their cumulative limits, expiry and stops apply to every slot; starting again never resets them.</p>
               <label className="choice"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />{" "}
-                <span>I authorize repeated evaluations and the permitted actions under these exact terms while I am away.</span></label>
+                <span>I authorize repeated checks and the permitted actions under these exact terms while I am away.</span></label>
+              <Details summary="Details"><p className="mono">permission hash {adoption.consent_hash}</p></Details>
               <div className="btn-row">
                 <button className="btn btn-primary" style={{ minHeight: 44 }} type="button" disabled={!confirmed || busy || uncertain}
                   onClick={() => void write(() => financial.activateDeployment(agentId, heldKey("deployment", agentId), adoption.consent_hash),
@@ -118,14 +122,15 @@ export function AgentRecurring({ agentId }: { agentId: string }) {
         {deployment && <div data-testid="recurring-deployment" data-state={deployment.state}>
           <p data-testid="recurring-wait" role="status">{view?.wait_reason ? waitText(view.wait_reason)
             : `Active. Next slot ${producer?.next_due_slot ?? "not scheduled"}.`}</p>
+          {view?.wait_reason ? <Details summary="Details"><p className="mono">wait reason {view.wait_reason}</p></Details> : null}
           <dl className="kv">
-            <dt>State</dt><dd>{deployment.state}{deployment.end_reason ? ` (${deployment.end_reason})` : ""}</dd>
+            <dt>State</dt><dd>{deployment.state === "ACTIVE" ? "Active" : deployment.state === "ENDED" ? "Ended" : "Unknown state"}</dd>
             <dt>Started</dt><dd><time dateTime={deployment.activated_at}>{deployment.activated_at}</time></dd>
-            <dt>Terms</dt><dd className="mono">{deployment.identity.consent_hash}</dd>
-            <dt>Execution revision</dt><dd className="mono">{deployment.identity.execution_revision_id}</dd>
-            <dt>Last scheduler pass</dt><dd data-testid="recurring-last-tick">{producer?.last_tick_at ?? "None yet"}</dd>
+            <dt>Terms</dt><dd>in Details</dd>
+            <dt>Execution version</dt><dd className="mono">{deployment.identity.execution_revision_id}</dd>
+            <dt>Last scheduled run</dt><dd data-testid="recurring-last-tick">{producer?.last_tick_at ?? "None yet"}</dd>
             <dt>Last saved slot</dt><dd>{producer?.cursor_slot ?? "None yet"}</dd>
-            <dt>Next due slot</dt><dd data-testid="recurring-next">{producer?.next_due_slot ?? `None${producer?.no_next_reason ? ` (${producer.no_next_reason})` : ""}`}</dd>
+            <dt>Next due slot</dt><dd data-testid="recurring-next">{producer?.next_due_slot ?? "None"}</dd>
             <dt>Missed slots</dt><dd data-testid="recurring-missed">{producer?.missed_slots ?? 0}{producer?.missed_intervals.length
               ? ` · latest ${producer.missed_intervals[producer.missed_intervals.length - 1].from} to ${producer.missed_intervals[producer.missed_intervals.length - 1].to}, not replayed` : ""}</dd>
             <dt>Pending reconciliation</dt><dd data-testid="recurring-pending">{view?.pending_reconciliation?.length ? view.pending_reconciliation.join(", ") : "None"}</dd>
@@ -133,14 +138,22 @@ export function AgentRecurring({ agentId }: { agentId: string }) {
           <h3>Saved slots</h3>
           {!view?.occurrences?.length && <p className="muted">No slot evaluated yet.</p>}
           <ul data-testid="recurring-occurrences">{(view?.occurrences ?? []).map((item) => <li key={item.job_id}>
-            <strong>{item.decision_slot}</strong> · {item.evaluation ? `${item.evaluation.outcome}${item.evaluation.reason ? ` (${item.evaluation.reason})` : ""}`
+            <strong>{item.decision_slot}</strong> · {item.evaluation ? `${plain(EVALUATION_OUTCOME, item.evaluation.outcome, "Unknown state")}${item.evaluation.reason ? " (reason in Details)" : ""}`
               : RUNNABLE.has(item.state) ? "Not evaluated yet" : "Ended without an evaluation"}
-            {item.outcome ? ` · ${item.outcome}` : ""}{item.reason ? ` · ${item.reason}` : ""}
+            {item.outcome ? ` · ${plain(EVALUATION_OUTCOME, item.outcome, "Unknown state")}` : ""}{item.reason ? " · reason in Details" : ""}
             <p className="muted">
-              {item.evaluation ? `Inputs observed ${item.evaluation.inputs_observed_at ?? "unknown"}, collected ${item.evaluation.inputs_collected_at ?? "unknown"}, evaluated ${item.evaluation.evaluated_at} (${item.evaluation.evidence_class ?? "no evidence class"}). ` : ""}
-              {item.submission ? `Submission ${item.submission.state}${item.submission.outcome ? ` ${item.submission.outcome}` : ""}, started ${item.submission.started_at}${item.submission.completed_at ? `, completed ${item.submission.completed_at}` : ", not completed"}.` : "No submission."}
+              {item.evaluation ? `Inputs observed ${item.evaluation.inputs_observed_at ?? "unknown"}, collected ${item.evaluation.inputs_collected_at ?? "unknown"}, evaluated ${item.evaluation.evaluated_at}. ` : ""}
+              {item.submission ? `Submission ${plain(SUBMISSION_STATE, item.submission.state, "Unknown state")}${item.submission.outcome ? ` · ${plain(EVALUATION_OUTCOME, item.submission.outcome, "Unknown state")}` : ""}, started ${item.submission.started_at}${item.submission.completed_at ? `, completed ${item.submission.completed_at}` : ", not completed"}.` : "No submission."}
             </p>
           </li>)}</ul>
+          <Details summary="Details"><ul>
+            {(view?.occurrences ?? []).map((item) => <li className="mono" key={item.job_id}>
+              {item.job_id} · state {item.state} · outcome {item.outcome ?? "none"} · reason {item.reason ?? "none"}
+              {item.evaluation ? ` · evaluation ${item.evaluation.outcome}${item.evaluation.reason ? ` (${item.evaluation.reason})` : ""} · data label ${item.evaluation.evidence_class ?? "none"}` : ""}
+              {item.submission ? ` · submission ${item.submission.state}/${item.submission.outcome ?? "none"}` : ""}
+            </li>)}
+            {view?.deployment ? <li className="mono">deployment state {view.deployment.state} · permission hash {view.deployment.identity.consent_hash} · end reason {view.deployment.end_reason ?? "none"} · wait {view.wait_reason ?? "none"} · no next reason {view.producer?.no_next_reason ?? "none"}</li> : null}
+          </ul></Details>
           {deployment.state === "ACTIVE" && <div className="btn-row">
             <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={busy || uncertain}
               onClick={() => void write(() => financial.endDeployment(agentId), "Recurring operation ended. Unsent work is released; a sent action and its held amounts stay as saved.")}>

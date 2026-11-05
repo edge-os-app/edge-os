@@ -44,7 +44,7 @@ describe("deriveHistoryPlan", () => {
     expect(result.schedule).toEqual({ version: "p09.decision-clock/1", start: "2026-09-25T10:45:00Z",
       end: "2026-09-25T10:55:00Z", interval_seconds: 300 });
     expect(result.decisions).toBe(2);
-    expect(refusal(SYNTHETIC, 9).reason).toContain("at most 8 buckets");
+    expect(refusal(SYNTHETIC, 9).reason).toContain("at most 8 periods");
   });
 
   it("offers a predictive lookback with two usable decisions on the two-hour MOE shape", () => {
@@ -69,14 +69,14 @@ describe("deriveHistoryPlan", () => {
   it("refuses more descriptive lookback than the MOE window can support", () => {
     const result = refusal(MOE, 2, "DESCRIPTIVE");
     expect(result.maxLookbackBuckets).toBe(1);
-    expect(result.reason).toContain("at most 1 bucket");
+    expect(result.reason).toContain("at most 1 period");
   });
 
   it("refuses every predictive MOE declaration and names DESCRIPTIVE", () => {
     for (const lookback of [1, 2, 3]) {
       const result = refusal(MOE, lookback);
       expect(result.reason).toContain("No lookback fits");
-      expect(result.reason).toContain("use DESCRIPTIVE");
+      expect(result.reason).toContain("describe only");
     }
   });
 
@@ -101,6 +101,13 @@ describe("deriveHistoryPlan", () => {
       }
       expect(Date.parse(result.partitions.at(-1)!.end)).toBe(Date.parse(window.end));
     }
+  });
+
+  it("uses a singular decision word when only one decision is possible", () => {
+    const result = refusal({ start: "2026-10-22T07:35:00Z", end: "2026-10-22T08:00:00Z" }, 1);
+    expect(result.reason).toContain("at most 1 usable decision");
+    expect(result.reason).not.toContain("1 usable decisions");
+    expect(result.reason).toContain("for an outperform rule");
   });
 
   it("refuses a window too short for the required three partitions", () => {

@@ -90,9 +90,9 @@ function panel() {
 }
 
 async function reviewAndSave(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry dependency set" }));
-  await user.click(screen.getByRole("checkbox", { name: "I reviewed the exit dependency set" }));
-  await user.click(screen.getByRole("button", { name: "Save synthetic replay" }));
+  await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry inputs" }));
+  await user.click(screen.getByRole("checkbox", { name: "I reviewed the exit inputs" }));
+  await user.click(screen.getByRole("button", { name: "Replay on example data" }));
 }
 
 describe("delayed replay selection", () => {
@@ -160,7 +160,7 @@ describe("delayed replay selection", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Use a recognized replay timing profile.");
     expect(screen.getByLabelText("Timing profile")).toHaveValue(DELAYED);
-    expect(screen.getByRole("button", { name: "Save synthetic replay" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Replay on example data" })).toBeInTheDocument();
     expect(screen.queryByTestId("spot-replay-result")).toBeNull();
   });
 });
@@ -177,7 +177,7 @@ describe("a saved delayed replay", () => {
     expect(events).toHaveTextContent("NO_NEXT_BUCKET");
     expect(events).toHaveTextContent(FILL_LABEL);
     expect(events).toHaveTextContent(/not a failed replay/i);
-    expect(screen.getByText("SYNTHETIC_FIXTURE. This is an authored fixture, not observed market history."))
+    expect(screen.getByText("example data (not real). This is example data, not observed market history."))
       .toBeInTheDocument();
     expect(document.body.textContent ?? "").not.toMatch(/executable|\blive\b|real fill/i);
   });

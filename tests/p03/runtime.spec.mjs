@@ -48,8 +48,8 @@ test("F1: the saved connected state shows service projections without inventing 
   const panel = page.getByRole("region", { name: "Saved connected state" });
   const list = panel.getByRole("list", { name: "Projected records" });
   await expect(list).toBeVisible();
-  await expect(panel).toContainText("Ports: authored local fixtures.");
-  await expect(list.locator('[data-kind="AGENT"]')).toContainText("Agent: STOPPED");
+  await expect(panel).toContainText("Connections: example data.");
+  await expect(list.locator('[data-kind="AGENT"]')).toContainText("Agent: Stopped");
   await expect(list.locator('[data-kind="POSITION"]')).toContainText("unrealized result and mark unknown");
   await expect(list.locator('[data-kind="CAPITAL_FLOW"]').first()).toContainText("Not a trading result.");
   await expect(list.locator('[data-kind="ACTION"]').first()).toContainText("CONFIRMED");
@@ -86,7 +86,7 @@ test("F2: a saved change whose read-back fails keeps the funding controls paused
   await check.click();
   await expect(funding.getByRole("alert")).toContainText("The change was saved, but the current funding could not be read.");
   await expect(check).toBeDisabled();
-  await expect(funding.getByRole("button", { name: "Save reviewed deposit" })).toBeDisabled();
+  await expect(funding.getByRole("button", { name: "Save deposit plan" })).toBeDisabled();
   await expect(funding.getByTestId("funding-flows")).toBeVisible(); // the last saved view stays, marked unconfirmed
   expect(failedReads).toBeGreaterThan(0);
   await shot(page, project, "readback-failed");

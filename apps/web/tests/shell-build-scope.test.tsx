@@ -20,7 +20,7 @@ import { Shell } from "../components/Shell";
 
 const NOTICE = "build-scope-notice";
 const CONTROLLED_NOTICE = "controlled-scope-notice";
-const OLD_NOTICE = "Build scope. Account views show authored synthetic records only, not live wallet data. "
+const OLD_NOTICE = "Build scope. Account views show example records only, not live wallet data. "
   + "Saving a Research rule grants no trading permission. This build does not connect a wallet or move funds.";
 
 function text(node: HTMLElement | null): string {
@@ -67,7 +67,7 @@ describe("build-scope notice", () => {
     mocks.consent.mockResolvedValue({ provider_mode: "controlled" });
     await renderAt("#/agents?agent=agent-a");
     expect(await screen.findByTestId(CONTROLLED_NOTICE)).toHaveTextContent(
-      "Trading mode. Trades run from your agent wallet within the limits you signed. Every trade needs its release.");
+      "Trading mode. Trades run from your agent wallet within the limits you signed. Every trade must match its locked setup.");
     expect(screen.queryByTestId(NOTICE)).toBeNull();
     expect(mocks.consent).toHaveBeenCalledWith("agent-a");
   });

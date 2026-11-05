@@ -51,11 +51,11 @@ function renderAdoption(reload = vi.fn(async (): Promise<string | null> => "draf
 }
 
 async function review(user: ReturnType<typeof userEvent.setup>) {
-  await user.selectOptions(await screen.findByLabelText("Saved dataset"), qualified.dataset_id);
+  await user.selectOptions(await screen.findByLabelText("Saved data"), qualified.dataset_id);
   await user.type(screen.getByLabelText("Trade size in the new quote unit"), "50");
   await user.type(screen.getByLabelText("Largest position value in the new quote unit"), "50");
-  await user.selectOptions(screen.getByLabelText("Entry rule (one you declared for this dataset)"), "e0000000-0000-4000-8000-000000000001");
-  await user.type(screen.getByLabelText("Exit lookback (buckets)"), "2");
+  await user.selectOptions(screen.getByLabelText("Entry rule (one you saved for this data)"), "e0000000-0000-4000-8000-000000000001");
+  await user.type(screen.getByLabelText("Exit lookback (five-minute periods)"), "2");
   await user.type(screen.getByLabelText("Exit threshold (fraction, for example -0.001)"), "-0.001");
   await user.click(screen.getByRole("checkbox"));
 }
@@ -69,18 +69,31 @@ describe("recorded market adoption", () => {
   it("shows the exact market and keeps unqualified datasets out of the choices", async () => {
     const user = userEvent.setup();
     renderAdoption();
-    await user.selectOptions(await screen.findByLabelText("Saved dataset"), qualified.dataset_id);
+    await user.selectOptions(await screen.findByLabelText("Saved data"), qualified.dataset_id);
     expect(screen.getByTestId("market-adoption-review")).toHaveTextContent("0xaaaa");
     expect(screen.getByTestId("market-adoption-review")).toHaveTextContent(QUOTE);
-    expect(screen.getByTestId("market-adoption-review")).toHaveTextContent("route qualification UNQUALIFIED");
+    expect(document.body).toHaveTextContent("UNQUALIFIED");
     expect(screen.queryByRole("option", { name: /provider-failure/ })).toBeNull();
     expect(screen.getByText(/cannot supply a market/)).toBeInTheDocument();
+  });
+
+  it("does not reject usable data without a binding and keeps both data labels in Details", async () => {
+    const user = userEvent.setup();
+    mocks.datasets.mockResolvedValue({ datasets: [qualified] });
+    renderAdoption();
+    await user.selectOptions(await screen.findByLabelText("Saved data"), qualified.dataset_id);
+    const line = screen.getByTestId("market-adoption-binding");
+    expect(line).toHaveTextContent("needs no delivery check");
+    expect(line).not.toHaveTextContent("Do not use");
+    const raw = screen.getByText(/RECORDED_RESPONSE · SYNTHETIC_FIXTURE/);
+    expect(raw.closest("details")).not.toBeNull();
+    expect(screen.getByText(/binding label SYNTHETIC_FIXTURE/).closest("details")).not.toBeNull();
   });
 
   it("never carries the old amount: both amounts start empty and adoption stays disabled", async () => {
     const user = userEvent.setup();
     renderAdoption();
-    await user.selectOptions(await screen.findByLabelText("Saved dataset"), qualified.dataset_id);
+    await user.selectOptions(await screen.findByLabelText("Saved data"), qualified.dataset_id);
     expect(screen.getByLabelText("Trade size in the new quote unit")).toHaveValue("");
     expect(screen.getByRole("button", { name: "Adopt this market for a new draft" })).toBeDisabled();
     expect(screen.getByRole("checkbox")).toBeDisabled();
@@ -144,7 +157,7 @@ describe("recorded market adoption", () => {
   it("explains when no qualified dataset exists", async () => {
     mocks.datasets.mockResolvedValue({ datasets: [limited] });
     renderAdoption();
-    expect(await screen.findByText(/No qualified recorded dataset is saved/)).toBeInTheDocument();
+    expect(await screen.findByText(/No saved data is ready to use/)).toBeInTheDocument();
   });
 
   it("keeps the general introduction neutral and labels an actual dataset as saved provider history", async () => {
@@ -152,7 +165,7 @@ describe("recorded market adoption", () => {
     mocks.datasets.mockResolvedValue({ datasets: [actual, limited] });
     renderAdoption();
     expect(screen.queryByText(/Recorded responses are synthetic/)).toBeNull();
-    await user.selectOptions(await screen.findByLabelText("Saved dataset"), actual.dataset_id);
+    await user.selectOptions(await screen.findByLabelText("Saved data"), actual.dataset_id);
     const provenance = screen.getByTestId("market-adoption-provenance");
     expect(provenance).toHaveTextContent("Saved provider history");
     expect(provenance).not.toHaveTextContent(/synthetic/i);
@@ -163,9 +176,9 @@ describe("recorded market adoption", () => {
     const user = userEvent.setup();
     mocks.datasets.mockResolvedValue({ datasets: [qualified, unknown] });
     renderAdoption();
-    await user.selectOptions(await screen.findByLabelText("Saved dataset"), qualified.dataset_id);
+    await user.selectOptions(await screen.findByLabelText("Saved data"), qualified.dataset_id);
     expect(screen.getByTestId("market-adoption-provenance")).toHaveTextContent("Synthetic recorded responses");
-    await user.selectOptions(screen.getByLabelText("Saved dataset"), unknown.dataset_id);
+    await user.selectOptions(screen.getByLabelText("Saved data"), unknown.dataset_id);
     const provenance = screen.getByTestId("market-adoption-provenance");
     expect(provenance).toHaveTextContent("EXPERIMENTAL_LABEL");
     expect(provenance).toHaveTextContent(/unrecognized evidence class/i);

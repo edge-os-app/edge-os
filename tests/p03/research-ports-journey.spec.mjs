@@ -27,10 +27,11 @@ test("declare on the HTTP-client source and save a Nansen report request", async
   const catalog = (await apiGet(page, token, "/v1/research/history-sources")).body;
   expect(catalog.source_clients).toBe("authored_http");
   expect(catalog.sources.find((item) => item.title === HTTP)?.available).toBe(true);
-  const form = section.locator("details").filter({ hasText: "Declare a new recorded-history investigation" });
-  if (!(await form.evaluate((node) => node.open))) await form.locator("summary").click();
-  await form.getByLabel("Recorded source").selectOption({ label: HTTP });
-  await expect(form.getByTestId("history-source-transport")).toContainText("accepted P07 HTTP clients over authored responses");
+  const form = section.locator("details").filter({ hasText: "Start a new recorded-history investigation" });
+  if (!(await form.evaluate((node) => node.open))) await form.locator(":scope > summary").click();
+  await form.getByLabel("Saved source").selectOption({ label: HTTP });
+  await expect(form.getByTestId("history-source-transport")).toContainText("The server serves example responses with no network and no credential.");
+  await expect(form).toContainText("Accepted P07 HTTP clients over authored responses on this server, no network and no credential.");
   await expect(form.getByLabel("Bound provider_requests")).toHaveValue("27");
 
   const hypothesis = `Rises keep rising through the HTTP clients (${project})`;

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ApiError } from "../lib/api";
 import { agentContextApi, resolveContextSource, type AgentContextRecord, type ContextEntry } from "../lib/account-views";
+import { Details } from "./Details";
 
 type ContextIntent =
   | { kind: "CORRECT"; expectedVersion: number; contextId: string; replacement: string }
@@ -34,15 +35,18 @@ export function AgentContext({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [sourceError, setSourceError] = useState("");
+  const [unsupportedSourceType, setUnsupportedSourceType] = useState("");
   const [pendingIntent, setPendingIntent] = useState<ContextIntent | null>(null);
   const [notice, setNotice] = useState("");
 
   async function openSource(sourceId: string) {
     setSourceError("");
+    setUnsupportedSourceType("");
     try {
       const source = await resolveContextSource(sourceId);
       if (source.destination_type === "UNSUPPORTED" || !source.destination_record_id) {
-        setSourceError(`This saved source type (${source.source_record_type}) has no supported detail view. Your context is unchanged.`);
+        setSourceError("This saved source type has no detail view. Your context is unchanged.");
+        setUnsupportedSourceType(source.source_record_type);
         return;
       }
       if (source.destination_type === "RESEARCH") {
@@ -113,18 +117,19 @@ export function AgentContext({
         <h3>Agent context · version {record.memory_version}</h3>
         <button className="btn btn-ghost" style={{ minHeight: 44 }} type="button" onClick={onClose}>Close context</button>
       </div>
-      <p><strong>State.</strong> {record.state}. Suggestions need your approval before a task can use them.</p>
+      <p><strong>State.</strong> {record.state === "ACTIVE" ? "Active" : record.state === "DISABLED" ? "Disabled" : record.state === "CLEARED" ? "Cleared" : "Unknown"}. Suggestions need your approval before a task can use them.</p>
       <p className="muted">Context cannot change strategy rules, permission, balances, positions, reservations, or pending actions. Clearing it does not remove financial history.</p>
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
       {sourceError && <p role="alert">{sourceError}</p>}
+      {unsupportedSourceType && <Details summary="Details"><p className="mono">source type {unsupportedSourceType}</p></Details>}
       {pendingIntent && <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={busy}
         onClick={() => void reconcile()}>{busy ? "Checking saved context…" : "Check saved context"}</button>}
       {!record.entries.length && <p>No saved context entries.</p>}
       <ul>
         {record.entries.map((entry) => (
           <li key={entry.context_id}>
-            <p><strong>{entry.status === "SUGGESTED" ? "Suggested lesson" : entry.kind}</strong> · {entry.status}</p>
+            <p><strong>{entry.status === "SUGGESTED" ? "Suggested lesson" : entry.kind === "PREFERENCE" ? "Preference" : entry.kind === "CORRECTION" ? "Correction" : entry.kind === "LESSON" ? "Lesson" : "Unknown"}</strong> · {entry.status === "SUGGESTED" ? "Suggested" : entry.status === "ADOPTED" ? "Adopted" : "Unknown"}</p>
             <p>{entry.text}</p>
             {entry.source_refs.map((source) => <button key={source} className="btn btn-ghost"
               style={{ minHeight: 44 }} type="button" onClick={() => void openSource(source)}>Open source record</button>)}
@@ -179,6 +184,7 @@ export function AgentContext({
             onClick={() => setConfirmClear(false)}>Keep context</button>
         </div>
       )}
+      <Details summary="Details"><pre className="mono" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify(record, null, 2)}</pre></Details>
     </section>
   );
 }

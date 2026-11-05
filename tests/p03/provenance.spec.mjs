@@ -40,7 +40,7 @@ test("saved tiny-threshold provenance stays readable for both signs", async ({ p
   await expect(page.getByTestId("revision")).toContainText("Read back from the database");
   const positive = {
     url: page.url(),
-    revisionId: (await page.getByTestId("revision-id").innerText()).trim(),
+    revisionId: (await page.getByTestId("revision-id").textContent()).trim(),
     original: TINY_POSITIVE_RULE,
     expectedEntry: EXPECTED_POSITIVE_MEANING,
     expectedProvenance: EXPECTED_POSITIVE_MEANING,

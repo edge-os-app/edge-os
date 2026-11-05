@@ -8,7 +8,7 @@ import AxeBuilder from "@axe-core/playwright";
 import fs from "node:fs";
 import path from "node:path";
 import { injectAuth, tokens } from "./fixture-auth.mjs";
-import { apiGet, apiPost } from "./research-flow.mjs";
+import { apiGet, apiPost, detailValue } from "./research-flow.mjs";
 
 const evidence = process.env.P03_EVIDENCE_DIR ?? ".evidence";
 const shots = path.join(evidence, "screenshots");
@@ -51,12 +51,12 @@ async function readyOriginalAgent(page, thesisUrl, agentId, project) {
 
   await setup.getByRole("link", { name: "Fund this agent" }).click();
   const funding = page.getByRole("region", { name: "Agent funding" });
-  await funding.getByRole("button", { name: "Declare trading and gas assets" }).click();
+  await funding.getByRole("button", { name: "Choose trading and gas assets" }).click();
   for (const [label, raw] of [["Trading capital", "1000000000"], ["Native MON gas", "1000000000000000000"]]) {
     await funding.getByLabel("Asset").selectOption({ label });
     await funding.getByLabel(/Amount in base units/).fill(raw);
-    await funding.getByRole("button", { name: "Save reviewed deposit" }).click();
-    await expect(funding.getByTestId("funding-flows")).toContainText("PENDING");
+    await funding.getByRole("button", { name: "Save deposit plan" }).click();
+    await expect(funding.getByTestId("funding-flows")).toContainText("Pending");
   }
   await funding.getByRole("button", { name: "Check deposits" }).click();
   await expect(funding.getByTestId("funding-credited")).toContainText("1000 credited");
@@ -69,15 +69,15 @@ async function readyOriginalAgent(page, thesisUrl, agentId, project) {
   await page.goto(`/app#/agents?agent=${encodeURIComponent(agentId)}`);
   const authority = page.getByRole("region", { name: "Agent authority" });
   await authority.getByRole("button", { name: "Review exact terms" }).click();
-  await expect(authority.getByTestId("consent-review")).toContainText("Review hash");
+  await expect(authority.getByTestId("consent-review")).toContainText("review hash");
   await authority.getByRole("button", { name: "Adopt these exact terms (inactive)" }).click();
-  await expect(authority.getByTestId("consent-adopted")).toContainText("status INACTIVE");
+  await expect(authority.getByTestId("consent-adopted")).toContainText("status inactive");
 }
 
 async function runAndWait(page, agentId, text) {
   await page.goto(`/app#/positions?agent=${encodeURIComponent(agentId)}`);
   const actions = page.getByRole("region", { name: "Agent actions" });
-  await actions.getByRole("button", { name: "Run one bounded evaluation" }).click();
+  await actions.getByRole("button", { name: "Run one check" }).click();
   await expect(actions.getByRole("status").filter({ hasText: "Evaluation saved" })).toBeVisible();
   await expect(async () => {
     await actions.getByRole("button", { name: "Refresh" }).click();
@@ -96,14 +96,14 @@ test("the original transaction is saved, sent once, shown as unknown, then recon
   await injectAuth(page, tokens.a);
   await readyOriginalAgent(page, thesis.url, agentId, project);
 
-  const actions = await runAndWait(page, agentId, "SUBMITTED_UNKNOWN");
+  const actions = await runAndWait(page, agentId, "submitted, outcome unknown");
   await actions.getByRole("button", { name: /Open action/ }).first().click();
   const lineage = actions.getByTestId("action-lineage");
   const original = lineage.getByTestId("action-original");
   await expect(original.getByTestId("action-original-stage")).toContainText("Its effect is unknown until its own receipt is reconciled");
   await expect(original.getByTestId("action-original-hash")).toHaveText(/^0x[0-9a-f]{64}$/);
   await expect(original).toContainText("not a live provider or chain");
-  await expect(lineage.getByTestId("action-receipts")).toHaveText("SUBMISSION_UNKNOWN");
+  await expect(lineage.getByTestId("action-receipts")).toHaveText("Outcome unknown");
   const transactionHash = await original.getByTestId("action-original-hash").innerText();
   const actionId = (await lineage.getByRole("heading", { level: 3 }).innerText()).replace("Action ", "").trim();
   await shot(page, project, "unknown");
@@ -111,8 +111,8 @@ test("the original transaction is saved, sent once, shown as unknown, then recon
   await noSidewaysScroll(page);
 
   await lineage.getByRole("button", { name: "Reconcile original action" }).click();
-  await expect(lineage.getByTestId("action-receipts")).toHaveText("SUBMISSION_UNKNOWN → CONFIRMED");
-  await expect(lineage.getByTestId("action-queue-state")).toHaveText("SUBMITTED_CONFIRMED");
+  await expect(lineage.getByTestId("action-receipts")).toHaveText("Outcome unknown → Confirmed");
+  await expect(lineage.getByTestId("action-queue-state")).toHaveText("Sent and confirmed");
   await expect(original.getByTestId("action-original-hash")).toHaveText(transactionHash);
   await shot(page, project, "confirmed");
 
@@ -129,14 +129,15 @@ test("a lost signer reply keeps the reserved amounts and is never sent or replac
   const agentId = `orig-${project}-fx-original-fx-lost-sign`;
   await injectAuth(page, tokens.a);
   await readyOriginalAgent(page, thesis.url, agentId, project);
-  const actions = await runAndWait(page, agentId, "SUBMITTED_UNKNOWN");
+  const actions = await runAndWait(page, agentId, "submitted, outcome unknown");
   await actions.getByRole("button", { name: /Open action/ }).first().click();
   const lineage = actions.getByTestId("action-lineage");
   await expect(lineage.getByTestId("action-original-stage")).toContainText("The signer reply was lost");
   await expect(lineage.getByTestId("action-original-hash")).toHaveText("None saved");
   await lineage.getByRole("button", { name: "Reconcile original action" }).click();
-  await expect(lineage.getByTestId("action-queue-state")).toHaveText("SUBMITTED_UNKNOWN (SUBMISSION_UNKNOWN)");
-  await expect(lineage.getByTestId("action-receipts")).not.toContainText("CONFIRMED");
+  await expect(lineage.getByTestId("action-queue-state")).toHaveText("Sent, outcome unknown (reason in Details)");
+  await expect(detailValue(lineage, "Queue code")).toHaveText("SUBMITTED_UNKNOWN (SUBMISSION_UNKNOWN)");
+  await expect(lineage.getByTestId("action-receipts")).not.toContainText("Confirmed");
   await expect(lineage).toContainText("RESERVED");
   const actionId = (await lineage.getByRole("heading", { level: 3 }).innerText()).replace("Action ", "").trim();
   await shot(page, project, "lost-sign");

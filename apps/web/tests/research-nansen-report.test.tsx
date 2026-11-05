@@ -59,11 +59,22 @@ describe("Nansen token report", () => {
     expect(screen.getByRole("button", { name: "Save and reserve this report" })).toBeDisabled();
   });
 
+  it.each([
+    ["nansen_outcome_unknown", "The outcome is unknown. It is never run again; the reserved amounts stay held."],
+    ["operating_release_credential_unavailable", "This job is unavailable. The reason is in Details."],
+  ])("states the true outcome of an unavailable report job: %s", async (reason, sentence) => {
+    mocks.list.mockResolvedValue({ available: true, jobs: [job({ state: "UNAVAILABLE", terminal_reason: reason, nansen_report: null })] });
+    render(<ResearchNansenReport intakeId="intake-1" />);
+    const card = await screen.findByTestId("nansen-job");
+    expect(card).toHaveTextContent(sentence);
+    expect(card).toHaveTextContent(reason);
+  });
+
   it("reopens the saved report with the exact question, findings, gaps and an authored label", async () => {
     mocks.list.mockResolvedValue({ jobs: [job()] });
     mocks.open.mockResolvedValue(record);
     render(<ResearchNansenReport intakeId="intake-1" />);
-    expect(await screen.findByTestId("nansen-job-answer")).toHaveTextContent("Answer: PARTIAL · requests KNOWN 2 · credits KNOWN 6");
+    expect(await screen.findByTestId("nansen-job-answer")).toHaveTextContent("Answer: Partly answered · requests Known 2 · credits Known 6");
     expect(screen.getByTestId("nansen-label")).toHaveTextContent("Not provider data");
     await userEvent.click(screen.getByRole("button", { name: "Open saved report" }));
     const view = await screen.findByTestId("nansen-report-view");
@@ -80,7 +91,7 @@ describe("Nansen token report", () => {
       provider_requests: { state: "UNKNOWN", measured: 0, lost: 1 },
       nansen_credits: { state: "UNKNOWN", measured: 0, deducted: null, reserved_by_package: "6" } } } })] });
     render(<ResearchNansenReport intakeId="intake-1" />);
-    expect(await screen.findByTestId("nansen-job-answer")).toHaveTextContent("credits UNKNOWN (reserved amount held)");
+    expect(await screen.findByTestId("nansen-job-answer")).toHaveTextContent("credits Unknown (reserved amount held)");
   });
 
   it("starts one keyed report with the exact fields and shows a refusal with its code", async () => {
@@ -90,7 +101,7 @@ describe("Nansen token report", () => {
     await userEvent.type(screen.getByLabelText("Token symbol"), "MOE");
     await userEvent.click(screen.getByLabelText("Basic flow records"));
     await userEvent.click(screen.getByRole("button", { name: "Save and reserve this report" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("The window start must be before its end. (WINDOW_INVALID)");
+    expect(await screen.findByRole("alert")).toHaveTextContent("The window start must be before its end.");
     const [intakeId, body] = mocks.start.mock.calls[0];
     expect(intakeId).toBe("intake-1");
     expect(body).toMatchObject({ token_address: "0xd8e004acba279417c04c0633cb5a21ceca207777", token_symbol: "MOE",
@@ -139,7 +150,7 @@ describe("Nansen report under an operating release", () => {
     expect(screen.queryByLabelText("Token contract address")).toBeNull();
     expect(screen.queryByLabelText("Credit limit for this report")).toBeNull();
     const label = screen.getByTestId("nansen-label");
-    expect(label).toHaveTextContent("configured for actual Nansen collection");
+    expect(label).toHaveTextContent("collects real Nansen data");
     expect(label).not.toHaveTextContent(/collected from Nansen|passed|verified/i);
     await userEvent.click(screen.getByRole("button", { name: "Save and reserve this report" }));
     await waitFor(() => expect(mocks.start).toHaveBeenCalledTimes(1));
@@ -162,12 +173,47 @@ describe("Nansen report under an operating release", () => {
     mocks.open.mockResolvedValue(record);
     render(<ResearchNansenReport intakeId="intake-1" />);
     await userEvent.click(await screen.findByRole("button", { name: "Save and reserve this report" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("(WINDOW_INVALID)");
+    expect(await screen.findByRole("alert")).toHaveTextContent("The window start must be before its end.");
+    expect(screen.getByText(/Error code WINDOW_INVALID/)).toBeInTheDocument();
     expect(mocks.start).toHaveBeenCalledTimes(1);
     expect(mocks.start.mock.calls[0][1].limits).toEqual({ max_requests: 3, max_pages: 1, max_bytes: 90000, max_credits: "2.5", per_page: 50 });
     await userEvent.click(screen.getByRole("button", { name: "Open saved report" }));
     expect(await screen.findByTestId("nansen-report-view")).toHaveTextContent(QUESTION);
     expect(mocks.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps a non-default holder label and order, with the raw values in Details", async () => {
+    mocks.list.mockResolvedValue({ jobs: [], operating_release: release({}, {
+      operations: ["holders"],
+      holder_query: { label_type: "whale", aggregate_by_entity: true, order_field: "value_usd", value_usd_min: 1000 },
+      flow_query: { label: "smart_money" },
+    }) });
+    render(<ResearchNansenReport intakeId="intake-1" />);
+    const request = await screen.findByTestId("nansen-release-request");
+    expect(request).toHaveTextContent("Holders: Whales. Ordered by USD value.");
+    expect(document.body).toHaveTextContent("value_usd");
+  });
+
+  it("maps a non-default flow label, with the raw value in Details", async () => {
+    mocks.list.mockResolvedValue({ jobs: [], operating_release: release({}, { flow_query: { label: "smart_money" } }) });
+    render(<ResearchNansenReport intakeId="intake-1" />);
+    const request = await screen.findByTestId("nansen-release-request");
+    expect(request).toHaveTextContent("Flows: Smart money.");
+    expect(request).not.toHaveTextContent("top 100 holders");
+    expect(within(request).getByText("smart_money").closest("details")).not.toBeNull();
+  });
+
+  it("uses the fallback for an unmapped query value and states no false holder fact", async () => {
+    mocks.list.mockResolvedValue({ jobs: [], operating_release: release({}, {
+      operations: ["holders", "flows"],
+      holder_query: { label_type: "new_label", aggregate_by_entity: false, order_field: "new_order", value_usd_min: null },
+      flow_query: { label: "new_flow" },
+    }) });
+    render(<ResearchNansenReport intakeId="intake-1" />);
+    const request = await screen.findByTestId("nansen-release-request");
+    expect(request).toHaveTextContent("Holders: unknown holder type. Ordered by unknown order.");
+    expect(request).toHaveTextContent("Flows: unknown flow type.");
+    expect(within(request).getByText("new_flow").closest("details")).not.toBeNull();
   });
 
   it("posts a holder-only stand-in release and labels it as not provider data", async () => {
@@ -177,7 +223,7 @@ describe("Nansen report under an operating release", () => {
     mocks.start.mockResolvedValueOnce(job({ state: "RESERVED", nansen_report: null }));
     render(<ResearchNansenReport intakeId="intake-1" />);
     await screen.findByTestId("nansen-release-request");
-    expect(screen.getByTestId("nansen-label")).toHaveTextContent("Stand-in");
+    expect(screen.getByTestId("nansen-label")).toHaveTextContent("Example Nansen-shaped");
     expect(screen.getByTestId("nansen-label")).toHaveTextContent("Not provider data");
     await userEvent.click(screen.getByRole("button", { name: "Save and reserve this report" }));
     await waitFor(() => expect(mocks.start).toHaveBeenCalledTimes(1));
@@ -284,15 +330,15 @@ describe("saved Nansen report labels", () => {
     expect(within(evidence).getByRole("link", { name: "Nansen API documentation" })).toHaveAttribute("href", "https://docs.nansen.ai");
     expect(view).toHaveTextContent(ACTUAL_NOTICE);
     expect(within(view).getByTestId("nansen-coverage")).toHaveTextContent("partial coverage");
-    expect(within(view).getByTestId("nansen-settlement")).toHaveTextContent("credits UNKNOWN (reserved amount held)");
-    expect(within(view).getByTestId("nansen-sources")).toHaveTextContent("2 saved provider response hashes");
+    expect(within(view).getByTestId("nansen-settlement")).toHaveTextContent("credits Unknown (reserved amount held)");
+    expect(within(view).getByTestId("nansen-sources")).toHaveTextContent("2 saved response hashes");
     expect(within(view).getByTestId("nansen-hashes")).toHaveTextContent("A saved hash did not match. Do not rely on this report.");
   });
 
   it.each([
-    ["RELEASE_STAND_IN_RESPONSE", "Stand-in responses. Not provider data."],
+    ["RELEASE_STAND_IN_RESPONSE", "Example Nansen-shaped responses. Not provider data."],
     ["AUTHORED_FIXTURE", "Authored responses replayed on this server. Not provider data."],
-    ["SOMETHING_ELSE", "Unrecognized evidence class SOMETHING_ELSE. Do not treat this report as provider data."],
+    ["SOMETHING_ELSE", "This report has an unknown data label. Do not treat it as provider data."],
   ])("labels a saved %s report without Nansen attribution", async (evidenceClass, copy) => {
     mocks.list.mockResolvedValue({ jobs: [job()] });
     mocks.open.mockResolvedValue({ ...record, content: { ...record.content, evidence_class: evidenceClass } });

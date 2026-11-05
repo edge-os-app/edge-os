@@ -84,6 +84,8 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 details { border: 1px solid var(--color-divider); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); background: var(--color-bg); }
 details > summary { cursor: pointer; font-weight: 600; min-height: var(--control-min); display: flex; align-items: center; }
 details[open] > summary { margin-bottom: var(--space-3); }
+dl.kv a { color: var(--color-accent-text); }
+.card li { overflow-wrap: anywhere; }
 ol.attempts { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-4); }
 ol.attempts li { padding-bottom: var(--space-4); border-bottom: 1px solid var(--color-divider); }
 ol.attempts li:last-child { border-bottom: 0; padding-bottom: 0; }
@@ -170,6 +172,7 @@ table.records th { font-size: 11px; letter-spacing: 0.08em; text-transform: uppe
   .main h1 { font-size: 32px; }
   .panel { padding: var(--space-4); border-radius: var(--radius-md); }
   .spot-replay-dependency { grid-template-columns: minmax(0, 1fr); }
+  details dl.kv { grid-template-columns: minmax(0, 1fr); }
   .sheet { width: 100vw; border-radius: 0; }
   table.records { font-size: 12px; }
   table.records tr > :nth-child(1) { width: 27%; }

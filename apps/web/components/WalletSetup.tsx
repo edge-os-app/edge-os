@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Details } from "./Details";
 import { api, ApiError } from "../lib/api";
 import { useOptionalAuth } from "../lib/auth";
 import type { WalletSetupRecord } from "../lib/types";
 import { claimStorageWorks, forgetClaim, retainClaim, retainedClaim, walletProviderMode, walletSetupApi, type CreatedWallet, type WalletProviderMode } from "../lib/wallet-setup-api";
+import { CANCELLATION_INTENT, plain } from "../lib/labels";
 
 export interface WalletSetupRevision { strategyId: string; strategyRevisionId: string }
 
@@ -31,11 +33,11 @@ const UNSUPPORTED_WALLET = "The wallet that came back is not an Ethereum wallet.
 
 function stateTitle(record: WalletSetupRecord): string {
   switch (record.state) {
-    case "REQUESTED": return "Saved, not dispatched";
-    case "PENDING": return "Creation pending";
+    case "REQUESTED": return "Saved, not started";
+    case "PENDING": return "Creating";
     case "UNKNOWN": return "Outcome unknown";
     case "CONFIRMED": return "Wallet confirmed";
-    case "FAILED": return record.reason === "CANCELLED_BEFORE_DISPATCH" ? "Cancelled before dispatch" : "Setup failed";
+    case "FAILED": return record.reason === "CANCELLED_BEFORE_DISPATCH" ? "Cancelled before start" : "Setup failed";
   }
 }
 
@@ -201,10 +203,10 @@ export function WalletSetup({ agentId, revision, onClose }: {
         {onClose ? <button className="btn btn-ghost" style={{ minHeight: 44 }} type="button" onClick={onClose}>Close setup</button> : null}
       </div>
       {mode === null && <p className="muted">Checking the wallet provider…</p>}
-      {mode === "fixture" && <p className="muted">This build uses an authored local fixture. It is not a real wallet or provider. Creation adds no funding, signer, mandate, position or trading action.</p>}
-      {actualCreation && <p className="muted">This creates one additional wallet in your own Privy account for this agent. It adds no funding, signer, mandate, position or trading action.</p>}
+      {mode === "fixture" && <p className="muted">This build uses example wallet data. It is not a real wallet or provider. Creation adds no funding, signer, permission, position or trading action.</p>}
+      {actualCreation && <p className="muted">This creates one additional wallet in your own Privy account for this agent. It adds no funding, signer, permission, position or trading action.</p>}
       {mode === "privy_lookup" && !createEmbeddedWallet && <p className="muted">Sign in with Privy to create this agent's wallet.</p>}
-      {mode === "unavailable" && <p className="muted">Real wallet creation is unavailable in this build. No provider is configured, so no wallet can be created. It adds no funding, signer, mandate, position or trading action.</p>}
+      {mode === "unavailable" && <p className="muted">Real wallet creation is unavailable in this build. No provider is configured, so no wallet can be created. It adds no funding, signer, permission, position or trading action.</p>}
 
       {!agentId && (
         <div>
@@ -239,14 +241,14 @@ export function WalletSetup({ agentId, revision, onClose }: {
         <div>
           <h3>No wallet setup saved</h3>
           {!revision ? (
-            <p className="muted">Choose an exact saved strategy revision in Research to set up a wallet for this agent.</p>
+            <p className="muted">Choose an exact saved version in Research to set up a wallet for this agent.</p>
           ) : !creationAvailable ? (
-            <p className="muted">A durable setup can be saved here only when wallet creation is available. This build uses no provider, so creation is refused.</p>
+            <p className="muted">A saved setup can be recorded here only when wallet creation is available. This build uses no provider, so creation is refused.</p>
           ) : (
             <div>
-              <p>The setup binds this exact saved revision. It never uses a first or latest wallet.</p>
+              <p>The setup binds this exact saved version. It never uses a first or latest wallet.</p>
               <dl className="kv">
-                <dt>Strategy revision</dt><dd className="mono">{revision.strategyRevisionId}</dd>
+                <dt>Saved version</dt><dd className="mono">{revision.strategyRevisionId}</dd>
               </dl>
               <label htmlFor="wallet-setup-network">Requested network</label>
               <select id="wallet-setup-network" className="input" style={{ minHeight: 44 }} value={network}
@@ -272,10 +274,11 @@ export function WalletSetup({ agentId, revision, onClose }: {
             <dt>Agent</dt><dd>{record.agent_id}</dd>
             <dt>Requested network</dt><dd>{record.network_id}</dd>
             <dt>Strategy revision</dt><dd className="mono">{record.strategy_revision_id}</dd>
-            <dt>Cancellation intent</dt><dd>{record.cancellation_intent}</dd>
+            <dt>Cancellation</dt><dd>{plain(CANCELLATION_INTENT, record.cancellation_intent, "Unknown")}</dd>
             <dt>Wallet</dt><dd className="mono" data-testid="wallet-setup-wallet">{record.wallet_id ?? "Not bound"}</dd>
             <dt>Updated</dt><dd><time dateTime={record.updated_at}>{record.updated_at}</time></dd>
           </dl>
+          <Details summary="Details"><p className="mono">State {record.state} · cancellation {record.cancellation_intent}{record.reason ? ` · reason ${record.reason}` : ""}</p></Details>
           <p>Requested network is an application binding. It does not prove provider-chain enforcement.</p>
           {record.reason ? <p className="muted">{REASON_COPY[record.reason] ?? record.reason}</p> : null}
 
@@ -316,7 +319,7 @@ export function WalletSetup({ agentId, revision, onClose }: {
           {record.state === "CONFIRMED" && record.cancellation_intent === "NONE" && (
             <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={blocked}
               onClick={() => void run(record.agent_id, () => api.cancelWalletSetup(record.agent_id), "The cancellation was not saved.")}>
-              Record cancellation intent
+              Record a cancellation
             </button>
           )}
         </div>

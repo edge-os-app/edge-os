@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { payloadBindingText, payloadBindingUsable } from "../lib/types";
 import type { DatasetSummary, MarketAdoptionBody } from "../lib/api";
+import { Details } from "./Details";
+import { EVIDENCE_CLASS, deliveryCheckText, plain } from "../lib/labels";
 
 interface Props {
   intakeId: string;
@@ -66,7 +68,7 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
   const load = async () => {
     setLoadError("");
     try { setDatasets((await api.historyDatasets()).datasets); }
-    catch (cause) { setLoadError(failure(cause, "Your saved datasets could not be loaded.")); }
+    catch (cause) { setLoadError(failure(cause, "Your saved data could not be loaded.")); }
   };
   useEffect(() => { void load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -89,9 +91,9 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
       const shown = await reload();
       if (shown === result.adoption.draft_id) {
         setPending(null);
-        setSaved(`New draft ${result.adoption.draft_id} uses the recorded market. Review its rules, then save it as a new revision.`);
+        setSaved(`New draft ${result.adoption.draft_id} uses the recorded market. Review its rules, then save it as a new version.`);
       } else {
-        setError("The adoption was saved, but the request could not be read back. Reload the page before you save a revision.");
+        setError("The adoption was saved, but the request could not be read back. Reload the page before you save a version.");
       }
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 0) {
@@ -117,22 +119,22 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
   return (
     <section className="panel stack" aria-labelledby="market-adoption-title" data-testid="market-adoption"
       style={{ overflowWrap: "anywhere" }}>
-      <h2 id="market-adoption-title">Use a recorded market (optional)</h2>
-      <p className="muted">This makes a NEW draft on a saved, qualified history market. Earlier drafts and saved revisions stay unchanged. The selected dataset&rsquo;s own saved evidence class decides its provenance label below. The execution route stays unqualified and no trading permission is granted.</p>
+      <h2 id="market-adoption-title">Use a saved market (optional)</h2>
+      <p className="muted">This makes a new draft on a saved market. Earlier drafts and saved versions stay unchanged. The saved data&rsquo;s own label decides the source note below. Trading stays unapproved and no trading permission is granted.</p>
       {loadError ? <div className="status err" role="alert"><p>{loadError}</p>
-        <button className="btn btn-secondary" type="button" onClick={() => void load()}>Retry loading datasets</button></div> : null}
-      {datasets === null && !loadError ? <p role="status" aria-busy="true" className="muted">Loading your saved datasets.</p> : null}
-      {datasets !== null && qualified.length === 0 ? <p className="status stop">No qualified recorded dataset is saved. Run a recorded-history investigation first.</p> : null}
+        <button className="btn btn-secondary" type="button" onClick={() => void load()}>Retry loading saved data</button></div> : null}
+      {datasets === null && !loadError ? <p role="status" aria-busy="true" className="muted">Loading your saved data.</p> : null}
+      {datasets !== null && qualified.length === 0 ? <p className="status stop">No saved data is ready to use. Run a history investigation first.</p> : null}
       {others.length ? (
         <details>
-          <summary>Datasets that cannot supply a market ({others.length})</summary>
+          <summary>Saved data that cannot supply a market ({others.length})</summary>
           <ul>{others.map((item) => <li key={item.dataset_id}><span className="mono">{item.dataset_id}</span>: {item.source_id}, {item.verdict.overall}, {item.binding_state}{item.unavailable_states.length ? ` (${item.unavailable_states.join(", ")})` : ""}
             {payloadBindingUsable(item.payload_binding) ? null : <span data-testid="market-adoption-binding-blocked"> {payloadBindingText(item.payload_binding)}</span>}</li>)}</ul>
         </details>
       ) : null}
       {qualified.length ? (
         <div className="field">
-          <label htmlFor="market-dataset">Saved dataset</label>
+          <label htmlFor="market-dataset">Saved data</label>
           <select id="market-dataset" className="input" value={datasetId} onChange={(event) => { setDatasetId(event.target.value); setRuleId(""); setConfirmed(false); }}>
             <option value="">Choose a qualified dataset</option>
             {qualified.map((item) => <option key={item.dataset_id} value={item.dataset_id}>{item.source_id} · {item.dataset_id.slice(0, 8)}</option>)}
@@ -142,31 +144,41 @@ export function MarketAdoption({ intakeId, interpretationRevisionId, parentRevis
       {chosen ? (
         <div className="stack" data-testid="market-adoption-review">
           <dl className="kv">
-            <dt>Dataset</dt><dd className="mono">{chosen.dataset_id}</dd>
-            <dt>Source</dt><dd>{chosen.source_id}; {chosen.evidence_class}; {chosen.content_label}</dd>
-            <dt>Verdict</dt><dd>{chosen.verdict.overall}; window {chosen.window_start} to {chosen.window_end}</dd>
+            <dt>Saved data</dt><dd className="mono">{chosen.dataset_id}</dd>
+            <dt>Source</dt><dd>{plain(EVIDENCE_CLASS, chosen.evidence_class, "unknown data label")}</dd>
+            <dt>Result</dt><dd>{chosen.verdict.overall === "QUALIFIED" ? "Qualified" : "Not qualified"}; window {chosen.window_start} to {chosen.window_end}</dd>
             <dt>Network</dt><dd>MONAD, chain {String(binding.chain_id)}</dd>
             <dt>Pool</dt><dd className="mono">{String(binding.pool_address)}</dd>
             <dt>Base asset</dt><dd className="mono">{String(binding.base_asset)} ({String(binding.base_decimals)} decimals)</dd>
             <dt>Quote asset</dt><dd className="mono">{String(binding.quote_asset)} ({String(binding.quote_decimals)} decimals)</dd>
-            <dt>Orientation</dt><dd>{String(binding.orientation)}</dd>
-            <dt>Versions</dt><dd>{String(binding.event_schema_version)}; {String(binding.amount_conversion_version)}; {String(binding.data_route)}</dd>
-            <dt>Binding evidence</dt><dd>{String(binding.evidence_class)}; route qualification {String(binding.qualification)}</dd>
-            <dt>Payload binding</dt><dd data-testid="market-adoption-binding">{payloadBindingText(chosen.payload_binding)}</dd>
+            <dt>Market direction</dt><dd>{String(binding.orientation)}</dd>
+            <dt>Format versions</dt><dd>{String(binding.event_schema_version)}; {String(binding.amount_conversion_version)}</dd>
+            <dt>Evidence check</dt><dd>{plain(EVIDENCE_CLASS, String(binding.evidence_class), "unknown data label")}</dd>
+            <dt>Delivery check</dt><dd data-testid="market-adoption-binding">{deliveryCheckText(chosen.payload_binding?.status)}</dd>
             <dt>Quote unit</dt><dd className="mono">{chosen.quote_unit}</dd>
           </dl>
+          <Details summary="Details"><dl className="kv">
+            <dt>Saved data ID</dt><dd className="mono">{chosen.dataset_id}</dd>
+            <dt>Source ID</dt><dd className="mono">{chosen.source_id}</dd>
+            <dt>Data label</dt><dd className="mono">{chosen.evidence_class} · {chosen.content_label}</dd>
+            <dt>Evidence check</dt><dd className="mono">binding label {String(binding.evidence_class)}</dd>
+            <dt>Route</dt><dd className="mono">{String(binding.data_route)}</dd>
+            <dt>Qualification</dt><dd className="mono">{String(binding.qualification)}</dd>
+            <dt>Format versions</dt><dd className="mono">{String(binding.event_schema_version)}; {String(binding.amount_conversion_version)}</dd>
+            <dt>Delivery check</dt><dd className="mono">{payloadBindingText(chosen.payload_binding)}</dd>
+          </dl></Details>
           <p className="muted" data-testid="market-adoption-provenance">{provenance(chosen)}</p>
           <div className="field">
-            <label htmlFor="market-rule">Entry rule (one you declared for this dataset)</label>
+            <label htmlFor="market-rule">Entry rule (one you saved for this data)</label>
             <select id="market-rule" className="input" value={ruleId} onChange={(event) => { setRuleId(event.target.value); setConfirmed(false); }}>
-              <option value="">Choose a declared rule</option>
+              <option value="">Choose a saved rule</option>
               {chosen.declared_rules.map((item) => <option key={item.evaluation_id} value={item.evaluation_id}>{item.variant_id}: {describe(item.price_expression)} and {describe(item.volume_expression)}</option>)}
             </select>
           </div>
-          <p className="muted">The draft's entry becomes exactly this declared rule. Worked-example rules are refused.</p>
+          <p className="muted">The draft's entry becomes exactly this saved rule. Worked-example rules are refused.</p>
           <fieldset className="stack">
             <legend>Exit rule in your own words: exit when the price return is below a threshold</legend>
-            <label className="field">Exit lookback (buckets)
+            <label className="field">Exit lookback (five-minute periods)
               <input className="input" inputMode="numeric" value={exitLookback} onChange={(event) => { setExitLookback(event.target.value.trim()); setConfirmed(false); }} />
             </label>
             <label className="field">Exit threshold (fraction, for example -0.001)

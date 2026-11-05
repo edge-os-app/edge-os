@@ -6,6 +6,9 @@ import { payloadBindingText, payloadBindingUsable } from "../lib/types";
 import type { DatasetSummary, HistorySpotReplayBody } from "../lib/api";
 import type { SpotReplayBody, SpotReplayDependency, SpotReplayRecord, SpotReplayTimingProfile, Strategy } from "../lib/types";
 import { ReplayResult } from "./ReplayResult";
+import { Details } from "./Details";
+import { plural } from "../lib/plural";
+import { EVIDENCE_CLASS, deliveryCheckText, plain } from "../lib/labels";
 
 type FieldName = "entry" | "exit";
 type Series = SpotReplayDependency["series"];
@@ -149,62 +152,68 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
   return (
     <section className="panel spot-replay" aria-labelledby="spot-replay-title" data-testid="spot-replay">
       <h2 id="spot-replay-title">Test the saved strategy on price data</h2>
-      <p className="muted">{source === "fixture" ? "The authored synthetic fixture covers 12:05 to 12:35 UTC, with three earlier buckets for warm-up. The delayed profile starts at 12:10 so its first delayed decision keeps that warm-up. " : "The replay runs on the selected saved price data. "}Fills are assumptions. The replay uses saved fee and slippage rates, and omits gas, spread, extra impact, and capacity. Review each essential input set before saving.</p>
-      <h3>New run settings (editable)</h3>
+      <p className="muted">{source === "fixture" ? "The example price data covers 12:05 to 12:35 UTC, with three earlier five-minute periods for warm-up. The delayed profile starts at 12:10 so its first delayed decision keeps that warm-up. " : "The replay runs on the selected saved price data. "}Fills are assumptions. The replay uses saved fee and slippage rates, and omits gas, spread, extra impact, and capacity. Review each essential input set before saving.</p>
+      <h3>New replay settings (editable)</h3>
       <div className="field">
         <label htmlFor="spot-replay-timing-profile">Timing profile</label>
         <select id="spot-replay-timing-profile" className="input" value={timingProfile} disabled={busy}
           onChange={(event) => setTimingProfile(event.target.value as SpotReplayTimingProfile)}>
-          <option value={DEFAULT_TIMING_PROFILE}>Default replay (p12.spot-replay/1)</option>
+          <option value={DEFAULT_TIMING_PROFILE}>Default replay</option>
           <option value={DELAYED_TIMING_PROFILE}>Delayed hypothetical replay (300 s decision delay)</option>
         </select>
       </div>
       {timingProfile === DELAYED_TIMING_PROFILE ? (
-        <p className="muted" data-testid="spot-replay-delayed-note">The delayed profile decides each source bucket 300 seconds after it ends. Its window starts one bucket later than the default, so the first delayed decision keeps its full warm-up. Each fill uses the next bucket&rsquo;s stale historical close, a hypothetical price, not a tradable quote.</p>
+        <p className="muted" data-testid="spot-replay-delayed-note">The delayed profile decides each five-minute period 300 seconds after it ends. Its window starts one period later than the default, so the first delayed decision keeps its full warm-up. Each fill uses the next period&rsquo;s stale historical close, a hypothetical price, not a tradable quote.</p>
       ) : null}
       <div className="field">
         <label htmlFor="spot-replay-source">Price data</label>
         <select id="spot-replay-source" className="input" value={source} onChange={(event) => chooseSource(event.target.value)}>
-          <option value="fixture">Authored synthetic fixture p13.wc01/1</option>
-          {datasets.map((item) => <option key={item.dataset_id} value={item.dataset_id}>Saved recorded history {item.source_id} · {item.dataset_id.slice(0, 8)}</option>)}
+          <option value="fixture">Example price data</option>
+          {datasets.map((item) => <option key={item.dataset_id} value={item.dataset_id}>Saved history {item.source_id} · {item.dataset_id.slice(0, 8)}</option>)}
         </select>
       </div>
       {blocked.length ? (
         <details data-testid="spot-replay-binding-blocked">
-          <summary>Saved datasets that cannot be replayed ({blocked.length})</summary>
+          <summary>Saved data that cannot be replayed ({blocked.length})</summary>
           <ul style={{ overflowWrap: "anywhere" }}>{blocked.map((item) => <li key={item.dataset_id}><span className="mono">{item.dataset_id}</span>: {item.source_id}. {payloadBindingText(item.payload_binding)}</li>)}</ul>
         </details>
       ) : null}
       {dataset ? (
         <div className="stack" data-testid="spot-replay-history-source" style={{ overflowWrap: "anywhere" }}>
-          <p className="status stop">Simulated fills on {datasetClass === "provider" ? "saved provider history dataset" : datasetClass === "synthetic" ? "saved recorded-history dataset" : "saved history dataset"} {dataset.dataset_id}: {dataset.evidence_class}, {dataset.content_label}. {datasetClass === "provider" ? "These prices are saved provider history, not synthetic." : datasetClass === "synthetic" ? "These prices are synthetic recorded responses, not observed market history." : `${dataset.evidence_class} is an unrecognized saved evidence class, so this view claims neither observed history nor synthetic prices.`} The replay runs only if this revision uses the same market. Data after {dataset.readable_until} is protected and cannot be replayed.</p>
-          <p data-testid="spot-replay-history-binding">{payloadBindingText(dataset.payload_binding)}</p>
+          <p className="status stop">Simulated fills on {datasetClass === "provider" ? "saved provider history" : datasetClass === "synthetic" ? "saved recorded history" : "saved history"} {dataset.dataset_id.slice(0, 8)}: {plain(EVIDENCE_CLASS, dataset.evidence_class, "unknown data label")}. {datasetClass === "provider" ? "These prices are saved provider history, not synthetic." : datasetClass === "synthetic" ? "These prices are synthetic recorded responses, not observed market history." : `${dataset.evidence_class} is an unrecognized saved evidence class, so this view claims neither observed history nor synthetic prices.`} The replay runs only if this revision uses the same market. Data after {dataset.readable_until} is protected and cannot be replayed.</p>
+          <p data-testid="spot-replay-history-binding">{deliveryCheckText(dataset.payload_binding?.status)}</p>
+          <Details summary="Details"><dl className="kv">
+            <dt>Saved data ID</dt><dd className="mono">{dataset.dataset_id}</dd>
+            <dt>Data label</dt><dd className="mono">{dataset.evidence_class} · {dataset.content_label}</dd>
+            <dt>Delivery check</dt><dd className="mono">{payloadBindingText(dataset.payload_binding)}</dd>
+          </dl></Details>
           <div className="field">
             <label htmlFor="spot-replay-window-start">Window start (UTC)</label>
             <input id="spot-replay-window-start" className="input mono" value={windowStart} onChange={(event) => setWindowStart(event.target.value.trim())} />
           </div>
           <div className="field">
-            <label htmlFor="spot-replay-window-end">Window end (UTC, exclusive)</label>
+            <label htmlFor="spot-replay-window-end">End (UTC, not included)</label>
             <input id="spot-replay-window-end" className="input mono" value={windowEnd} onChange={(event) => setWindowEnd(event.target.value.trim())} />
           </div>
         </div>
       ) : null}
       <dl className="kv">
-        <dt>Data</dt><dd className="mono">{dataset ? `${dataset.source_id} · simulated fills` : "p13.wc01/1 · synthetic only"}</dd>
+        <dt>Data</dt><dd className="mono">{dataset ? `${dataset.source_id} · simulated fills` : "Example data only"}</dd>
         <dt>Window</dt><dd>{dataset ? `${windowStart} to ${windowEnd}` : timingProfile === DELAYED_TIMING_PROFILE ? "2026-10-01 12:10 to 12:35 UTC" : "2026-10-01 12:05 to 12:35 UTC"}</dd>
         <dt>Starting capital (quote)</dt><dd>1000. This fixed amount will be used for a new run.</dd>
         <dt>Starting base amount</dt><dd>0</dd>
         <dt>Starting cost basis</dt><dd>0</dd>
         <dt>Trade size</dt><dd>{strategy.sizing.amount} {strategy.sizing.unit}</dd>
-        <dt>Warm-up</dt><dd>{strategy.warmup_buckets} scheduled buckets</dd>
+        <dt>Warm-up</dt><dd>{plural(strategy.warmup_buckets, "scheduled five-minute period")}</dd>
         <dt>Saved cost source</dt><dd>{strategy.cost_assumptions.source_ref}; fee {strategy.cost_assumptions.fee_rate}; slippage {strategy.cost_assumptions.slippage_rate}</dd>
-        <dt>Execution effects</dt><dd>Gas, spread, extra impact, and capacity are not modeled.</dd>
+        <dt>What is not modelled</dt><dd>Gas, spread, extra impact, and capacity are not modelled.</dd>
       </dl>
+      {dataset ? null : <Details summary="Details"><p className="mono">p13.wc01/1 · synthetic only</p></Details>}
 
       {(["entry", "exit"] as const).map((field) => (
         <fieldset className="spot-replay-field" key={field}>
-          <legend>{field === "entry" ? "Entry" : "Exit"} essential dependencies</legend>
-          <p className="muted">Bind the complete saved dependency set. Offsets count scheduled five-minute buckets. Do not guess.</p>
+          <legend>{field === "entry" ? "Entry" : "Exit"} required inputs</legend>
+          <p className="muted">List every saved input. Offsets count scheduled five-minute periods. Do not guess.</p>
           {dependencies[field].map((dependency, index) => (
             <div className="spot-replay-dependency" key={`${field}-${index}`}>
               <label className="field">Series
@@ -219,16 +228,16 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
                     { offset_buckets: Number(event.target.value) })} />
               </label>
               <button className="btn btn-secondary" type="button" onClick={() => removeDependency(field, index)}
-                aria-label={`Remove ${field} dependency ${index + 1}`}>Remove</button>
+                aria-label={`Remove ${field} input ${index + 1}`}>Remove</button>
             </div>
           ))}
           <div className="btn-row">
             <button className="btn btn-secondary" type="button" onClick={() => addDependency(field)}
-              disabled={availableSeries.length === 0}>Add {field} dependency</button>
+              disabled={availableSeries.length === 0}>Add an input for {field}</button>
             <label className="choice">
               <input type="checkbox" checked={reviewed[field]} onChange={(event) =>
                 setReviewed((current) => ({ ...current, [field]: event.target.checked }))} />
-              I reviewed the {field} dependency set
+              I reviewed the {field} inputs
             </label>
           </div>
         </fieldset>
@@ -236,7 +245,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
 
       <button className="btn btn-primary" type="button" onClick={save} aria-disabled={busy || undefined}
         disabled={!reviewed.entry || !reviewed.exit}>
-        {busy ? "Saving replay…" : pendingBody ? "Retry same replay" : dataset ? "Save replay on recorded history" : "Save synthetic replay"}
+        {busy ? "Saving replay…" : pendingBody ? "Retry the same replay" : dataset ? "Replay on saved history" : "Replay on example data"}
       </button>
       {pendingBody ? <p role="status" className="muted">This attempt has an uncertain outcome. Retry uses its original inputs and key; edits above apply only to a new attempt.</p> : null}
       {error ? <p role="alert" className="status err">{error}</p> : null}
@@ -250,7 +259,7 @@ export function SpotReplayPanel({ strategy, strategyId, strategyRevisionId }: Pr
         </button>
       </div>
 
-      {record ? <ReplayResult replay={record} /> : <p className="muted">No replay is saved for this revision yet.</p>}
+      {record ? <ReplayResult replay={record} /> : <p className="muted">No replay is saved for this version yet.</p>}
     </section>
   );
 }
