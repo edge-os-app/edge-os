@@ -9,16 +9,16 @@ import { describe, expect, it } from "vitest";
 
 const APP = readFileSync(resolve(process.cwd(), "app/app.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
-type SidebarRule = { media: string; declarations: Record<string, string> };
+type CssRule = { media: string; declarations: Record<string, string> };
 
-function sidebarRules(): SidebarRule[] {
-  const rules: SidebarRule[] = [];
+function rulesFor(target: string): CssRule[] {
+  const rules: CssRule[] = [];
   let media = "";
   for (const match of APP.matchAll(/@media\s+([^{]+?)\s*\{|([^{}]+)\{([^{}]*)\}|\}/g)) {
     const [token, condition, selectors, body] = match;
     if (condition !== undefined) media = condition;
     else if (token === "}") media = "";
-    else if (selectors.split(",").some((selector) => selector.trim() === ".sidebar")) {
+    else if (selectors.split(",").some((selector) => selector.trim() === target)) {
       const parts = body.split(";").filter((part) => part.includes(":"));
       rules.push({
         media,
@@ -31,6 +31,8 @@ function sidebarRules(): SidebarRule[] {
   }
   return rules;
 }
+
+const sidebarRules = () => rulesFor(".sidebar");
 
 describe("side bar position rules", () => {
   it("sets the sticky declarations in the rule above the 760px phone rule", () => {
@@ -48,6 +50,24 @@ describe("side bar position rules", () => {
     expect(Object.keys(others[1].declarations).sort()).toEqual(["gap", "padding"]);
     for (const property of ["position", "top", "height", "overflow", "overflow-y"]) {
       expect(others[0].declarations).not.toHaveProperty(property);
+    }
+  });
+});
+
+describe("right column position rules", () => {
+  it("sets the sticky declarations in the rule above the 1180px rule that hides the column", () => {
+    expect(rulesFor(".convo-desktop")).toEqual([
+      { media: "(max-width: 1180px)", declarations: { display: "none" } },
+      { media: "(width > 1180px)", declarations: { position: "sticky", top: "0", height: "100dvh", "overflow-y": "auto" } },
+    ]);
+  });
+
+  it("leaves the conversation rules that the sheet uses without a position, height or overflow", () => {
+    expect(rulesFor(".sheet .convo")).toEqual([{ media: "", declarations: { border: "0", "min-height": "100%" } }]);
+    const shared = rulesFor(".convo");
+    expect(shared.map((rule) => rule.media)).toEqual([""]);
+    for (const property of ["position", "top", "height", "overflow", "overflow-y"]) {
+      expect(shared[0].declarations).not.toHaveProperty(property);
     }
   });
 });

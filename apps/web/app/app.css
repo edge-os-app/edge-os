@@ -165,6 +165,10 @@ table.records th { font-size: 11px; letter-spacing: 0.08em; text-transform: uppe
 @media (width > 760px) {
   .sidebar { position: sticky; top: 0; height: 100dvh; overflow-y: auto; }
 }
+/* The exact opposite of the 1180px rule above, so the column never shows without this rule. */
+@media (width > 1180px) {
+  .convo-desktop { position: sticky; top: 0; height: 100dvh; overflow-y: auto; }
+}
 @media (max-width: 760px) {
   .app { display: block; }
   .sidebar { padding: var(--space-3) var(--space-4); gap: var(--space-2); }
