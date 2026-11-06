@@ -87,6 +87,21 @@ async function inspect(page, project, name) {
   expect(blocking, `axe in ${name}`).toEqual([]);
 }
 
+/** The saved state leaves no control in the right bar. The keyboard still reaches and scrolls it, and both bars stay in the window. */
+async function rightBarByKeyboard(page) {
+  const bar = page.getByRole("complementary", { name: "Conversation" });
+  await page.evaluate(() => document.activeElement?.blur());
+  for (let press = 0; press < 80 && !(await bar.evaluate((el) => el === document.activeElement)); press++) await page.keyboard.press("Tab");
+  await expect(bar).toBeFocused();
+  expect(await bar.evaluate((el) => el.scrollHeight > el.clientHeight), "the right bar scrolls in this state").toBe(true);
+  await page.keyboard.press("End");
+  await expect.poll(() => bar.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  expect(await bar.evaluate((el) => el.getBoundingClientRect().top)).toBe(0);
+  expect(await page.locator(".sidebar").evaluate((el) => el.getBoundingClientRect().top)).toBe(0);
+}
+
 const outcome = (page) => page.getByTestId("outcome");
 const attemptRows = (page) => page.getByTestId("attempts").locator("li[data-attempt]");
 /** The list opens by itself for a failure. In other states it is closed, and a click would close an open one. */
@@ -194,6 +209,7 @@ test("a rough hunch is answered in the user's own words by keyboard, then adopte
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toBeVisible();
   await inspect(page, project, "saved-after-words");
+  if (project === "desktop") await rightBarByKeyboard(page);
   record(`p05-words-${project}`, { owner, id, revision: await page.getByTestId("revision-id").textContent(), attempts: 2 });
 });
 
