@@ -1,0 +1,583 @@
+"""One LOCAL unfunded actual policy-proof attempt.
+
+LOCAL only. ``run_actual_specimen`` resolves a code-owned approved packet and a
+code-owned qualified reply/decoder profile, admits one frozen specimen, saves an
+immutable one-use intent with ``O_EXCL``/``fsync`` before a single sign-only
+send, rechecks the stop marker after the claim and before the send, captures
+bounded sanitized reply metadata, then classifies the reply with the qualified
+profile. For an error reply (status 400 or above, bounded JSON) the capture also
+keeps the error code and type, each only when identifier-shaped; it never keeps
+headers, a message, a key or signed bytes. The accepted durable store, capture shape and
+signed-field decoder are reused unchanged.
+
+Every result is ``LOCAL_TESTED``/``UNQUALIFIED``. No provider request, credential,
+wallet, policy, signature or broadcast exists in this unit: the code-owned
+registries hold two sealed packets (v3 policy layer, control proofs) and one raw
+profile, so every other packet refuses. Approval and profile resolution read only the
+code-owned registries; no function argument,
+flag or environment value can substitute them or authorize dispatch. Reply
+bodies, authorization signatures, credentials, signed bytes and unknown error
+strings are never saved, logged or re-raised. See
+docs/qualification/privy-unfunded-proof/CONTRACT.md.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Callable, Mapping
+from pathlib import Path
+from typing import Any
+
+from scripts.privy_unfunded_proof.actual_packet import (
+    ACTUAL_EVIDENCE_CLASS,
+    PROVIDER_PROOF_UNQUALIFIED,
+    ActualProofPacket,
+    reply_code,
+    resolve_approved_packet,
+    resolve_type4_authority,
+)
+from scripts.privy_unfunded_proof.actual_profile import (
+    QualifiedActualProfile,
+    error_fields,
+    is_expiry_refusal,
+    resolve_qualified_profile,
+)
+from scripts.privy_unfunded_proof.actual_transport import (
+    QUANTITY_FIELDS,
+    TransportLost,
+    TransportRefused,
+    accepted_request_profile,
+    decode_wire_quantity,
+)
+from scripts.privy_unfunded_proof.evidence import Outcome, RunResult
+from scripts.privy_unfunded_proof.specimens import (
+    FROZEN_TABLE,
+    AttemptState,
+    AttemptStore,
+    EvidenceOverBound,
+    Expected,
+    FrozenRequest,
+    Specimen,
+    SpecimenRefused,
+    SpecimenTable,
+    canonical_json,
+    envelope_sha256,
+    headers_are_canonical,
+    refuse_module_run,
+    replace_specimen,
+)
+
+MAX_REPLY_BYTES = 16384
+MAX_CONTENT_TYPE_CHARS = 128
+
+# Expected outcomes that end one capability test. A success for any of these is a breach.
+_DENIAL_EXPECTATIONS = (Expected.POLICY_DENY, Expected.AUTHORIZATION_DENY, Expected.EXPIRY_REFUSAL)
+_NON_STOPPING_UNKNOWN = ("EXPIRY_REFUSAL",)
+
+
+def _hex_bytes(value: object) -> bytes | None:
+    if not isinstance(value, str) or not value.startswith("0x") or len(value) % 2:
+        return None
+    try:
+        return bytes.fromhex(value[2:])
+    except ValueError:
+        return None
+
+
+def _metadata(reply: object) -> tuple[int | None, str | None, bytes, bool]:
+    status = getattr(reply, "status", None)
+    content_type = getattr(reply, "content_type", None)
+    if content_type is None:
+        # The accepted HttpTransport seam returns HttpResponse(status, headers, body).
+        headers = getattr(reply, "headers", None)
+        if isinstance(headers, Mapping):
+            content_type = next((value for name, value in headers.items()
+                                 if str(name).lower() == "content-type"), None)
+    body = getattr(reply, "body", None)
+    status_ok = type(status) is int and 100 <= status <= 599
+    type_ok = (
+        isinstance(content_type, str)
+        and len(content_type) <= MAX_CONTENT_TYPE_CHARS
+        and content_type.isascii()
+        and content_type.isprintable()
+    )
+    body_ok = isinstance(body, bytes)
+    return (
+        status if status_ok else None,
+        content_type if type_ok else None,
+        body if body_ok else b"",
+        status_ok and type_ok and body_ok,
+    )
+
+
+def _media_type(content_type: str | None) -> str | None:
+    if content_type is None:
+        return None
+    media = content_type.split(";")[0].strip().lower()
+    return "application/json" if media == "application/json" else "OTHER"
+
+
+def _capture_error_fields(status: int | None, content_type: str | None, body: bytes, valid: bool
+                          ) -> dict[str, str | None]:
+    """The identifier-shaped error code and type of a bounded JSON error reply; None for anything else.
+
+    A reply below 400 is never parsed here, so a success envelope (and any signature in it) never reaches the
+    capture.
+    """
+    if (not valid or status is None or status < 400 or len(body) > MAX_REPLY_BYTES
+            or _media_type(content_type) != "application/json"):
+        return {"error_code": None, "error_type": None}
+    try:
+        parsed = json.loads(body.decode("utf-8"))
+    except (ValueError, RecursionError):
+        return {"error_code": None, "error_type": None}
+    return error_fields(parsed)
+
+
+def _request_body(request: FrozenRequest) -> Any:
+    try:
+        return json.loads(request.body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+
+
+def _frozen_unsigned(request: FrozenRequest) -> Mapping[str, Any] | None:
+    body = _request_body(request)
+    params = body.get("params") if isinstance(body, dict) else None
+    transaction = params.get("transaction") if isinstance(params, dict) else None
+    if not isinstance(transaction, Mapping):
+        return None
+    logical = dict(transaction)
+    for name in QUANTITY_FIELDS:
+        value = decode_wire_quantity(logical.get(name))
+        if value is None:
+            return None
+        logical[name] = value
+    return logical
+
+
+def _positive_control_allowed(
+    table: SpecimenTable, store: AttemptStore, profile_name: str, packet: ActualProofPacket, profile_id: str
+) -> bool:
+    """The profile positive control must be an ALLOW bound to this exact packet, request and policy."""
+    control = table.positive_control(profile_name)
+    record = store.read_outcome(control.specimen_id)
+    if record is None or record.get("outcome") != Outcome.ALLOW.value:
+        return False
+    expected_request = packet.request_for(control.specimen_id)
+    return (
+        record.get("evidence_class") == ACTUAL_EVIDENCE_CLASS
+        and record.get("packet_id") == packet.packet_id
+        and record.get("reply_profile_id") == profile_id
+        and record.get("request_sha256") == expected_request.request_sha256
+        and record.get("policy_id") == packet.profile_policies.get(profile_name)
+        and record.get("policy_sha256") == packet.profile_policy_sha256.get(profile_name)
+    )
+
+
+def _blocking_actual(store: AttemptStore, excluding: str) -> str | None:
+    """The shared store check plus any saved terminal UNKNOWN that could not write a stop marker."""
+    blocking = store.blocking_attempt(excluding=excluding)
+    if blocking is not None:
+        return blocking
+    for intent in sorted(store.root.glob("*.intent.json")):
+        specimen_id = intent.name[: -len(".intent.json")]
+        if specimen_id == excluding:
+            continue
+        record = store.read_outcome(specimen_id)
+        if (record is not None and record.get("outcome") == Outcome.UNKNOWN.value
+                and record.get("reason") not in _NON_STOPPING_UNKNOWN):
+            return "STOPPED_AFTER_UNKNOWN"
+    return None
+
+
+def _record_sha256(record: Mapping[str, Any]) -> str:
+    """The SHA-256 of a saved record's canonical bytes, which are the bytes the store wrote."""
+    return hashlib.sha256(canonical_json(record)).hexdigest()
+
+
+RERUN_STORE_SUFFIX = ".expiry-rerun"
+
+
+def expiry_rerun_store(earlier_root: Path) -> Path:
+    """The one re-run store of an earlier store: its sibling ``<name>.expiry-rerun``.
+
+    The path is fixed by the earlier store, and a store is created only when it does not exist, so each earlier
+    store can be re-run once; a re-run that signed or lost its reply cannot be hidden by a later one.
+    """
+    resolved = Path(earlier_root).resolve()
+    return resolved.parent / (resolved.name + RERUN_STORE_SUFFIX)
+
+
+def _check_rerun(prior: AttemptStore, store: AttemptStore, specimen: Specimen, packet: ActualProofPacket,
+                 table: SpecimenTable, profile_id: str) -> dict[str, str]:
+    """Admit one re-run of an expiry row whose earlier reply was an unrecognized error, in its derived store.
+
+    The earlier store is only read. Its expiry row must have ended ``UNKNOWN``/``UNRECOGNIZED_REPLY`` on a
+    captured 401 (an error status, so nothing was signed), every other row of the packet must have matched, and
+    its positive control must be the qualified ``ALLOW``. Returns the hashes the new records cite.
+    """
+    specimen_id = specimen.specimen_id
+    if store.root.resolve() != expiry_rerun_store(prior.root):
+        raise SpecimenRefused("RERUN_STORE_NOT_DERIVED")
+    if specimen.expected is not Expected.EXPIRY_REFUSAL:
+        raise SpecimenRefused("RERUN_NOT_ALLOWED", specimen_id)
+    earlier = prior.read_outcome(specimen_id)
+    capture = prior._read(prior._path(specimen_id, "capture"))
+    if (earlier is None or capture is None or earlier.get("outcome") != Outcome.UNKNOWN.value
+            or earlier.get("reason") != "UNRECOGNIZED_REPLY" or earlier.get("packet_id") != packet.packet_id
+            or earlier.get("reply_profile_id") != profile_id
+            or earlier.get("request_sha256") != packet.request_for(specimen_id).request_sha256
+            or earlier.get("capture_record_sha256") != _record_sha256(capture)
+            or capture.get("status") != 401 or capture.get("request_sha256") != earlier.get("request_sha256")):
+        raise SpecimenRefused("RERUN_EARLIER_ATTEMPT_NOT_ELIGIBLE", specimen_id)
+    if prior.blocking_attempt(excluding=specimen_id) is not None:
+        raise SpecimenRefused("RERUN_EARLIER_STORE_BLOCKED")
+    for other in packet.requests:
+        record = prior.read_outcome(other) if other != specimen_id else None
+        if other != specimen_id and (record is None or record.get("matches_expectation") is not True
+                                     or record.get("packet_id") != packet.packet_id):
+            raise SpecimenRefused("RERUN_EARLIER_ROW_NOT_MATCHED", other)
+    positive = prior.read_outcome(table.positive_control(specimen.profile).specimen_id)
+    if positive is None or not _positive_control_allowed(table, prior, specimen.profile, packet, profile_id):
+        raise SpecimenRefused("POSITIVE_CONTROL_NOT_QUALIFIED")
+    return {"earlier_outcome_record_sha256": _record_sha256(earlier),
+            "positive_control_outcome_record_sha256": _record_sha256(positive)}
+
+
+class _ActualAttempt:
+    """One claimed actual specimen. Every exit writes at most one outcome record."""
+
+    def __init__(self, specimen: Specimen, request: FrozenRequest, packet: ActualProofPacket, profile_id: str,
+                 store: AttemptStore, clock: Callable[[], str]) -> None:
+        self.specimen = specimen
+        self.request = request
+        self.packet = packet
+        self.profile_id = profile_id
+        self.store = store
+        self.clock = clock
+        self.capture_sha256: str | None = None
+        self.extra: dict[str, Any] = {}
+
+    def _stop(self, reason: str) -> bool:
+        try:
+            self.store.stop({"specimen_id": self.specimen.specimen_id, "reason": reason, "at": self.clock()})
+            return True
+        except (OSError, EvidenceOverBound):
+            return False
+
+    def finish(self, outcome: Outcome, reason: str) -> RunResult:
+        expected = self.specimen.expected
+        result = RunResult(
+            self.specimen.specimen_id, self.specimen.profile, expected.value, outcome, reason,
+            _matches(expected, outcome, reason), ACTUAL_EVIDENCE_CLASS, PROVIDER_PROOF_UNQUALIFIED,
+        )
+        need_stop = outcome is Outcome.BREACH or (outcome is Outcome.UNKNOWN and reason not in _NON_STOPPING_UNKNOWN)
+        if need_stop and not self._stop(reason) and outcome is not Outcome.BREACH:
+            # The stage could not be halted on disk. Leave the intent unresolved so every later
+            # attempt is refused; never write a terminal outcome that would release the stage.
+            return result
+        record = {
+            "specimen_id": result.specimen_id,
+            "profile": result.profile,
+            "packet_id": self.packet.packet_id,
+            "reply_profile_id": self.profile_id,
+            "policy_id": self.packet.profile_policies.get(result.profile),
+            "policy_sha256": self.packet.profile_policy_sha256.get(result.profile),
+            "request_sha256": self.request.request_sha256,
+            "expected": result.expected,
+            "outcome": outcome.value,
+            "reason": reason,
+            "matches_expectation": result.matches_expectation,
+            "capture_record_sha256": self.capture_sha256,
+            "evidence_class": ACTUAL_EVIDENCE_CLASS,
+            "provider_proof": PROVIDER_PROOF_UNQUALIFIED,
+            "completed_at": self.clock(),
+            **self.extra,
+        }
+        try:
+            self.store.write_outcome(self.specimen.specimen_id, record)
+        except (OSError, EvidenceOverBound, ValueError):
+            self._stop("OUTCOME_NOT_PERSISTED")
+            if outcome is Outcome.BREACH:
+                return result
+            return RunResult(result.specimen_id, result.profile, result.expected, Outcome.UNKNOWN,
+                             "OUTCOME_NOT_PERSISTED", False, ACTUAL_EVIDENCE_CLASS, PROVIDER_PROOF_UNQUALIFIED)
+        return result
+
+    def capture(self, reply: object) -> tuple[int | None, str | None, bytes, bool] | None:
+        status, content_type, body, valid = _metadata(reply)
+        record = {
+            "specimen_id": self.specimen.specimen_id,
+            "profile": self.specimen.profile,
+            "packet_id": self.packet.packet_id,
+            "policy_id": self.packet.profile_policies.get(self.specimen.profile),
+            "request_sha256": self.request.request_sha256,
+            "status": status,
+            "media_type": _media_type(content_type),
+            "content_type_sha256": (
+                hashlib.sha256(content_type.encode("ascii")).hexdigest() if content_type is not None else None
+            ),
+            "byte_count": len(body),
+            "raw_body_sha256": hashlib.sha256(body).hexdigest(),
+            **_capture_error_fields(status, content_type, body, valid),
+            "metadata_valid": valid,
+            "captured_at": self.clock(),
+            "evidence_class": ACTUAL_EVIDENCE_CLASS,
+        }
+        try:
+            saved = self.store.write_capture(self.specimen.specimen_id, record)
+        except (OSError, EvidenceOverBound):
+            self._stop("CAPTURE_FAILED")
+            return None
+        self.capture_sha256 = hashlib.sha256(saved).hexdigest()
+        return status, content_type, body, valid
+
+
+def _matches(expected: Expected, outcome: Outcome, reason: str) -> bool:
+    if expected is Expected.EXPIRY_REFUSAL:
+        return outcome is Outcome.UNKNOWN and reason == "EXPIRY_REFUSAL"
+    if expected is Expected.DIAGNOSTIC:
+        return outcome in (Outcome.ALLOW, Outcome.POLICY_DENY)
+    return outcome.value == expected.value
+
+
+def _success_verdict(
+    attempt: _ActualAttempt, data: Mapping[str, Any], unsigned: Mapping[str, Any] | None,
+    profile: QualifiedActualProfile,
+) -> tuple[Outcome, str]:
+    """Classify one success envelope without writing. Used by the normal and failed-capture paths."""
+    specimen = attempt.specimen
+    signed = _hex_bytes(data.get("signed_transaction"))
+    signature = _hex_bytes(data.get("signature"))
+    if signed is None and signature is None:
+        return Outcome.UNKNOWN, "MALFORMED_SUCCESS"
+    attempt.extra["signed_bytes_sha256"] = hashlib.sha256(
+        signed if signed is not None else signature).hexdigest()
+    if specimen.expected in _DENIAL_EXPECTATIONS:
+        return Outcome.BREACH, "ALLOWED_WHERE_DENIAL_REQUIRED"
+    if signed is None or unsigned is None:
+        return Outcome.UNKNOWN, "MALFORMED_SUCCESS"
+    try:
+        decoded = profile.decoder_factory(unsigned, attempt.packet.wallet_address)(signed)
+    except Exception:  # noqa: BLE001 - decoder messages may carry signed bytes; keep a fixed reason
+        return Outcome.UNKNOWN, "DECODE_FAILED"
+    attempt.extra["signed_bytes_sha256"] = decoded.signed_bytes_sha256
+    if not decoded.matched:
+        attempt.extra["signed_field_reasons"] = list(decoded.reasons)
+        return Outcome.BREACH, "SIGNED_FIELDS_MISMATCH"
+    return Outcome.ALLOW, "SIGNED_FIELDS_MATCH"
+
+
+def _classify_success(
+    attempt: _ActualAttempt, data: Mapping[str, Any], unsigned: Mapping[str, Any] | None,
+    profile: QualifiedActualProfile,
+) -> RunResult:
+    return attempt.finish(*_success_verdict(attempt, data, unsigned, profile))
+
+
+def _in_memory_success_data(reply: object) -> Mapping[str, Any] | None:
+    """Parse a bounded in-memory success reply without writing, for the failed-capture path."""
+    status, content_type, body, valid = _metadata(reply)
+    if not valid or status != 200 or len(body) > MAX_REPLY_BYTES:
+        return None
+    if content_type is None or content_type.split(";")[0].strip().lower() != "application/json":
+        return None
+    try:
+        parsed = json.loads(body.decode("utf-8"))
+    except (ValueError, RecursionError):
+        return None
+    data = parsed.get("data") if isinstance(parsed, dict) else None
+    return data if isinstance(data, dict) else None
+
+
+def _check_transport_binding(transport: object, packet: ActualProofPacket, specimen_id: str) -> None:
+    """The transport must expose a non-secret binding equal to the approved packet and specimen."""
+    binding = getattr(transport, "binding", None)
+    if not callable(binding):
+        raise SpecimenRefused("TRANSPORT_NOT_BOUND")
+    actual: Any = None
+    bound = True
+    try:
+        actual = binding()
+    except Exception:  # noqa: BLE001 - a binding error is a fixed refusal, not provider text
+        bound = False
+    if not bound or not isinstance(actual, Mapping):
+        raise SpecimenRefused("TRANSPORT_NOT_BOUND")
+    expected = {
+        "method": "POST",
+        "destination": packet.signing_url,
+        "wallet_id": packet.wallet_id,
+        "app_id": packet.app_id,
+        "request_id": packet.attempt_identity_for(specimen_id),
+        "request_expiry_ms": int(packet.auth_header_expiry),
+    }
+    for name, value in expected.items():
+        if actual.get(name) != value:
+            raise SpecimenRefused("TRANSPORT_BINDING_MISMATCH", name)
+
+
+def _admit(
+    specimen_id: str, packet: ActualProofPacket, store: AttemptStore, table: SpecimenTable,
+    profile_id: str, profile: QualifiedActualProfile, type4_authority_id: str | None,
+    control_store: AttemptStore,
+) -> tuple[Specimen, FrozenRequest]:
+    if not table.matches_actual_manifest():
+        raise SpecimenRefused("MANIFEST_MISMATCH")
+    accepted = table.get(specimen_id)
+    try:
+        effective = Expected(packet.specimen_expected.get(specimen_id, ""))
+    except ValueError:
+        raise SpecimenRefused("MATRIX_NOT_COVERED", specimen_id) from None
+    specimen = replace_specimen(accepted, expected=effective)
+    if effective is Expected.NOT_RUN:
+        detail = "OWNER_AUTHORITY_ABSENT" if type4_authority_id is None else "SYNTHETIC_AUTHORITY_NOT_PROOF"
+        raise SpecimenRefused("NOT_RUN", detail)
+    request = packet.request_for(specimen_id)
+    if not headers_are_canonical(request.headers):
+        raise SpecimenRefused("MALFORMED_REQUEST_HEADERS")
+    if envelope_sha256(request.url, request.http_method, request.headers, request.body) != request.request_sha256:
+        raise SpecimenRefused("REQUEST_BYTES_CHANGED")
+    if len(request.body) > packet.request_byte_ceiling:
+        raise SpecimenRefused("REQUEST_OVER_BOUND", specimen_id)
+    if accepted.request is None:
+        # A rebinding of the type-4 placeholder onto a runnable negative control needs a
+        # valid owner-bound authority before its request may be sent.
+        resolve_type4_authority(type4_authority_id, owner_id=packet.owner_id)
+    if not accepted_request_profile(_request_body(request)):
+        # The accepted authorizer accepts only the narrow type-2 eth_signTransaction shape.
+        # Every other negative-request profile stays refused/unqualified.
+        raise SpecimenRefused("REQUEST_PROFILE_UNQUALIFIED", specimen_id)
+    if request.url != packet.signing_url:
+        # One packet binds one approved wallet route. A specimen that targets another wallet
+        # (the foreign-wallet negative) cannot be exercised through this route and stays
+        # refused/unqualified rather than reported from a callback-only double.
+        raise SpecimenRefused("DESTINATION_UNQUALIFIED", specimen_id)
+    state = store.state(specimen_id)
+    if state is AttemptState.TERMINAL:
+        raise SpecimenRefused("ALREADY_CLAIMED")
+    if state is not AttemptState.NOT_SENT:
+        raise SpecimenRefused("ATTEMPT_UNCERTAIN")
+    if store.is_stopped():
+        raise SpecimenRefused("STAGE_STOPPED")
+    blocking = _blocking_actual(store, excluding=specimen_id)
+    if blocking is not None:
+        raise SpecimenRefused(blocking)
+    if not specimen.is_positive_control and not _positive_control_allowed(
+            table, control_store, specimen.profile, packet, profile_id):
+        raise SpecimenRefused("POSITIVE_CONTROL_NOT_QUALIFIED")
+    return specimen, request
+
+
+def run_actual_specimen(
+    specimen_id: str,
+    *,
+    store: AttemptStore,
+    transport: object,
+    packet_id: str,
+    profile_id: str,
+    clock: Callable[[], str],
+    now_epoch: int,
+    started_at_epoch: int,
+    table: SpecimenTable = FROZEN_TABLE,
+    type4_authority_id: str | None = None,
+    rerun_of: AttemptStore | None = None,
+) -> RunResult:
+    """Run one actual specimen at most once. Raises ``SpecimenRefused`` before any effect.
+
+    ``rerun_of`` names the earlier store of the same packet when an expiry row is re-run alone in its derived store
+    (see ``_check_rerun``). The positive control is then read from the earlier store, and the new intent and
+    outcome cite the earlier outcome and positive-control records by hash.
+
+    ``transport`` must expose ``binding()`` and ``send(request) -> response`` (see
+    ``ActualSignOnlyTransport``). The accepted reply has ``status``,
+    ``content_type``/``headers`` and ``body``. Approval and profile resolution read
+    only the code-owned registries; no argument can substitute them.
+    """
+    packet = resolve_approved_packet(packet_id, now_epoch=now_epoch, table=table)
+    profile = resolve_qualified_profile(profile_id)
+    if now_epoch - started_at_epoch > packet.time_ceiling_seconds:
+        raise SpecimenRefused("TIME_CEILING_EXCEEDED")
+    control_store = rerun_of if rerun_of is not None else store
+    specimen, request = _admit(specimen_id, packet, store, table, profile_id, profile, type4_authority_id,
+                               control_store)
+    if profile.profile != specimen.profile:
+        raise SpecimenRefused("ACTUAL_PROFILE_UNQUALIFIED", profile_id)
+    rerun = None if rerun_of is None else _check_rerun(rerun_of, store, specimen, packet, table, profile_id)
+    _check_transport_binding(transport, packet, specimen_id)
+    store.claim_record(specimen_id, {
+        "specimen_id": specimen_id,
+        "profile": specimen.profile,
+        "packet_id": packet.packet_id,
+        "attempt_identity": packet.attempt_identity_for(specimen_id),
+        "reply_profile_id": profile_id,
+        "policy_id": packet.profile_policies[specimen.profile],
+        "policy_sha256": packet.profile_policy_sha256[specimen.profile],
+        "request_sha256": request.request_sha256,
+        "destination": request.url,
+        "http_method": request.http_method,
+        "state": "INTENT_SAVED",
+        "intent_at": clock(),
+        "evidence_class": ACTUAL_EVIDENCE_CLASS,
+        **({} if rerun is None else {"rerun_of": rerun}),
+    })
+    attempt = _ActualAttempt(specimen, request, packet, profile_id, store, clock)
+    if rerun is not None:
+        attempt.extra["rerun_of"] = rerun
+    # Recheck the stop marker after the claim and immediately before the send.
+    if store.is_stopped():
+        return attempt.finish(Outcome.UNKNOWN, "STOPPED_AFTER_CLAIM")
+    try:
+        reply = transport.send(request)  # type: ignore[attr-defined]
+    except TransportRefused:
+        # Nothing was sent, but the one-use intent is already claimed.
+        return attempt.finish(Outcome.UNKNOWN, "SEND_REFUSED")
+    except TransportLost:
+        return attempt.finish(Outcome.UNKNOWN, "SEND_LOST")
+    except Exception:  # noqa: BLE001 - transport errors may carry secrets; keep a fixed reason
+        return attempt.finish(Outcome.UNKNOWN, "SEND_FAILED")
+    captured = attempt.capture(reply)
+    if captured is None:
+        # A failed capture write must not hide a breach-shaped reply still held in memory.
+        data = _in_memory_success_data(reply)
+        if data is not None:
+            verdict = _success_verdict(attempt, data, _frozen_unsigned(request), profile)
+            if verdict[0] is Outcome.BREACH:
+                return attempt.finish(*verdict)
+        return RunResult(specimen_id, specimen.profile, specimen.expected.value, Outcome.UNKNOWN,
+                         "CAPTURE_FAILED", False, ACTUAL_EVIDENCE_CLASS, PROVIDER_PROOF_UNQUALIFIED)
+    status, content_type, body, valid = captured
+    if not valid:
+        return attempt.finish(Outcome.UNKNOWN, "MALFORMED_METADATA")
+    if len(body) > MAX_REPLY_BYTES:
+        return attempt.finish(Outcome.UNKNOWN, "RESPONSE_OVER_BOUND")
+    if content_type is None or content_type.split(";")[0].strip().lower() != "application/json":
+        return attempt.finish(Outcome.UNKNOWN, "NON_JSON")
+    try:
+        parsed = json.loads(body.decode("utf-8"))
+    except (ValueError, RecursionError):
+        return attempt.finish(Outcome.UNKNOWN, "MALFORMED_JSON")
+    if status == 200:
+        data = parsed.get("data") if isinstance(parsed, dict) else None
+        if not isinstance(data, dict):
+            return attempt.finish(Outcome.UNKNOWN, "MALFORMED_SUCCESS")
+        return _classify_success(attempt, data, _frozen_unsigned(request), profile)
+    code = reply_code(parsed)
+    entry = profile.codes.get(code) if isinstance(code, str) else None
+    if entry is None or entry[0] != status:
+        # A 401 that says the request or its authorization signature expired, on the expiry row only.
+        if specimen.expected is Expected.EXPIRY_REFUSAL and is_expiry_refusal(status, parsed):
+            if not _positive_control_allowed(table, control_store, specimen.profile, packet, profile_id):
+                return attempt.finish(Outcome.UNKNOWN, "POSITIVE_CONTROL_NOT_QUALIFIED")
+            return attempt.finish(Outcome.UNKNOWN, "EXPIRY_REFUSAL")
+        return attempt.finish(Outcome.UNKNOWN, "UNRECOGNIZED_REPLY")
+    _, outcome_value, reason = entry
+    if profile.denial(outcome_value) and not _positive_control_allowed(
+            table, control_store, specimen.profile, packet, profile_id):
+        return attempt.finish(Outcome.UNKNOWN, "POSITIVE_CONTROL_NOT_QUALIFIED")
+    return attempt.finish(Outcome(outcome_value), reason)
+
+
+if __name__ == "__main__":
+    refuse_module_run()

@@ -193,7 +193,7 @@ export function AccountViews({ initialView = "Agents", sourceRecordId, agentId }
   return (
     <div className="stack">
       <h1>Account</h1>
-      <p className="muted">Authored synthetic records. They do not show live wallets, balances, worker health, marks, or receipts.</p>
+      <p className="muted">Example records. They do not show live wallets, balances, worker health, marks or receipts.</p>
       <div aria-label="Account views" role="group" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         {(["Agents", "Positions", "Funds"] as const).map((name) => (
           <button key={name} className={view === name ? "btn btn-primary" : "btn btn-secondary"}
@@ -204,7 +204,7 @@ export function AccountViews({ initialView = "Agents", sourceRecordId, agentId }
         ))}
       </div>
       <ConnectedAgent view={view} agentId={agentId} />
-      <h2>Authored account records</h2>
+      <h2>Saved account records</h2>
       {loading && <p role="status" aria-live="polite">Loading saved account records…</p>}
       {!loading && error && <section className="panel" role="alert">
         <p>{error} Existing records remain unchanged.</p>
@@ -213,7 +213,7 @@ export function AccountViews({ initialView = "Agents", sourceRecordId, agentId }
       {!loading && !error && view === "Agents" && <AgentRecords records={records} sourceRecordId={sourceRecordId} />}
       {!loading && !error && view === "Positions" && <PositionRecords records={records} sourceRecordId={sourceRecordId} />}
       {!loading && !error && view === "Funds" && <FundRecords records={records} />}
-      {!loading && !error && relatedIncomplete && <p role="status" aria-live="polite">Related history exceeds this bounded page. The exact saved source remains visible; load more records to inspect additional rows.</p>}
+      {!loading && !error && relatedIncomplete && <p role="status" aria-live="polite">Related history is larger than this page. The exact saved source remains visible; load more records to inspect more rows.</p>}
       {!loading && !error && <p className="muted">Account summaries do not pool wallet balances or permission. Account value, percent return, and drawdown are unavailable.</p>}
       {!loading && !error && nextOffset != null && <div>
         {moreError && <p role="alert">{moreError}</p>}

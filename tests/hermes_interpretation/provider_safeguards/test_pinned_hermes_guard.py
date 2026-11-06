@@ -133,15 +133,28 @@ def test_a_hung_provider_is_killed_at_the_deadline_and_stays_liable(pinned_herme
 
 
 def test_the_guard_in_the_container_refuses_a_request_that_differs_from_the_policy(pinned_hermes_image, run_id, evidence_root) -> None:
-    policy = GuardPolicy(model="fixture-model/1", max_output_tokens=2048, max_request_bytes=12_000, max_envelope_chars=2_500)
+    # The job takes its output limit from the turn, so a different model is what makes the request differ from its policy.
+    policy = GuardPolicy(model="another-model/1", max_output_tokens=4096, max_request_bytes=12_000, max_envelope_chars=2_500)
     session = rig(pinned_hermes_image, run_id, evidence_root, "mismatch", "concrete-thesis")
-    session.docker.policy = policy  # the container is told a different output limit than the turn carries
+    session.docker.policy = policy
 
     session.run_case("concrete-thesis")
 
     result_file = session.container_result()
     assert result_file["hermes"]["request_count"] == 0  # the controlled provider did no work
-    assert [r["reason"] for r in session.refusals()] == ["output_limit_not_as_configured"]
+    assert [r["reason"] for r in session.refusals()] == ["model_not_as_configured"]
+    assert session.spend.state("attempt-1") == "RELEASED" and session.spend.committed_usd() == 0
+
+
+def test_a_turn_limit_above_the_job_policy_is_refused_before_any_launch(pinned_hermes_image, run_id, evidence_root) -> None:
+    policy = GuardPolicy(model="fixture-model/1", max_output_tokens=2048, max_request_bytes=12_000, max_envelope_chars=2_500)
+    session = rig(pinned_hermes_image, run_id, evidence_root, "limit-refused", "concrete-thesis")
+    session.docker.policy = policy  # the turn carries 4,096
+
+    result = session.run_case("concrete-thesis")
+
+    assert isinstance(result, Unavailable) and result.reason_code == "provider_failed"
+    assert list(session.evidence.glob("turn-*")) == []
     assert session.spend.state("attempt-1") == "RELEASED" and session.spend.committed_usd() == 0
 
 

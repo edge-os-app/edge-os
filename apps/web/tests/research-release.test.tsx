@@ -27,13 +27,17 @@ const RELEASE = { release_id: "stand-in-native/1", sha256: "a".repeat(64), kind:
   transport_kind: "LOOPBACK_HTTP", history: { source_id: "release-stand-in/1", source_version: "envio-hypersync/1", limits: LIMITS,
     client_bounds: {}, endpoint_hosts: { ENVIO_HYPERSYNC: "127.0.0.1", QUICKNODE_JSON_RPC: "127.0.0.1" },
     time_basis: { event_time: "BLOCK_TIMESTAMP", collection_time: "APPLICATION_CLOCK" }, required_coverage: "COMPLETE_SCAN" } };
-const SOURCE = { source_id: "release-stand-in/1", title: "Stand-in release over native-syn-qualified/1 (not provider data)",
+const SOURCE = { source_id: "release-stand-in/1", title: "Example Nansen-shaped release over native-syn-qualified/1 (not provider data)",
   evidence_class: "RELEASE_STAND_IN_RESPONSE", content_label: "SYNTHETIC_FIXTURE", profile_version: "p07.market_dataset_profile/1",
   profile_sha256: "f".repeat(64), market: { network: "MONAD", pool_address: "0xd1d1", base_asset: "0xd3d3", quote_asset: "0xd2d2" },
   window: { start: "2026-09-25T10:00:00Z", end: "2026-09-25T12:00:00Z" }, history_provider: "ENVIO_HYPERSYNC",
   page_requests_recorded: 2, available: true, release: RELEASE,
   transport: { history_provider: "ENVIO_HYPERSYNC", provider_version: "envio-hypersync/1", corroboration_provider: "QUICKNODE_JSON_RPC",
     corroboration_sample_size: 24, provider_requests_needed: 27, clients: "P07_HTTP_CLIENTS_OPERATING_RELEASE" } };
+const ACTUAL_RELEASE = { ...RELEASE, release_id: "actual-native/1", kind: "ACTUAL", evidence_class: "PROVIDER_ACTUAL",
+  transport_kind: "PROVIDER_HTTP", history: { ...RELEASE.history, source_id: "actual-provider/1" } };
+const ACTUAL_SOURCE = { ...SOURCE, source_id: "actual-provider/1", title: "Actual provider source over an approved release",
+  evidence_class: "PROVIDER_ACTUAL", content_label: "PROVIDER_HISTORY", release: ACTUAL_RELEASE };
 const DECLARATION = {
   declaration: { record_id: "rel-decl-1", schema_version: "p08.investigation-declaration/3", created_at: "",
     content: { schema_version: "p08.investigation-declaration/3", original_request: "test request",
@@ -46,6 +50,15 @@ const DECLARATION = {
         frozen_at: "", operating_release_id: "stand-in-native/1", operating_release_sha256: "a".repeat(64) } } },
   access_history: [{ event: "DECLARATION_SAVED", provider_queries: 0, outcome_labels_read: false }],
 };
+// A saved actual declaration frozen to the actual release, so a saved job keeps its own facts.
+const ACTUAL_DECLARATION = { ...DECLARATION,
+  declaration: { ...DECLARATION.declaration, record_id: "act-decl-1",
+    content: { ...DECLARATION.declaration.content,
+      configuration: { ...DECLARATION.declaration.content.configuration,
+        source: { source_id: ACTUAL_SOURCE.source_id, profile_sha256: ACTUAL_SOURCE.profile_sha256,
+          evidence_class: ACTUAL_SOURCE.evidence_class } },
+      frozen: { ...DECLARATION.declaration.content.frozen, operating_release_id: "actual-native/1",
+        operating_release_sha256: "d".repeat(64) } } } };
 
 describe("operating-release source", () => {
   it("shows the release, fixes the bounds and declares with the release limits exactly", async () => {
@@ -56,27 +69,66 @@ describe("operating-release source", () => {
     mocks.jobs.mockResolvedValue({ jobs: [] });
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
     await screen.findByRole("option", { name: SOURCE.title });
-    await user.selectOptions(screen.getByLabelText("Recorded source"), SOURCE.source_id);
+    await user.selectOptions(screen.getByLabelText("Saved source"), SOURCE.source_id);
     const release = screen.getByTestId("history-source-release");
-    expect(release).toHaveTextContent("Operating release stand-in-native/1 (stand-in), RELEASE_STAND_IN_RESPONSE.");
-    expect(release).toHaveTextContent("Stand-in responses on this server (loopback http), not provider data.");
-    expect(release).toHaveTextContent("27 provider requests, 2 pages, 200 rows, 1048576 bytes, 30 compute seconds and a 600 s deadline");
-    expect(release).toHaveTextContent("Endpoint hosts: 127.0.0.1, 127.0.0.1. Credentials stay on the server.");
+    expect(release).toHaveTextContent("The server fixes these limits and keeps the credentials.");
+    expect(document.body).toHaveTextContent("Operating release stand-in-native/1 (stand-in), RELEASE_STAND_IN_RESPONSE.");
+    expect(document.body).toHaveTextContent("Stand-in responses on this server (loopback http), not provider data.");
+    expect(document.body).toHaveTextContent("27 provider requests, 2 pages, 200 rows, 1048576 bytes, 30 compute seconds and a 600 s deadline");
+    expect(document.body).toHaveTextContent("Endpoint hosts: 127.0.0.1, 127.0.0.1. Credentials stay on the server.");
     const requests = screen.getByLabelText("Bound provider_requests");
     expect(requests).toHaveValue("27");
     expect(requests).toHaveAttribute("readonly");
     await user.type(screen.getByLabelText("Your hypothesis in your own words"), "Rises continue");
-    await user.type(screen.getByLabelText("Rule 1 lookback buckets"), "2");
+    await user.type(screen.getByLabelText("Rule 1 lookback periods"), "2");
     await user.type(screen.getByLabelText("Rule 1 return threshold"), "0.004");
     await user.type(screen.getByLabelText("Rule 1 volume threshold"), "100");
     await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
-    await user.click(screen.getByRole("button", { name: "Save history declaration" }));
-    await screen.findByText(/Declaration saved before any collection/);
+    await user.click(screen.getByRole("button", { name: "Save history rule" }));
+    await screen.findByText(/Rule and limits saved before any collection/);
     const body = mocks.historySave.mock.calls[0][1];
     expect(body.configuration.resource_bounds).toEqual(LIMITS);
     expect(body.configuration.source.evidence_class).toBe("RELEASE_STAND_IN_RESPONSE");
     expect(body.configuration.permitted_access).toEqual(["RELEASE_STAND_IN_RESPONSE"]);
     expect(await screen.findByTestId("history-declaration-release")).toHaveTextContent(`stand-in-native/1 · ${"a".repeat(64)}`);
+  });
+
+  it("states saved data limits and failed transport checks in the main text", async () => {
+    const user = userEvent.setup();
+    mocks.historySources.mockResolvedValue({ label: "SYNTHETIC", mode: "recorded", sources: [SOURCE] });
+    mocks.historyList.mockResolvedValue({ declarations: [DECLARATION] });
+    const summary = { source_id: SOURCE.source_id, status: "PARTIAL", stop_reason: "TIMEOUT", verdict: { overall: "LIMITED" },
+      binding_state: "UNAVAILABLE_LIMITED_DATA", provider_requests: null, provider_requests_state: "UNKNOWN",
+      evidence_class: "RECORDED_NATIVE_RESPONSE", content_label: "SYNTHETIC_FIXTURE" };
+    const transport = { envio_pages_framed: 1, client_calls: { ENVIO_HYPERSYNC: 1 }, recorded_declarations: [], client_classes: {},
+      corroboration: { class: "NONE", sample_size: 0, population_size: 24, mismatches: 0 }, corroboration_reason: "CHAIN_READ_FAILED" };
+    const job = (id: string, unavailable: string[], facts: Record<string, unknown>) => ({ job_id: id, declaration_id: "rel-decl-1",
+      request_key: id, operation_id: "o", state: "DEADLINE_EXCEEDED", terminal_reason: null,
+      budget: { reserved: { provider_requests: 7 }, consumed: { provider_requests: 7 } }, deadline_at: "",
+      cancel_requested_at: null, created_at: "", events: [], report: null,
+      dataset: { dataset_id: `ds-${id}`, content_sha256: "s", hashes_verified: {}, payload_binding: null,
+        summary: { ...summary, unavailable_states: unavailable }, transport: { ...transport, ...facts } } });
+    mocks.jobs.mockResolvedValue({ jobs: [
+      job("job-a", ["SOURCE_UNAVAILABLE", "PARTIAL_COVERAGE"], { chain_id: null, chain_network: null, clients: "P07_HTTP_CLIENTS_AUTHORED_TRANSPORT" }),
+      job("job-b", [], { chain_id: 1, chain_network: null, corroboration_reason: "CHAIN_NOT_MONAD",
+        corroboration: { class: "NONE", sample_size: 0, population_size: 24, mismatches: 8 } })] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await user.click(await screen.findByRole("button", { name: "Open this rule" }));
+    const limits = await screen.findAllByTestId("history-dataset-limits");
+    expect(limits[0]).toHaveTextContent("the source was unavailable, coverage is partial");
+    expect(limits[1]).toHaveTextContent("Limits: none");
+    for (const line of limits) expect(line.closest("details")).toBeNull();
+    const facts = screen.getAllByTestId("history-transport");
+    expect(facts[0]).toHaveTextContent("not provider data");
+    for (const line of facts) {
+      expect(line).toHaveTextContent("No receipt comparison finished.");
+      expect(line).not.toHaveTextContent(/mismatch/);
+      expect(line).not.toHaveTextContent("0 receipts");
+    }
+    expect(facts[0]).toHaveTextContent("did not read the chain id");
+    expect(facts[1]).toHaveTextContent("recorded example responses");
+    expect(facts[1]).not.toHaveTextContent("The source returned recorded responses");
+    expect(facts[1]).toHaveTextContent("The chain id is 1, not Monad.");
   });
 
   it("labels a release job's transport facts as stand-in responses with hashes kept", async () => {
@@ -98,10 +150,11 @@ describe("operating-release source", () => {
       state: "REPORTED", terminal_reason: null, budget: { reserved: { provider_requests: 27 }, consumed: { provider_requests: 27 } },
       deadline_at: "", cancel_requested_at: null, created_at: "", events: [], dataset, report: null }] });
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
-    await user.click(await screen.findByRole("button", { name: "Open this declaration" }));
+    await user.click(await screen.findByRole("button", { name: "Open this rule" }));
     const facts = await screen.findByTestId("history-transport");
-    expect(facts).toHaveTextContent("Operating release stand-in-native/1 through the accepted P07 HTTP clients (HttpEnvioQueryClient, HttpQuickNodeRpcClient) over loopback http.");
-    expect(facts).toHaveTextContent("Stand-in responses, not provider data; 27 request hashes kept; endpoint hosts 127.0.0.1, 127.0.0.1:");
+    expect(facts).toHaveTextContent("example responses, not provider data");
+    expect(document.body).toHaveTextContent("stand-in-native/1");
+    expect(document.body).toHaveTextContent("27");
     expect(facts).not.toHaveTextContent("Authored HTTP responses");
     expect(screen.queryByTestId("history-payload-binding")).toBeNull(); // an unbound dataset shows no binding line
   });
@@ -123,15 +176,88 @@ describe("operating-release source", () => {
           provider_requests_state: "MEASURED_CLIENT_CALLS", evidence_class: "RELEASE_STAND_IN_RESPONSE",
           content_label: "SYNTHETIC_FIXTURE" },
         payload_binding: binding(status, reason) } });
-    mocks.jobs.mockResolvedValue({ jobs: [job("job-pass", "PASS", null), job("job-bad", "MISMATCH", "BUCKET_2:PAYLOAD_DIFFERS")] });
+    mocks.jobs.mockResolvedValue({ jobs: [job("job-pass", "PASS", null), job("job-bad", "MISMATCH", "BUCKET_2:PAYLOAD_DIFFERS"),
+      job("job-part", "INCOMPLETE", "BINDING_EVENT_MISSING")] });
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
-    await user.click(await screen.findByRole("button", { name: "Open this declaration" }));
+    await user.click(await screen.findByRole("button", { name: "Open this rule" }));
     const lines = await screen.findAllByTestId("history-payload-binding");
-    expect(lines.map((line) => line.getAttribute("data-status"))).toEqual(["PASS", "MISMATCH"]);
-    expect(lines[0]).toHaveTextContent(`Payload binding: PASS against the SYNTHETIC handoff ${"e".repeat(64)}; report ${"9".repeat(64)}.`);
-    expect(lines[0]).toHaveTextContent("not provider provenance");
-    expect(lines[1]).toHaveTextContent("Payload binding: MISMATCH (BUCKET_2:PAYLOAD_DIFFERS)");
-    expect(lines[1]).toHaveTextContent("cannot supply a market or a replay. Its saved verdict and data stay unchanged.");
-    expect(screen.getAllByText(/QUALIFIED, QUALIFIED_BINDING/)).toHaveLength(2); // the saved verdict is shown as saved
+    expect(lines.map((line) => line.getAttribute("data-status"))).toEqual(["PASS", "MISMATCH", "INCOMPLETE"]);
+    expect(lines[2]).toHaveTextContent("did not finish");
+    expect(lines[2]).not.toHaveTextContent("does not match");
+    expect(screen.getByTestId("history-declaration")).toHaveTextContent("Saved before dataYes");
+    expect(screen.getByText(/direction DESCRIPTIVE/).closest("details")).not.toBeNull();
+    expect(lines[0]).toHaveTextContent("matches the recorded delivery");
+    expect(document.body).toHaveTextContent("not provider provenance");
+    expect(lines[1]).toHaveTextContent("does not match the recorded delivery");
+    expect(document.body).toHaveTextContent("BUCKET_2:PAYLOAD_DIFFERS");
+    expect(document.body).toHaveTextContent("QUALIFIED_BINDING"); // the saved verdict is shown as saved
+  });
+
+  it("labels an actual release source transport as provider responses, not recorded-only", async () => {
+    const user = userEvent.setup();
+    mocks.historySources.mockResolvedValue({ label: "PROVIDER", mode: "release", sources: [ACTUAL_SOURCE] });
+    mocks.historyList.mockResolvedValue({ declarations: [] });
+    mocks.jobs.mockResolvedValue({ jobs: [] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await screen.findByRole("option", { name: ACTUAL_SOURCE.title });
+    await user.selectOptions(screen.getByLabelText("Saved source"), ACTUAL_SOURCE.source_id);
+    const transport = screen.getByTestId("history-source-transport");
+    expect(transport).toHaveTextContent("provider responses");
+    expect(transport).not.toHaveTextContent(/recorded responses only/);
+    expect(screen.getByTestId("history-source-release")).toHaveTextContent("The server fixes these limits and keeps the credentials.");
+    expect(document.body).toHaveTextContent("Operating release actual-native/1 (actual), PROVIDER_ACTUAL.");
+  });
+
+  it("labels a stand-in release source transport as stand-in responses, not recorded-only", async () => {
+    const user = userEvent.setup();
+    mocks.historySources.mockResolvedValue({ label: "SYNTHETIC", mode: "recorded", sources: [SOURCE] });
+    mocks.historyList.mockResolvedValue({ declarations: [] });
+    mocks.jobs.mockResolvedValue({ jobs: [] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await screen.findByRole("option", { name: SOURCE.title });
+    await user.selectOptions(screen.getByLabelText("Saved source"), SOURCE.source_id);
+    const transport = screen.getByTestId("history-source-transport");
+    expect(transport).toHaveTextContent(/example responses under its locked research setup/);
+    expect(transport).not.toHaveTextContent(/recorded responses only/);
+  });
+
+  it("shows a clear research-unavailable state when the server composes no release", async () => {
+    mocks.historySources.mockResolvedValue({ label: "SYNTHETIC", mode: "unavailable", operating_release: null,
+      sources: [SOURCE] });
+    mocks.historyList.mockResolvedValue({ declarations: [DECLARATION] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    const notice = await screen.findByTestId("research-unavailable");
+    expect(notice).toHaveTextContent("Research is not available here yet");
+    expect(screen.queryByText("Declare a new recorded-history investigation")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open this rule" })).toBeInTheDocument();
+  });
+
+  it("keeps a saved actual job's release and transport, not the current catalog", async () => {
+    const user = userEvent.setup();
+    // The current catalog offers only the stand-in source; the saved declaration and job keep their own actual facts.
+    mocks.historySources.mockResolvedValue({ label: "SYNTHETIC", mode: "recorded", sources: [SOURCE] });
+    mocks.historyList.mockResolvedValue({ declarations: [ACTUAL_DECLARATION] });
+    const dataset = { dataset_id: "ds-actual", content_sha256: "s", hashes_verified: {}, summary: { source_id: ACTUAL_SOURCE.source_id,
+      status: "COMPLETE", stop_reason: "COMPLETE", verdict: { overall: "QUALIFIED" }, binding_state: "QUALIFIED_BINDING",
+      unavailable_states: [], provider_requests: { ENVIO_HYPERSYNC: 2, QUICKNODE_JSON_RPC: 25 },
+      provider_requests_state: "MEASURED_CLIENT_CALLS", evidence_class: "PROVIDER_ACTUAL", content_label: "PROVIDER_HISTORY" },
+      transport: { envio_pages_framed: 2, client_calls: { ENVIO_HYPERSYNC: 2, QUICKNODE_JSON_RPC: 25 }, chain_id: 143, chain_network: "MONAD",
+        corroboration: { class: "COMPLETE", sample_size: 24, population_size: 24, mismatches: 0 }, corroboration_reason: null,
+        recorded_declarations: ["decimals"], clients: "P07_HTTP_CLIENTS_OPERATING_RELEASE",
+        client_classes: { ENVIO_HYPERSYNC: "HttpEnvioQueryClient", QUICKNODE_JSON_RPC: "HttpQuickNodeRpcClient" },
+        transport_label: "RELEASE_PROVIDER_HTTP_TRANSPORT", transport_kind: "PROVIDER_HTTP", requests_hashed: 27,
+        endpoint_hosts: { ENVIO_HYPERSYNC: "127.0.0.1", QUICKNODE_JSON_RPC: "127.0.0.1" },
+        operating_release: { release_id: "actual-native/1", sha256: "d".repeat(64), kind: "ACTUAL" } } };
+    mocks.jobs.mockResolvedValue({ jobs: [{ job_id: "job-actual", declaration_id: "act-decl-1", request_key: "k", operation_id: "o",
+      state: "REPORTED", terminal_reason: null, budget: { reserved: { provider_requests: 27 }, consumed: { provider_requests: 27 } },
+      deadline_at: "", cancel_requested_at: null, created_at: "", events: [], dataset, report: null }] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    expect(await screen.findByRole("option", { name: SOURCE.title })).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Open this rule" }));
+    expect(await screen.findByTestId("history-declaration-release")).toHaveTextContent(`actual-native/1 · ${"d".repeat(64)}`);
+    const facts = await screen.findByTestId("history-transport");
+    expect(facts).toHaveTextContent("real provider responses");
+    expect(document.body).toHaveTextContent("chain id checked against provider responses: 143 (MONAD)");
+    expect(document.body).not.toHaveTextContent("chain id checked against recorded responses");
   });
 });

@@ -13,7 +13,7 @@ const outcome = (page) => page.getByTestId("outcome");
 const rows = (page) => page.getByTestId("attempts").locator("li[data-attempt]");
 async function openAttempts(page) {
   const details = page.getByTestId("attempts");
-  if (!(await details.evaluate((el) => el.open))) await details.locator("summary").click();
+  if (!(await details.evaluate((el) => el.open))) await details.locator(":scope > summary").click();
 }
 
 test.describe.configure({ mode: "serial" });
@@ -25,7 +25,7 @@ test("saved attempts and states reopen unchanged in a fresh context", async ({ b
   const page = await context.newPage();
   page.on("request", (request) => { if (request.method() !== "GET") posts.push(`${request.method()} ${request.url()}`); });
   await injectAuth(page, tokens.a);
-  const open = async (id) => { await page.goto(`/#/research/${id}`); await expect(outcome(page)).toBeVisible({ timeout: 30_000 }); };
+  const open = async (id) => { await page.goto(`/app#/research/${id}`); await expect(outcome(page)).toBeVisible({ timeout: 30_000 }); };
 
   const failure = results[`p05-failure-retry-${project}`];
   await open(failure.id);
@@ -37,10 +37,10 @@ test("saved attempts and states reopen unchanged in a fresh context", async ({ b
 
   const unknown = results[`p05-malformed-unknown-${project}`];
   await open(unknown.unknown);
-  await expect(page.getByRole("heading", { name: "We do not know if the interpreter finished" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Try the interpreter again" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "We do not know if the research agent finished" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Try the research agent again" })).toHaveCount(0);
   await open(unknown.malformed);
-  await expect(page.getByRole("heading", { name: "The interpreter's answer was not usable" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "The research agent's answer was not usable" })).toBeVisible();
 
   const words = results[`p05-words-${project}`];
   await open(words.id);

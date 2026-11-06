@@ -1,4 +1,6 @@
 import { actionsForFlow, formatAmount, type AccountViewRecord } from "../lib/account-views";
+import { Details } from "./Details";
+import { FLOW_KIND, FLOW_STATE, RECORD_STATUS, plain } from "../lib/labels";
 
 export function FundRecords({ records }: { records: AccountViewRecord[] }) {
   const wallets = records.filter((record) => record.content.record_kind === "AGENT");
@@ -9,11 +11,11 @@ export function FundRecords({ records }: { records: AccountViewRecord[] }) {
   if (!wallets.length && !flows.length && !walletActions.length) return <p className="muted">No saved fund records.</p>;
   return (
     <div className="stack">
-      <p>Each wallet keeps its own funds, reservations, authority, and network gas. Deposits and withdrawals are capital flows, not trading results.</p>
+      <p>Each wallet keeps its own funds, reservations, authority, and network gas. Deposits and withdrawals are not trading results.</p>
       {wallets.map(({ record_id, content }) => (
         <section className="panel" id={`record-${record_id}`} key={record_id}>
           <h2>{content.agent_id} · {content.wallet_id}</h2>
-          <p>{content.network_id} · authored synthetic record · updated {content.updated_at}</p>
+          <p>{content.network_id} · example record · updated {content.updated_at}</p>
           <dl>
             <dt>Wallet balance</dt><dd>{content.wallet_balance ? `${formatAmount(content.wallet_balance)} ${content.wallet_balance.asset_id}` : "Unknown"}</dd>
             <dt>Available funds</dt><dd>{content.available_balance ? `${formatAmount(content.available_balance)} ${content.available_balance.asset_id}` : "Unknown"}</dd>
@@ -24,32 +26,35 @@ export function FundRecords({ records }: { records: AccountViewRecord[] }) {
         </section>
       ))}
       <section className="panel">
-        <h2>Capital flow history</h2>
+        <h2>Deposit and withdrawal history</h2>
         {!flows.length && <p>No saved capital flows.</p>}
         <ul>{flows.map((flow) => {
           const { record_id, content } = flow;
           const actions = actionsForFlow(records, flow);
           return (
           <li id={`record-${record_id}`} key={record_id}>
-            {content.agent_id} · {content.wallet_id} · {content.flow_id} · {content.flow_kind} · {content.status}
+            {content.agent_id} · {content.wallet_id} · {content.flow_id} · {plain(FLOW_KIND, content.flow_kind, "Unknown")} · {plain(FLOW_STATE, content.status, "Unknown")}
             {content.quantity && ` · ${formatAmount(content.quantity)} ${content.quantity.asset_id}`}
-            {` · ${content.updated_at}. Capital flow, not trading profit.`}
+            {` · ${content.updated_at}. Deposit or withdrawal, not trading profit.`}
+            <Details summary="Details"><p className="mono">kind {content.flow_kind} · status {content.status}</p></Details>
             <h3>Wallet actions for this flow</h3>
             {!actions.length && <p>No saved wallet actions for this flow.</p>}
             <ul>{actions.map((action) => <li id={`record-${action.record_id}`} key={action.record_id}>
-              {action.content.action_id} · {action.content.status} · {action.content.updated_at}
+              {action.content.action_id} · {plain(RECORD_STATUS, action.content.status, "Unknown")} · {action.content.updated_at}
               {action.content.reason && <p>{action.content.reason}</p>}
               {action.content.gas && <p>Native gas: {formatAmount(action.content.gas)} {action.content.gas.asset_id}</p>}
+              <Details summary="Details"><p className="mono">status {action.content.status}</p></Details>
             </li>)}</ul>
           </li>
         );})}</ul>
         {actionsWithoutLoadedFlow.length > 0 && <>
-          <h2>Wallet actions whose flow is not loaded</h2>
-          <p>These exact action records are shown without flow attribution because the matching flow is unavailable.</p>
+          <h2>Wallet actions with no loaded deposit or withdrawal</h2>
+          <p>These exact action records are shown without a matching deposit or withdrawal because it is unavailable.</p>
           <ul>{actionsWithoutLoadedFlow.map(({ record_id, content }) => <li id={`record-${record_id}`} key={record_id}>
-            {content.agent_id} · {content.wallet_id} · {content.network_id} · {content.flow_id} · {content.action_id} · {content.status} · {content.updated_at}
+            {content.agent_id} · {content.wallet_id} · {content.network_id} · {content.flow_id} · {content.action_id} · {plain(RECORD_STATUS, content.status, "Unknown")} · {content.updated_at}
             {content.reason && <p>{content.reason}</p>}
             {content.gas && <p>Native gas: {formatAmount(content.gas)} {content.gas.asset_id}</p>}
+            <Details summary="Details"><p className="mono">status {content.status}</p></Details>
           </li>)}</ul>
         </>}
       </section>

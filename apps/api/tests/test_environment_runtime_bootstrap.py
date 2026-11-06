@@ -2,8 +2,9 @@
 
 Runs with `--noconftest`: no database, socket or provider. A recording stand-in for `os.environ` holding only literal
 fake sentinels is installed before any project import and for every test, so the real environment is never consulted
-and every looked-up slot is counted. Definitions are synthetic `.example` ACTUAL releases approved only by `monkeypatch`;
-the code-owned registries stay empty. See `docs/qualification/research-provider-composition/CREDENTIAL_DELIVERY.md`.
+and every looked-up slot is counted. The synthetic `.example` ACTUAL releases in this file are approved only by
+`monkeypatch`; the code-owned default registry is left intact and is covered by `test_approved_nansen_bootstrap.py`.
+See `docs/qualification/research-provider-composition/CREDENTIAL_DELIVERY.md`.
 """
 
 from __future__ import annotations
@@ -63,6 +64,7 @@ IMPORT_ENVIRON = _fake_environ()
 _real_environ, os.environ = os.environ, IMPORT_ENVIRON  # type: ignore[assignment]
 try:
     import operating_release_stand_in as stand_in
+    from test_actual_binding_admission import authored_actual_history
     from edge_os_api.core.research import environment_credentials, operating_release, released_runtime_bootstrap
     from edge_os_api.core.research.environment_credentials import EnvironmentCredentialSource
     from edge_os_api.core.research.operating_release import OperatingRelease, ReleaseRefused, release_sha256
@@ -82,7 +84,8 @@ def synthetic_release(*, release_id: str = "synthetic-bootstrap/1",
     """A synthetic ACTUAL definition over `.example` hosts with the given credential slots. No job runs over it."""
     base = stand_in.stand_in_release(envio_endpoint="https://hypersync.bootstrap-test.example",
                                      quicknode_host=QUICKNODE_HOST, nansen_endpoint=NANSEN_ORIGIN)
-    history = dataclasses.replace(base.history, envio_credential_slot=slots[0], quicknode_credential_slot=slots[1])
+    history = authored_actual_history(dataclasses.replace(
+        base.history, envio_credential_slot=slots[0], quicknode_credential_slot=slots[1]))
     nansen = dataclasses.replace(base.nansen, credential_slot=slots[2])
     return OperatingRelease(release_id, "ACTUAL", history=history, nansen=nansen)
 
@@ -140,7 +143,7 @@ def test_importing_the_bootstrap_reads_no_credential_and_never_the_whole_environ
     assert not set(IMPORT_ENVIRON.lookups) & {*_fake_environ(), "<iterated>", "<copied>"}
 
 
-def test_a_reload_and_the_empty_registry_read_nothing_and_construct_nothing(
+def test_a_reload_reads_nothing_and_an_emptied_registry_composes_nothing(
         environ: RecordingEnviron, no_sockets: list[Any]) -> None:
     import importlib
 
@@ -148,7 +151,13 @@ def test_a_reload_and_the_empty_registry_read_nothing_and_construct_nothing(
     try:
         importlib.reload(environment_credentials)
         importlib.reload(released_runtime_bootstrap)
-        assert released_runtime_bootstrap.RELEASE_DEFINITIONS == {} and operating_release.APPROVED_RELEASES == {}
+        # The code-owned default now registers exactly one approved ACTUAL release (the empty-by-default assumption is
+        # superseded); importing or reloading it still reads no credential and opens no socket.
+        assert set(released_runtime_bootstrap.RELEASE_DEFINITIONS) == set(operating_release.APPROVED_RELEASES)
+        assert released_runtime_bootstrap.RELEASE_DEFINITIONS != {} and operating_release.APPROVED_RELEASES != {}
+        assert released_runtime_bootstrap.server_research_runtime(SETTINGS) is not None
+        # An explicitly emptied registry still composes nothing and has no effect at all.
+        released_runtime_bootstrap.RELEASE_DEFINITIONS = {}
         assert released_runtime_bootstrap.server_research_runtime(SETTINGS) is None
     finally:  # restore the original globals, so other tests keep one class identity
         for module, namespace in saved.items():

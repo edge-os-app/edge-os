@@ -43,7 +43,7 @@ from provider_guard import GuardPolicy, LogicalRequest, ProviderRequestGuard  # 
 from provider_transport import TransportReply, TransportRoute, reply_refusal  # noqa: E402
 from relay_admission import (  # noqa: E402
     IDENTIFIER, ActualReleaseUnapproved, ProviderDestination, RelayRelease, channel_refusal, grant_refusal,
-    load_actual_release, parse_channel_message,
+    load_actual_release, parse_channel_message, saved_reply_headers,
 )
 from relay_transport import ReplyLost, send_once  # noqa: E402
 
@@ -58,6 +58,11 @@ DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 PROBE_SECONDS = 2.0
 UNREACHABLE = {errno.ENETUNREACH, errno.EHOSTUNREACH}  # the kernel has no route: nothing left this namespace
 GUARD_HEADERS = {"accept": "application/json", "content-type": "application/json"}
+# The relay and the application process share one group. State and channel records stay readable for the application,
+# and one attempt's folder stays traversable for it. `UMask=0077` hides the group bits, so each mode is set again.
+STATE_FILE_MODE = 0o640
+ATTEMPT_FOLDER_MODE = 0o750
+HEARTBEAT_MODE = 0o640
 
 
 def _write_new(folder: int, name: str, value: dict[str, Any]) -> bool:
@@ -67,8 +72,17 @@ def _write_new(folder: int, name: str, value: dict[str, Any]) -> bool:
     """
     temporary = f".{name}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=folder)
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, STATE_FILE_MODE, dir_fd=folder)
     except OSError:
+        return False
+    try:
+        os.fchmod(fd, STATE_FILE_MODE)  # the unit's UMask would drop the group bit
+    except OSError:
+        os.close(fd)
+        try:
+            os.unlink(temporary, dir_fd=folder)
+        except OSError:
+            pass
         return False
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -180,7 +194,8 @@ class Relay:
 
     def _attempt_dir(self, attempt: str) -> int:
         try:
-            os.mkdir(self.state / attempt, 0o700)
+            os.mkdir(self.state / attempt, ATTEMPT_FOLDER_MODE)
+            os.chmod(self.state / attempt, ATTEMPT_FOLDER_MODE)  # the unit's UMask would drop the group bit
         except FileExistsError:
             pass
         return os.open(self.state / attempt, DIR_FLAGS)
@@ -237,6 +252,7 @@ class Relay:
                  "egress_probe": self.egress, "pid": os.getpid()}
         temporary = self.state / ".heartbeat.tmp"
         temporary.write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
+        os.chmod(temporary, HEARTBEAT_MODE)  # the unit's UMask would drop the group bit
         os.replace(temporary, self.state / "heartbeat.json")
 
     # --- serving ------------------------------------------------------------------------------------------------------
@@ -370,7 +386,7 @@ class Relay:
             decision = ProviderRequestGuard(policy, logical, None).admit(body, GUARD_HEADERS)
             refusal = None if decision.admitted else f"guard:{decision.reason}"
         if refusal is None and self.actual is not None:  # the frozen record, not only the host's policy (A6)
-            refusal = self.actual.body_refusal(body, attempt)
+            refusal = self.actual.body_refusal(body, attempt, granted_max_tokens=grant["policy"]["max_output_tokens"])
         if refusal is not None:
             return self._refuse(attempt, grant, refusal)
         with self.lock:
@@ -387,10 +403,12 @@ class Relay:
 
     def _send(self, attempt: str, grant: dict[str, Any], body: bytes) -> None:
         began = time.time()
+        named = self.actual.recorded_reply_headers if self.actual is not None else ()
         try:
             sent = send_once(self.destination, ca_file=self.ca_file, key=self.key, body=body,
                              deadline=grant["expires_at"], max_reply_bytes=self.release.max_reply_bytes,
-                             gateway_socket=self.gateway_socket, attempt_id=attempt if self.gateway_socket else None)
+                             gateway_socket=self.gateway_socket, attempt_id=attempt if self.gateway_socket else None,
+                             reply_headers=named)
         except ReplyLost as lost:
             self._record(attempt, "finished.json", {"outcome": "lost", "error": str(lost), "seconds": time.time() - began})
             return self._reply(grant, {"attempt_id": attempt, "outcome": "lost"})
@@ -413,7 +431,8 @@ class Relay:
         self._record(attempt, "finished.json", {
             "outcome": "reply" if refused is None else "refused_reply", "refusal": refused, "status": sent.status,
             "reply_bytes": len(sent.body), "reply_sha256": hashlib.sha256(sent.body).hexdigest(), "usage": usage,
-            "cost": details.get("cost"), "generation_id": details.get("generation_id"), "seconds": time.time() - began})
+            "cost": details.get("cost"), "generation_id": details.get("generation_id"), "seconds": time.time() - began,
+            **(saved_reply_headers(named, sent.headers, self.key) if named else {})})
         if refused is not None:
             return self._reply(grant, {"attempt_id": attempt, "outcome": "refused", "refusal": refused,
                                        "before_send": False})

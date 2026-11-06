@@ -148,6 +148,19 @@ class StopSpec(StrictModel):
         return self
 
 
+class ControlledApproval(StrictModel):
+    """Exact one-action qualification, distinct from autonomous fixture qualification flags."""
+
+    purpose: Literal["CONTROLLED_ONE_ACTION_QUALIFICATION"] = "CONTROLLED_ONE_ACTION_QUALIFICATION"
+    evidence_class: Literal["SYNTHETIC_FIXTURE", "PROVIDER_ACTUAL"]
+    release_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    position_inventory_proof_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    exit_capacity_proof_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    valuation_proof_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cost_model_proof_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class ApprovalSnapshot(StrictModel):
     approval_id: str = _ID
     binding: IdentityBinding
@@ -167,11 +180,14 @@ class ApprovalSnapshot(StrictModel):
     valuation_qualified: bool
     cost_model_qualified: bool
     fixture_label: str = Field(min_length=1, max_length=80)
+    controlled: ControlledApproval | None = None
 
     def content_hash(self) -> str:
         """Canonical hash of the full immutable approval meaning (all terms, not just caps)."""
         payload = self.model_dump(mode="json")
         payload.pop("fixture_label", None)
+        if self.controlled is None:
+            payload.pop("controlled", None)  # preserve saved fixture approval identities
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -188,9 +204,16 @@ class ApprovalSnapshot(StrictModel):
     @field_validator("fixture_label")
     @classmethod
     def label_must_be_synthetic(cls, value: str) -> str:
-        if LABEL.fullmatch(value) is None:
+        if LABEL.fullmatch(value) is None and value != "PROVIDER_ACTUAL_QUALIFICATION":
             raise ValueError("authored fixture policies must carry a SYNTHETIC_ label")
         return value
+
+    @model_validator(mode="after")
+    def actual_label_requires_controlled_authority(self) -> "ApprovalSnapshot":
+        actual = self.controlled is not None and self.controlled.evidence_class == "PROVIDER_ACTUAL"
+        if (self.fixture_label == "PROVIDER_ACTUAL_QUALIFICATION") != actual:
+            raise ValueError("actual qualification requires an explicit controlled approval")
+        return self
 
     @field_validator("expires_at")
     @classmethod

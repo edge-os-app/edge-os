@@ -10,17 +10,25 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from edge_os_api.core.database import make_engine, make_session_factory
+from edge_os_api.core.research import released_runtime_bootstrap
 from edge_os_api.core.settings import load_settings
 from edge_os_api.main import create_app
 from edge_os_api.usage import quota
 
 DRIVER = Path(__file__).resolve().parent / "usage_driver.py"
+
+
+def recorded_app(values):
+    """A recorded-source app: a composed ACTUAL release would replace the recorded test sources."""
+    with mock.patch.dict(released_runtime_bootstrap.RELEASE_DEFINITIONS, {}, clear=True):
+        return create_app(load_settings(values))
 
 
 @pytest.fixture(scope="module")
@@ -171,13 +179,12 @@ def test_caps_are_frozen_and_change_only_by_an_explicit_recorded_operator_action
 def test_a_changed_configured_global_cap_pauses_research_and_shows_in_readiness(env, migrated, owner_a):
     from research_flows import declare, start
 
-    with TestClient(create_app(load_settings({**env, "EDGE_OS_RESEARCH_HISTORY_MODE": "recorded"}))) as client:
+    with TestClient(recorded_app({**env, "EDGE_OS_RESEARCH_HISTORY_MODE": "recorded"})) as client:
         intake_id, declaration_id, _ = declare(client, owner_a)
         assert start(client, owner_a, intake_id, declaration_id).status_code == 201  # freezes the global caps
         assert client.get("/readyz").json()["status"] == "ready"
-    changed = load_settings({**env, "EDGE_OS_RESEARCH_HISTORY_MODE": "recorded",
-                             "EDGE_OS_USAGE_GLOBAL_PROVIDER_REQUESTS": "999999"})
-    with TestClient(create_app(changed)) as client:
+    changed = {**env, "EDGE_OS_RESEARCH_HISTORY_MODE": "recorded", "EDGE_OS_USAGE_GLOBAL_PROVIDER_REQUESTS": "999999"}
+    with TestClient(recorded_app(changed)) as client:
         ready = client.get("/readyz")
         assert ready.status_code == 503 and ready.json() == {"status": "unavailable", "reason": "quota_cap_mismatch",
                                                              "resources": ["provider_requests"]}
@@ -221,11 +228,11 @@ def test_an_owner_cap_mismatch_keeps_readiness_and_other_owners_but_pauses_that_
     from research_flows import declare, start
 
     base = {**env, "EDGE_OS_RESEARCH_HISTORY_MODE": "recorded"}
-    with TestClient(create_app(load_settings(base))) as client:
+    with TestClient(recorded_app(base)) as client:
         intake_id, declaration_id, _ = declare(client, owner_a)
         assert start(client, owner_a, intake_id, declaration_id).status_code == 201  # freezes owner A's caps
     changed = {**base, "EDGE_OS_RESEARCH_BUDGET_PROVIDER_REQUESTS": "15"}
-    with TestClient(create_app(load_settings(changed))) as client:
+    with TestClient(recorded_app(changed)) as client:
         ready = client.get("/readyz")
         assert ready.status_code == 200 and ready.json()["attention"]["owner_quota_cap_mismatch"]["provider_requests"] >= 1
         assert "owner" not in json.dumps(ready.json()["attention"]).replace("owner_quota_cap_mismatch", "")

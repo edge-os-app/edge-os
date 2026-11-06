@@ -23,7 +23,7 @@ class RelayApplicationDefinition:     # code-owned; RELEASE_DEFINITIONS = () in 
     record_sha256: str
     price_snapshot: bytes             # the bytes the record names by price_snapshot_sha256
     response_format: Mapping | None   # the schema the record names by response_format_sha256
-    image: str                        # pinned Hermes job image, by Docker image id sha256:<64 hex> (section 7.1)
+    images: tuple[tuple[str, str], ...]  # one Docker image id per platform; exactly linux/arm64 and linux/amd64 (7.1)
     channel_root: str                 # this application's channel under the relay
     global_cap_usd: Decimal
     owner_cap_usd: Decimal
@@ -198,7 +198,7 @@ Task `HERMES-LIVE-PATH-L1-20261015-LOCAL-v1`, base `19e6063ec72fc676e479a1d9f477
 
 ### 7.1 Image identity
 
-The relay operator starts its containers by the immutable image id that `docker image inspect --format {{.Id}}` reports for its configured reference (`sha256:<64 hex>`), and hands off `image: {reference, id}`. A locally built image may have no registry entry; which digest Docker reports as `.Id` depends on the host's image store, so this contract relies only on that reported value. `RelayApplicationDefinition.image` is therefore that image id, and the handoff's `image.id` must equal it exactly. `build_relay_job(image=release.image)` launches every job by that id. A tag, a registry digest reference (`name@sha256:...`) or an upper-case id is refused when the definition binds. No registry service is added, and no RepoDigest is made up.
+The relay operator starts its containers by the immutable image id that `docker image inspect --format {{.Id}}` reports for its configured reference (`sha256:<64 hex>`), and hands off `image: {reference, id}`. A locally built image may have no registry entry; which digest Docker reports as `.Id` depends on the host's image store, so this contract relies only on that reported value. `RelayApplicationDefinition.images` pins one such id for each of exactly two platforms: `linux/arm64` (the Mac) and `linux/amd64` (the VPS). Binding reads the host platform from code, selects that platform's id, and refuses an unknown platform or a third platform. No environment value or file supplies the id. The handoff's `image.id` must equal the selected id exactly, so the other platform's listed id is refused. `build_relay_job(image=release.image)` launches every job by that id. A tag, a registry digest reference (`name@sha256:...`), an upper-case id, a duplicate platform or a missing platform is refused when the definition binds. No registry service is added, and no RepoDigest is made up.
 
 ### 7.2 Request shape
 

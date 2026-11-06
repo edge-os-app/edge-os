@@ -1,6 +1,6 @@
 # Hermes actual operation: relay operator and application handoff
 
-Task `HERMES-OPERATOR-L1-20261015-LOCAL-v1` (#58, reduced demo connection work). Status: LOCAL implementation with synthetic checks. It is not a provider result and gives no authority. No real key, account, provider request or spending is part of it. `relay_admission.APPROVED_ACTUAL_RELEASES` stays empty, so every ACTUAL configuration is refused.
+Task `HERMES-OPERATOR-L1-20261015-LOCAL-v1` (#58, reduced demo connection work). Status: LOCAL implementation with synthetic checks. It is not a provider result and gives no authority. No real key, account, provider request or spending is part of it. `relay_admission.APPROVED_ACTUAL_RELEASES` names the adopted record; a production ACTUAL configuration still needs an approved hosted deployment record, so production stays refused.
 
 Sources: `../hermes-provider-relay/CONTRACT.md` (A6, E1-COST1, R9), `../hermes-provider-relay/ONLINE_CONTINUATION.md` sections 2-7 (current code and approval supersede its dated proposals), the controller's `HANDOFF_CONTRACT.md` (53ee240e...) and `HANDOFF_CLARIFICATION_V2.md` (c28167aa...). The model operating packet is [MODEL_OPERATING_PACKET.md](MODEL_OPERATING_PACKET.md).
 
@@ -78,22 +78,61 @@ Mode 0444 prevents routine accidental writes. It does not protect against the sa
 
 Read-only ownership applies to the handoff, the configuration and the release record. The accepted runtime writers keep their single-purpose files, each owned per attempt.
 
-| Path | Writer | Readers |
-|---|---|---|
-| operator configuration file | operator owner (outside the run root) | operator |
-| `<run root>/owner.json`, `resources.json`, `handoff.json`, `start-failed.json`, `stopped.json`, `stop-incomplete-<ns>.json` | operator, each once | operator; application reads `handoff.json` only |
-| `<run root>/relay/relay-config.json`, `provider-config.json`, `tls/`, `secrets/admission-key` | `RelaySupervisor._prepare` (operator process) | relay, stand-in (mounted read-only); application reads the admission key file only |
-| `<run root>/relay/gateway-config.json` | `RelaySupervisor._start_gateway` (operator process) | gateway (read-only mount) |
-| `<run root>/relay/grants/<attempt>.json` | application `RelayTurnRunner.run_turn`, once per attempt | relay (read-only mount) |
-| `<run root>/relay/revocations/<attempt>.json` | application `RelayTurnRunner._close`, once per attempt | relay |
-| `<run root>/relay/state/` (`heartbeat.json`, `events.jsonl`, `<attempt>/started.json`, `finished.json`, `closed.json`) | relay | application `RelayTurnRunner` (heartbeat and records) |
-| `<run root>/relay/gateway/receipts/`, `provider/receipts/` | gateway, AUTHORED stand-in | evidence |
-| `<run root>/relay/provider/scripts/<attempt>.json` | AUTHORED test scaffolding only (the test's script owner, e.g. `relay_harness.Rig.script_for`); not in the handoff; it sits beside the handoff's `state` folder | AUTHORED stand-in; no ACTUAL equivalent |
-| `<channel path>/` (the job evidence folder and channel files) | application job runner (`GuardedDockerTurnRunner`) and the job; relay writes channel replies | application, relay |
-| provider key file | its owner outside the repository | relay only (read-only mount; AUTHORED stand-in reads the synthetic key) |
+In the hosted layout the application runs as `edge-os-research` and the relay as `edge-os-relay`. Both units set `Group=edge-os-relay-share`, so the files they exchange are one group. The modes below are the reviewed host modes; the code sets them because the units use `UMask=0077`.
+
+| Path | Owner:group | Mode | Writer | Readers |
+|---|---|---|---|---|
+| operator configuration file | root:edge-os-relay | 0640 | root | operator |
+| `<run root>/owner.json`, `resources.json`, `start-failed.json`, `stopped.json`, `stop-incomplete-<ns>.json` | edge-os-relay:edge-os-relay-share | 0600 / 0400 | operator, each once | operator |
+| `<run root>/handoff.json` | edge-os-relay:edge-os-relay-share | 0444 | operator, once | operator; application |
+| `<run root>/relay/relay-config.json`, `provider-config.json`, `gateway-config.json` | edge-os-relay:edge-os-relay-share | 0600 | `RelaySupervisor` (operator process) | relay, stand-in, gateway (read-only mount) |
+| `<run root>/relay/tls/`, `provider/`, `gateway/` | edge-os-relay:edge-os-relay-share | 0700 | `RelaySupervisor` | relay, gateway (read-only mounts); not the application |
+| `<run root>/relay/secrets/` | edge-os-relay:edge-os-relay-share | 0750 | `RelaySupervisor` | relay and application traverse |
+| `<run root>/relay/secrets/admission-key` | edge-os-relay:edge-os-relay-share | 0440 | `RelaySupervisor._prepare` | relay (owner); application (group) |
+| `<run root>/relay/grants/<attempt>.json` | edge-os-research:edge-os-relay-share | 0770 dir, 0640 file | application `RelayTurnRunner.run_turn`, once per attempt | relay (read-only mount) |
+| `<run root>/relay/revocations/<attempt>.json` | edge-os-research:edge-os-relay-share | 0770 dir, 0640 file | application `RelayTurnRunner._close`, once per attempt | relay |
+| `<run root>/relay/state/` (`heartbeat.json`, `<attempt>/started.json`, `finished.json`, `closed.json`; `events.jsonl` stays `0600` and is relay-only) | edge-os-relay:edge-os-relay-share | 0750 dir, 0640 files | relay | application `RelayTurnRunner` (heartbeat and records); the application cannot write it |
+| `<run root>/relay/gateway/receipts/`, `provider/receipts/` | edge-os-relay:edge-os-relay | 0700 | gateway, AUTHORED stand-in | evidence |
+| `<run root>/relay/provider/scripts/<attempt>.json` | edge-os-relay:edge-os-relay | 0700 | AUTHORED test scaffolding only (the test's script owner, e.g. `relay_harness.Rig.script_for`); not in the handoff | AUTHORED stand-in; no ACTUAL equivalent |
+| `<channel path>/` (the job evidence folder and channel files; the operator-created channel root itself is edge-os-relay) | edge-os-research:edge-os-relay-share | 0770 root; 0770 turn, `output/` and `output/relay-channel/` folders | application job runner (`GuardedDockerTurnRunner`) and the job; relay writes channel replies | application, job, relay |
+| provider key file | its owner outside the repository | 0600 | its owner | relay only (read-only mount; AUTHORED stand-in reads the synthetic key) |
 
 Shutdown: only the operator stops, restarts or removes relay, gateway, stand-in, network and volume. The application never does; its close disposes only its own engine. Job recovery (`recover_pending`) and the per-attempt grant and close stay with the application. UNKNOWN liability and no-resend rules are unchanged.
+
+The hosted application is the separate host unit `edge-os-hermes-app.service` (as `edge-os-research`, loopback only); `deploy/coolify/RUNBOOK.md` §6.1, §6.3 and §6.6 hold the host layout, the handoff line and the start order. The application reads `<run root>/handoff.json` and the admission key, writes `grants/` and `revocations/`, reads `state/`, and writes its own turn folders under the channel root `/var/lib/edge-os/channel`. It cannot read the relay configs, the provider key, `tls/`, `provider/` or `gateway/`, and it cannot write `state/`.
 
 ## 6. Checks
 
 Focused, no Docker: `tests/hermes_provider_relay/test_relay_operator.py -k "not test_docker_"` (stateful fake `docker`: names, ids, labels, mounts and name conflicts; synthetic key, record and CA). Docker checks need a separate capacity grant: `test_docker_the_cli_runs_the_e1_relay_from_the_handoff_restarts_and_stops_with_nothing_left` starts an owned AUTHORED E1 operation through the CLI, runs one turn from the handoff, restarts the relay through the CLI (records unchanged, no new stand-in receipt), stops it and checks that nothing labelled is left.
+
+## 7. VPS (linux/amd64) build and the platform-pinned image id
+
+The approved application release pins exactly two Docker image ids, keyed by platform. The Mac (arm64) id is
+`sha256:2d28b6d634bb32e45409575433fb2404ba6a6144c5cc072ee5044b27d4d181f0` (tag `edge-os-p05-hermes:l1live7c0d2edb1`).
+The VPS (amd64) id is `sha256:42541c05f27ee56bfe02ce9d7223728c0432a040abef6515fff67a7f992f9aff` (rebuilt on
+2026-10-26; the 2026-10-23 id was lost to image cleanup and the build is not byte-reproducible, so it is not
+recoverable). The image stays held on the host by the stopped container `edge-os-hermes-image-hold`, with the `docker
+save` backup `/var/backups/edge-os/images/hermes-relay-job-42541c05.tar` (recorded sha256 starting `08a004bc`). A held image
+cannot be removed by a later cleanup; any new build needs a new reviewed pin. Binding reads the host
+platform from code and selects that platform's id. An unknown platform, a third platform, or any id outside the pair is
+refused with a named reason. The image id never comes from an environment value or a file; the operator configuration
+only names it, and the application refuses a handoff with any id other than the host's pinned id. The operator refuses
+an ACTUAL configuration whose image id is not that code-owned definition's id for the code-read host platform, and an
+ACTUAL record with no definition; AUTHORED keeps its stand-in image and is not release-bound.
+
+Build the amd64 image on the VPS from tracked source only:
+
+```
+mkdir -p <context>/hermes-agent
+COPYFILE_DISABLE=1 git -C <hermes checkout> archive --format=tar 54bc5e509c985f37265c3d416bd2c64b10fc77ba | tar -x -C <context>/hermes-agent
+cp scripts/hermes_interpretation/Dockerfile scripts/hermes_interpretation/hermes_turn_job.py <context>/
+find <context> -name '._*' -delete
+docker build -t edge-os-p05-hermes:<run id> <context>
+docker image inspect edge-os-p05-hermes:<run id> --format '{{.Id}}'
+```
+
+`COPYFILE_DISABLE=1` or the `find ... -delete` step must remove the macOS `._*` files before the build; a `._*` file in
+the context changes the context the image records. The build prints `PINNED_HERMES_IMPORT_OK`. The expected id is the
+amd64 id above. Compare `/opt/p05/hermes_turn_job.py` in that image with `scripts/hermes_interpretation/hermes_turn_job.py`
+in this candidate and report any difference: the arm64 image was built on 2026-10-15, so its job file can be older. The
+image is a separate pinned field; `record_sha256`, prices, caps and every other release field stay unchanged.

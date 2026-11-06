@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InvestigationReview } from "../components/InvestigationReview";
@@ -122,12 +122,12 @@ beforeEach(() => {
 describe("investigation declaration adoption", () => {
   it("requires explicit adoption, saves the whole bounded declaration, and reopens the exact record", async () => {
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
-    expect(await screen.findByLabelText("I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.")).toBeInTheDocument();
-    const save = screen.getByRole("button", { name: "Adopt and save declaration" });
+    expect(await screen.findByLabelText("I reviewed the hypothesis and every required setting above. I adopt this exact, example-only rule for a future investigation.")).toBeInTheDocument();
+    const save = screen.getByRole("button", { name: "Adopt and save rule" });
     expect(save).toBeDisabled();
-    fireEvent.click(screen.getByRole("checkbox", { name: /fixture-only declaration/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /example-only rule/ }));
     fireEvent.click(save);
-    await screen.findByText("Declaration saved");
+    await screen.findByText("Rule saved");
     expect(mocks.save).toHaveBeenCalledOnce();
     const [, body] = mocks.save.mock.calls[0];
     expect(body.expected_interpretation_revision_id).toBeNull();
@@ -137,7 +137,7 @@ describe("investigation declaration adoption", () => {
       expect(body.adopted_fields).toContain("edge_spec");
     expect(body.field_origins.edge_spec.adoption).toBe("ADOPTED");
     expect(screen.getByTestId("investigation-saved")).toHaveTextContent("No study started");
-    fireEvent.click(screen.getByRole("button", { name: "Reopen saved declaration" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reopen saved rule" }));
     await waitFor(() => expect(mocks.get).toHaveBeenCalledWith("intake-1", saved.declaration.record_id));
     expect(screen.getByTestId("investigation-saved")).toHaveTextContent(saved.declaration.record_id);
   });
@@ -147,7 +147,7 @@ describe("investigation declaration adoption", () => {
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
     expect(await screen.findByTestId("investigation-saved")).toHaveTextContent(saved.declaration.record_id);
     expect(screen.queryByLabelText(/I reviewed the hypothesis and every required setting/)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Reopen saved declaration" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reopen saved rule" }));
     await waitFor(() => expect(mocks.get).toHaveBeenCalledWith("intake-1", saved.declaration.record_id));
   });
 
@@ -159,7 +159,7 @@ describe("investigation declaration adoption", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Retry proposal" }));
     await waitFor(() => expect(mocks.proposal).toHaveBeenCalledTimes(2));
     expect(screen.getByTestId("investigation-saved")).toHaveTextContent(saved.declaration.record_id);
-    expect(screen.getByRole("button", { name: "Reopen saved declaration" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reopen saved rule" })).toBeInTheDocument();
   });
 
   it("offers an in-place retry when no saved declaration exists and proposal loading fails", async () => {
@@ -173,15 +173,15 @@ describe("investigation declaration adoption", () => {
 
   it("keeps claim, falsification, direction, and partition controls semantically aligned", async () => {
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
-    const claim = await screen.findByLabelText("Claim status");
+    const claim = await screen.findByLabelText("Claim type");
     fireEvent.change(claim, { target: { value: "HYPOTHESIS" } });
     expect(screen.getByLabelText("Expected direction")).toHaveValue("OUTPERFORM");
     expect(screen.queryByRole("option", { name: "Descriptive, no prediction" })).toBeNull();
     expect(screen.getByRole("option", { name: "Primary group outperforms comparison" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Primary group underperforms comparison" })).toBeInTheDocument();
-    expect(screen.getByText(/TRAINING · training/)).toBeInTheDocument();
-    expect(screen.getByText(/VALIDATION · validation/)).toBeInTheDocument();
-    expect(screen.getByText(/HOLDOUT · holdout/)).toBeInTheDocument();
+    expect(screen.getByText("Training")).toBeInTheDocument();
+    expect(screen.getByText("Validation")).toBeInTheDocument();
+    expect(screen.getByText("Holdout")).toBeInTheDocument();
     fireEvent.change(claim, { target: { value: "DESCRIPTIVE_ONLY" } });
     expect(screen.getByLabelText("Expected direction")).toHaveValue("DESCRIPTIVE");
     expect(screen.queryByText(/HOLDOUT · holdout/)).toBeNull();
@@ -194,15 +194,15 @@ describe("investigation declaration adoption", () => {
     const user = userEvent.setup();
     mocks.save.mockRejectedValueOnce(new Error("temporary network failure")).mockResolvedValue(saved);
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
-    await screen.findByLabelText("I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.");
-    await user.click(screen.getByRole("checkbox", { name: /fixture-only declaration/ }));
-    const saveButton = screen.getByRole("button", { name: "Adopt and save declaration" });
+    await screen.findByLabelText("I reviewed the hypothesis and every required setting above. I adopt this exact, example-only rule for a future investigation.");
+    await user.click(screen.getByRole("checkbox", { name: /example-only rule/ }));
+    const saveButton = screen.getByRole("button", { name: "Adopt and save rule" });
     saveButton.focus();
     await user.keyboard("{Enter}");
     await screen.findByRole("alert");
     saveButton.focus();
     await user.keyboard("{Enter}");
-    const heading = await screen.findByRole("heading", { name: "Declaration saved" });
+    const heading = await screen.findByRole("heading", { name: "Rule saved" });
     await waitFor(() => expect(document.activeElement).toBe(heading));
     expect(mocks.save).toHaveBeenCalledTimes(2);
     const firstBody = mocks.save.mock.calls[0][1];
@@ -220,15 +220,15 @@ describe("investigation declaration adoption", () => {
       const user = userEvent.setup();
       mocks.save.mockRejectedValueOnce(new Error("temporary network failure")).mockResolvedValue(saved);
       render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
-      await user.click(await screen.findByRole("checkbox", { name: /fixture-only declaration/ }));
-      const saveButton = screen.getByRole("button", { name: "Adopt and save declaration" });
+      await user.click(await screen.findByRole("checkbox", { name: /example-only rule/ }));
+      const saveButton = screen.getByRole("button", { name: "Adopt and save rule" });
       saveButton.focus();
       await user.keyboard("{Enter}");
       const alert = await screen.findByRole("alert");
       await waitFor(() => expect(document.activeElement).toBe(alert));
       saveButton.focus();
       await user.keyboard("{Enter}");
-      const heading = await screen.findByRole("heading", { name: "Declaration saved" });
+      const heading = await screen.findByRole("heading", { name: "Rule saved" });
       await waitFor(() => expect(document.activeElement).toBe(heading));
       expect(mocks.save).toHaveBeenCalledTimes(2);
     } finally {
@@ -240,7 +240,7 @@ describe("investigation declaration adoption", () => {
     mocks.list.mockResolvedValue({ declarations: [saved.declaration], access_history: saved.access_history });
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
     await screen.findByTestId("investigation-saved");
-    expect(document.activeElement).not.toBe(screen.getByRole("heading", { name: "Declaration saved" }));
+    expect(document.activeElement).not.toBe(screen.getByRole("heading", { name: "Rule saved" }));
   });
 
   it("keeps replacement intent across repeated proposal failures and saves a fresh hypothesis", async () => {
@@ -265,13 +265,13 @@ describe("investigation declaration adoption", () => {
     mocks.save.mockReset().mockResolvedValueOnce(saved).mockResolvedValueOnce(replacementSaved);
 
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
-    await user.click(await screen.findByRole("checkbox", { name: /fixture-only declaration/ }));
-    await user.click(screen.getByRole("button", { name: "Adopt and save declaration" }));
-    await screen.findByRole("heading", { name: "Declaration saved" });
+    await user.click(await screen.findByRole("checkbox", { name: /example-only rule/ }));
+    await user.click(screen.getByRole("button", { name: "Adopt and save rule" }));
+    await screen.findByRole("heading", { name: "Rule saved" });
     await user.click(screen.getByRole("button", { name: "Review another hypothesis" }));
 
     expect(await screen.findByText(/A new hypothesis could not be prepared/)).toBeInTheDocument();
-    expect(screen.getByText(/The saved declaration is unchanged/)).toBeInTheDocument();
+    expect(screen.getByText(/The saved rule is unchanged/)).toBeInTheDocument();
     const retry = screen.getByRole("button", { name: "Retry new hypothesis" });
     await user.click(retry);
     await screen.findByText(/A new hypothesis could not be prepared\. Unavailable/);
@@ -281,9 +281,9 @@ describe("investigation declaration adoption", () => {
     expect(await screen.findByLabelText("Hypothesis or descriptive question")).toHaveValue(
       "A separately reviewed descriptive question.");
     expect(screen.queryByText(/request interpretation changed/)).toBeNull();
-    await user.click(screen.getByRole("checkbox", { name: /fixture-only declaration/ }));
-    await user.click(screen.getByRole("button", { name: "Adopt and save declaration" }));
-    await screen.findByRole("heading", { name: "Declaration saved" });
+    await user.click(screen.getByRole("checkbox", { name: /example-only rule/ }));
+    await user.click(screen.getByRole("button", { name: "Adopt and save rule" }));
+    await screen.findByRole("heading", { name: "Rule saved" });
 
     expect(mocks.proposal).toHaveBeenCalledTimes(4);
     expect(mocks.save).toHaveBeenCalledTimes(2);
@@ -326,10 +326,10 @@ describe("investigation declaration adoption", () => {
       await user.type(stopping, "Keep my reviewed edits across each current review.");
 
       if (refreshPath === "stale save") {
-        await user.click(screen.getByRole("checkbox", { name: /fixture-only declaration/ }));
-        await user.click(screen.getByRole("button", { name: "Adopt and save declaration" }));
+        await user.click(screen.getByRole("checkbox", { name: /example-only rule/ }));
+        await user.click(screen.getByRole("button", { name: "Adopt and save rule" }));
         await screen.findByText(/unsaved edits remain in place/);
-        expect(screen.getByRole("checkbox", { name: /fixture-only declaration/ })).not.toBeChecked();
+        expect(screen.getByRole("checkbox", { name: /example-only rule/ })).not.toBeChecked();
         expect(stopping).toHaveValue("Keep my reviewed edits across each current review.");
       } else if (refreshPath === "proposal retry") {
         rerender(<InvestigationReview intakeId="intake-1" interpretationRevisionId="revision-2" />);
@@ -345,10 +345,10 @@ describe("investigation declaration adoption", () => {
         expect(stopping).toHaveValue("Keep my reviewed edits across each current review.");
       }
 
-      expect(screen.getByRole("checkbox", { name: /fixture-only declaration/ })).not.toBeChecked();
-      await user.click(screen.getByRole("checkbox", { name: /fixture-only declaration/ }));
-      await user.click(screen.getByRole("button", { name: "Adopt and save declaration" }));
-      await screen.findByRole("heading", { name: "Declaration saved" });
+      expect(screen.getByRole("checkbox", { name: /example-only rule/ })).not.toBeChecked();
+      await user.click(screen.getByRole("checkbox", { name: /example-only rule/ }));
+      await user.click(screen.getByRole("button", { name: "Adopt and save rule" }));
+      await screen.findByRole("heading", { name: "Rule saved" });
       expect(screen.queryByText(/unsaved edits remain in place/)).toBeNull();
       const body = mocks.save.mock.calls.at(-1)?.[1];
       expect(body.expected_interpretation_revision_id).toBe(refreshPath === "clarifications on the same intake" ? "revision-3" : "revision-2");
@@ -374,6 +374,24 @@ const SOURCE = {
   window: { start: "2026-09-25T10:00:00Z", end: "2026-09-25T12:00:00Z" }, history_provider: "ENVIO_HYPERSYNC",
   page_requests_recorded: 2, transport: null,
 };
+// The approved actual source from the live catalog: a twenty-minute MOE/WMON window on the five-minute grid.
+const MOE_SOURCE = {
+  source_id: "actual-moe-wmon-fwd20m/1", title: "MOE/WMON actual forward history (20 minutes, 2026-10-22)",
+  evidence_class: "PROVIDER_ACTUAL", content_label: "PROVIDER_HISTORY", profile_version: "p07.market_dataset_profile/1",
+  profile_sha256: "e".repeat(64),
+  market: { network: "MONAD", pool_address: "0x97199b34564911936bc850ac45ede785892b5aad",
+    base_asset: "0xd8e004acba279417c04c0633cb5a21ceca207777", quote_asset: "0x3bd359c1119da7da1d913d1c4d2b7c461115433a" },
+  window: { start: "2026-10-22T07:35:00Z", end: "2026-10-22T07:55:00Z" }, history_provider: "ENVIO_HYPERSYNC",
+  page_requests_recorded: 4, transport: null, available: true,
+  release: { release_id: "actual-moe-history-nansen-20261022/1", sha256: "d".repeat(64), kind: "ACTUAL",
+    evidence_class: "PROVIDER_ACTUAL", transport_kind: "OWNED_STDLIB",
+    history: { source_id: "actual-moe-wmon-fwd20m/1", source_version: "1",
+      limits: { provider_requests: 13, compute_seconds: 600, max_pages: 4, max_rows: 2000, max_bytes: 4194304,
+        deadline_seconds: 600 },
+      client_bounds: {}, endpoint_hosts: {}, time_basis: {}, required_coverage: "" } },
+};
+const MOE_UNKNOWNS = ["Recorded responses come from the named providers under the approved release "
+  + "actual-moe-history-nansen-20261022/1. Costs are not modelled; the window is short."];
 const DECLARATION = {
   declaration: { record_id: "hist-decl-1", schema_version: "p08.investigation-declaration/3", created_at: "2026-10-12T00:00:00Z",
     content: { schema_version: "p08.investigation-declaration/3", original_request: "test request",
@@ -398,7 +416,7 @@ describe("recorded-history investigation", () => {
   async function openSaved(user: ReturnType<typeof userEvent.setup>) {
     mocks.historyList.mockResolvedValue({ declarations: [DECLARATION] });
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
-    await user.click(await screen.findByRole("button", { name: "Open this declaration" }));
+    await user.click(await screen.findByRole("button", { name: "Open this rule" }));
     await screen.findByTestId("history-declaration");
   }
 
@@ -408,17 +426,18 @@ describe("recorded-history investigation", () => {
     mocks.historySave.mockResolvedValue(DECLARATION);
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
     await screen.findByRole("option", { name: SOURCE.title }); // the catalog loads after the label renders
-    await user.selectOptions(screen.getByLabelText("Recorded source"), SOURCE.source_id);
-    const save = screen.getByRole("button", { name: "Save history declaration" });
+    await user.selectOptions(screen.getByLabelText("Saved source"), SOURCE.source_id);
+    expect(screen.getByText(/RECORDED_RESPONSE · SYNTHETIC_FIXTURE/).closest("details")).not.toBeNull();
+    const save = screen.getByRole("button", { name: "Save history rule" });
     expect(save).toBeDisabled();
     await user.type(screen.getByLabelText("Your hypothesis in your own words"), "Rises continue");
-    await user.type(screen.getByLabelText("Rule 1 lookback buckets"), "2");
+    await user.type(screen.getByLabelText("Rule 1 lookback periods"), "2");
     await user.type(screen.getByLabelText("Rule 1 return threshold"), "0.004");
     await user.type(screen.getByLabelText("Rule 1 volume threshold"), "100");
     expect(save).toBeDisabled();
     await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
     await user.click(save);
-    await screen.findByText(/Declaration saved before any collection/);
+    await screen.findByText(/Rule and limits saved before any collection/);
     const body = mocks.historySave.mock.calls[0][1];
     expect(body.configuration.source).toEqual({ source_id: SOURCE.source_id, profile_sha256: SOURCE.profile_sha256,
       evidence_class: "RECORDED_RESPONSE" });
@@ -428,6 +447,67 @@ describe("recorded-history investigation", () => {
         { op: "constant", value: "0.004", unit: "DIMENSIONLESS" }] } });
     expect(body.configuration.permitted_access).toEqual(["RECORDED_RESPONSE"]);
     expect(Object.values(body.field_origins).every((item) => (item as { adoption: string }).adoption === "ADOPTED")).toBe(true);
+  });
+
+  it.each([
+    ["collection_outcome_unknown", "The collection outcome is unknown after a stop. It is not collected again; its full reservation stays counted."],
+    ["declared_source_changed", "The declared source changed, so nothing was collected. The full reservation is released."],
+    ["history_source_unavailable", "The declared source is not available, so nothing was collected. The full reservation is released."],
+    ["operating_release_endpoint_mismatch", "This job is unavailable. The reason is in Details."],
+  ])("states the true outcome of an unavailable job: %s", async (reason, sentence) => {
+    const user = userEvent.setup();
+    mocks.jobs.mockResolvedValue({ jobs: [job("UNAVAILABLE", { terminal_reason: reason })] });
+    await openSaved(user);
+    const card = await screen.findByTestId("history-job");
+    expect(within(card).getByRole("status")).toHaveTextContent(sentence);
+    expect(card).toHaveTextContent(reason);
+  });
+
+  async function declareMoe(user: ReturnType<typeof userEvent.setup>, lookback: string,
+                            direction = "OUTPERFORM") {
+    mocks.historySources.mockResolvedValue({ label: "ACTUAL", mode: "recorded", sources: [MOE_SOURCE] });
+    mocks.historySave.mockResolvedValue(DECLARATION);
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await screen.findByRole("option", { name: MOE_SOURCE.title });
+    await user.selectOptions(screen.getByLabelText("Saved source"), MOE_SOURCE.source_id);
+    await user.type(screen.getByLabelText("Your hypothesis in your own words"), "Rises continue");
+    await user.selectOptions(screen.getByLabelText("What you will check"), direction);
+    await user.type(screen.getByLabelText("Rule 1 lookback periods"), lookback);
+    await user.type(screen.getByLabelText("Rule 1 return threshold"), "0.01");
+    await user.type(screen.getByLabelText("Rule 1 volume threshold"), "1");
+  }
+
+  it.each([1, 3])("refuses predictive MOE lookback %i before save and names DESCRIPTIVE", async (lookback) => {
+    const user = userEvent.setup();
+    await declareMoe(user, String(lookback));
+    expect(await screen.findByTestId("history-window-refusal")).toHaveTextContent("No lookback fits");
+    expect(screen.getByTestId("history-window-refusal")).toHaveTextContent("describe only");
+    await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
+    expect(screen.getByRole("button", { name: "Save history rule" })).toBeDisabled();
+    expect(mocks.historySave).not.toHaveBeenCalled();
+  });
+
+  it("refuses more descriptive lookback than the MOE window can support", async () => {
+    const user = userEvent.setup();
+    await declareMoe(user, "2", "DESCRIPTIVE");
+    expect(await screen.findByTestId("history-window-refusal")).toHaveTextContent("at most 1 period");
+    await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
+    expect(screen.getByRole("button", { name: "Save history rule" })).toBeDisabled();
+    expect(mocks.historySave).not.toHaveBeenCalled();
+  });
+
+  it("saves a descriptive MOE declaration with a schedule inside the readable partition", async () => {
+    const user = userEvent.setup();
+    await declareMoe(user, "1", "DESCRIPTIVE");
+    await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
+    await user.click(screen.getByRole("button", { name: "Save history rule" }));
+    await screen.findByText(/Rule and limits saved before any collection/);
+    const body = mocks.historySave.mock.calls[0][1];
+    expect(body.configuration.partitions).toEqual([{ partition_id: "described", role: "DESCRIPTIVE",
+      start: "2026-10-22T07:35:00Z", end: "2026-10-22T07:55:00Z" }]);
+    expect(body.configuration.schedule).toEqual({ version: "p09.decision-clock/1",
+      start: "2026-10-22T07:45:00Z", end: "2026-10-22T07:50:00Z", interval_seconds: 300 });
+    expect(body.edge_spec.unknowns).toEqual(MOE_UNKNOWNS);
   });
 
   it("shows a waiting job and cancels it", async () => {
@@ -480,9 +560,9 @@ describe("recorded-history investigation", () => {
         dataset_verdict: { overall: "QUALIFIED" }, rule_map_sha256: "r", hypothesis: "h", notice: "Descriptive only." } };
     mocks.jobs.mockResolvedValue({ jobs: [job("REPORTED", { report })] });
     await openSaved(user);
-    expect(await screen.findByText("Saved report: CONTRADICTORY")).toBeInTheDocument();
-    expect(screen.getByText(/significance NOT_CLAIMED/)).toBeInTheDocument();
-    expect(screen.getByText(/Not read: HOLDOUT partition/)).toBeInTheDocument();
+    expect(await screen.findByText("Saved report: Contradictory")).toBeInTheDocument();
+    expect(screen.getByText(/significance not claimed/)).toBeInTheDocument();
+    expect(screen.getByText(/Not read: Holdout period/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry as a new job" })).toBeNull();
   });
 });
@@ -500,21 +580,21 @@ describe("native recorded source (SOURCE-LOCAL)", () => {
     mocks.historySave.mockResolvedValue(DECLARATION);
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
     await screen.findByRole("option", { name: NATIVE.title });
-    await user.selectOptions(screen.getByLabelText("Recorded source"), NATIVE.source_id);
+    await user.selectOptions(screen.getByLabelText("Saved source"), NATIVE.source_id);
     expect(screen.getByTestId("history-source-transport")).toHaveTextContent("It needs 27 provider requests: 2 pages, one chain read and 24 receipts.");
-    expect(screen.getByTestId("history-source-transport")).toHaveTextContent("against recorded responses only");
+    expect(document.body).toHaveTextContent("against recorded responses only");
     // Switching to a bundle source and back resets the reservation to each source's own need (Review A N2).
-    await user.selectOptions(screen.getByLabelText("Recorded source"), SOURCE.source_id);
+    await user.selectOptions(screen.getByLabelText("Saved source"), SOURCE.source_id);
     expect(screen.getByLabelText("Bound provider_requests")).toHaveValue("2");
-    await user.selectOptions(screen.getByLabelText("Recorded source"), NATIVE.source_id);
+    await user.selectOptions(screen.getByLabelText("Saved source"), NATIVE.source_id);
     expect(screen.getByLabelText("Bound provider_requests")).toHaveValue("27");
     await user.type(screen.getByLabelText("Your hypothesis in your own words"), "Rises continue");
-    await user.type(screen.getByLabelText("Rule 1 lookback buckets"), "2");
+    await user.type(screen.getByLabelText("Rule 1 lookback periods"), "2");
     await user.type(screen.getByLabelText("Rule 1 return threshold"), "0.004");
     await user.type(screen.getByLabelText("Rule 1 volume threshold"), "100");
     await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
-    await user.click(screen.getByRole("button", { name: "Save history declaration" }));
-    await screen.findByText(/Declaration saved before any collection/);
+    await user.click(screen.getByRole("button", { name: "Save history rule" }));
+    await screen.findByText(/Rule and limits saved before any collection/);
     const body = mocks.historySave.mock.calls[0][1];
     expect(body.configuration.source.evidence_class).toBe("RECORDED_NATIVE_RESPONSE");
     expect(body.configuration.permitted_access).toEqual(["RECORDED_NATIVE_RESPONSE"]);
@@ -534,12 +614,13 @@ describe("native recorded source (SOURCE-LOCAL)", () => {
     mocks.jobs.mockResolvedValue({ jobs: [job("REPORTED", { dataset })] });
     mocks.historyList.mockResolvedValue({ declarations: [DECLARATION] });
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
-    await user.click(await screen.findByRole("button", { name: "Open this declaration" }));
+    await user.click(await screen.findByRole("button", { name: "Open this rule" }));
     const facts = await screen.findByTestId("history-transport");
-    expect(facts).toHaveTextContent("chain id checked against recorded responses: 143 (MONAD)");
-    expect(facts).toHaveTextContent("receipt corroboration SAMPLED, 8 of 24 checked, 0 mismatches");
-    expect(facts).toHaveTextContent("Recorded declarations, not read by the application: decimals, pool tokens.");
-    expect(screen.getByText(/LIMITED, UNAVAILABLE_LIMITED_DATA/)).toBeInTheDocument();
+    expect(document.body).toHaveTextContent("chain id checked against recorded responses: 143 (MONAD)");
+    expect(document.body).toHaveTextContent("SAMPLED, 8 of 24 checked, 0 mismatches");
+    expect(document.body).toHaveTextContent("Recorded declarations");
+    expect(document.body).toHaveTextContent("decimals, pool tokens");
+    expect(document.body).toHaveTextContent("UNAVAILABLE_LIMITED_DATA");
   });
 
   it("labels facts from the P07 HTTP clients as authored responses and disables an unavailable source", async () => {
@@ -562,9 +643,11 @@ describe("native recorded source (SOURCE-LOCAL)", () => {
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
     const option = await screen.findByRole("option", { name: /HTTP clients \(not available on this server\)/ });
     expect(option).toBeDisabled();
-    await user.click(await screen.findByRole("button", { name: "Open this declaration" }));
+    await user.click(await screen.findByRole("button", { name: "Open this rule" }));
     const facts = await screen.findByTestId("history-transport");
-    expect(facts).toHaveTextContent("Authored HTTP responses served on this server through the accepted P07 HTTP clients (HttpEnvioQueryClient, HttpQuickNodeRpcClient), no network. Not provider data:");
+    expect(facts).toHaveTextContent("not provider data");
+    expect(document.body).toHaveTextContent("authored responses served on this server");
+    expect(document.body).toHaveTextContent("HttpEnvioQueryClient");
     expect(facts).not.toHaveTextContent("Native recording, replayed locally");
   });
 });
@@ -578,17 +661,17 @@ describe("recorded-history declaration lost reply", () => {
       .mockResolvedValueOnce(DECLARATION);
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
     await screen.findByRole("option", { name: SOURCE.title }); // the catalog loads after the label renders
-    await user.selectOptions(screen.getByLabelText("Recorded source"), SOURCE.source_id);
+    await user.selectOptions(screen.getByLabelText("Saved source"), SOURCE.source_id);
     await user.type(screen.getByLabelText("Your hypothesis in your own words"), "Rises continue");
-    await user.type(screen.getByLabelText("Rule 1 lookback buckets"), "2");
+    await user.type(screen.getByLabelText("Rule 1 lookback periods"), "2");
     await user.type(screen.getByLabelText("Rule 1 return threshold"), "0.004");
     await user.type(screen.getByLabelText("Rule 1 volume threshold"), "100");
     await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
-    await user.click(screen.getByRole("button", { name: "Save history declaration" }));
+    await user.click(screen.getByRole("button", { name: "Save history rule" }));
     expect(await screen.findByText(/could not confirm the save/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save history declaration" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Retry the same declaration" }));
-    await screen.findByText(/Declaration saved before any collection/);
+    expect(screen.getByRole("button", { name: "Save history rule" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Retry the same rule" }));
+    await screen.findByText(/Rule and limits saved before any collection/);
     expect(mocks.historySave.mock.calls[1][1]).toEqual(mocks.historySave.mock.calls[0][1]);
   });
 
@@ -599,18 +682,44 @@ describe("recorded-history declaration lost reply", () => {
       .mockResolvedValueOnce(DECLARATION);
     const first = render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
     await screen.findByRole("option", { name: SOURCE.title });
-    await user.selectOptions(screen.getByLabelText("Recorded source"), SOURCE.source_id);
+    await user.selectOptions(screen.getByLabelText("Saved source"), SOURCE.source_id);
     await user.type(screen.getByLabelText("Your hypothesis in your own words"), "Rises continue");
-    await user.type(screen.getByLabelText("Rule 1 lookback buckets"), "2");
+    await user.type(screen.getByLabelText("Rule 1 lookback periods"), "2");
     await user.type(screen.getByLabelText("Rule 1 return threshold"), "0.004");
     await user.type(screen.getByLabelText("Rule 1 volume threshold"), "100");
     await user.click(screen.getByRole("checkbox", { name: /before any data is read/ }));
-    await user.click(screen.getByRole("button", { name: "Save history declaration" }));
+    await user.click(screen.getByRole("button", { name: "Save history rule" }));
     await screen.findByText(/could not confirm the save/);
     first.unmount();
     render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
-    await user.click(await screen.findByRole("button", { name: "Retry the same declaration" }));
-    await screen.findByText(/Declaration saved before any collection/);
+    await user.click(await screen.findByRole("button", { name: "Retry the same rule" }));
+    await screen.findByText(/Rule and limits saved before any collection/);
     expect(mocks.historySave.mock.calls[1][1]).toEqual(mocks.historySave.mock.calls[0][1]);
+  });
+});
+
+describe("an approved ACTUAL release on screen", () => {
+  it("offers only the real source and names it, with no test scenario in the picker", async () => {
+    mocks.historySources.mockResolvedValue({ label: "ACTUAL", mode: "recorded", sources: [MOE_SOURCE] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    await screen.findByRole("option", { name: MOE_SOURCE.title });
+    const select = screen.getByLabelText("Saved source");
+    const options = Array.from(select.querySelectorAll("option")).map((item) => item.textContent);
+    expect(options).toEqual(["Choose a saved source", MOE_SOURCE.title]);
+    expect(await screen.findByText(/This server uses the approved real-MOE setup/)).toBeInTheDocument();
+    expect(screen.queryByText(/Every other source is a SYNTHETIC recording/)).not.toBeInTheDocument();
+  });
+
+  it("names the real-MOE study and market instead of presenting the example pool as the study market", async () => {
+    mocks.historySources.mockResolvedValue({ label: "ACTUAL", mode: "recorded", sources: [MOE_SOURCE] });
+    render(<InvestigationReview intakeId="intake-1" interpretationRevisionId={null} />);
+    const note = await screen.findByRole("note");
+    await waitFor(() => expect(document.body).toHaveTextContent("actual-moe-history-nansen-20261022/1"));
+    expect(note).toHaveTextContent("The real-MOE study on this page is the history investigation below.");
+    expect(document.body).toHaveTextContent("0x97199b34564911936bc850ac45ede785892b5aad");
+    expect(note).toHaveTextContent("not the real-MOE study's market");
+    expect(screen.getByText("Market")).toBeInTheDocument();
+    expect(screen.queryByText(/Synthetic fixture market/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/unqualified synthetic fixture/)).not.toBeInTheDocument();
   });
 });

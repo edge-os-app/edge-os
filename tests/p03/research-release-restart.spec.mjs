@@ -7,7 +7,7 @@
  */
 import { test, expect } from "@playwright/test";
 import { tokens } from "./fixture-auth.mjs";
-import { apiGet, historySection, noSidewaysScroll, open, openDeclaration, saved, shot } from "./research-flow.mjs";
+import { apiGet, detailValue, historySection, noSidewaysScroll, open, openDeclaration, saved, shot, transportDetails } from "./research-flow.mjs";
 
 const ownerToken = (project) => process.env[`P03_TOKEN_RELEASE_${project.replace("-", "_").toUpperCase()}`];
 const boundPhase = process.env.P03_BOUND_PHASE === "1";
@@ -24,7 +24,8 @@ test("the restarted release services reopen the exact report, dataset and replay
   const job = section.getByTestId("history-job").first();
   await expect(job).toHaveAttribute("data-state", "REPORTED");
   await expect(job.getByTestId("history-report-id")).toHaveText(run.reportId);
-  await expect(job.getByTestId("history-transport")).toContainText("Stand-in responses, not provider data; 27 request hashes kept");
+  await expect(job.getByTestId("history-transport")).toContainText("The source returned example responses, not provider data.");
+  await expect(detailValue(transportDetails(job), "Request hashes kept")).toHaveText("27");
   const report = await apiGet(page, token, `/v1/research/investigation-reports/${run.reportId}`);
   expect(report.body.stored_hash_matches_content).toBe(true);
   expect(report.body.content.evidence_class).toBe("RELEASE_STAND_IN_RESPONSE");
@@ -74,7 +75,8 @@ test("the restarted bound release reopens its saved payload binding, replay line
   await expect(job).toHaveAttribute("data-state", "REPORTED");
   const binding = job.getByTestId("history-payload-binding");
   await expect(binding).toHaveAttribute("data-status", "PASS");
-  await expect(binding).toContainText(`Payload binding: PASS against the SYNTHETIC handoff ${run.handoffSha256}; report ${run.binding.report_sha256}.`);
+  await expect(binding).toContainText("The saved data matches the recorded delivery. It does not prove where the data came from.");
+  await expect(job.locator("details").filter({ hasText: "Payload binding:" })).toContainText(`Payload binding: PASS against the SYNTHETIC handoff ${run.handoffSha256}; report ${run.binding.report_sha256}.`);
   const dataset = (await apiGet(page, token, `/v1/research/history-datasets/${run.datasetId}`)).body;
   expect(dataset.hashes_verified).toEqual({ content_sha256: true, raw_evidence_sha256: true });
   expect(dataset.payload_binding).toEqual(run.binding);

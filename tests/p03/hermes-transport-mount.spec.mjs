@@ -30,11 +30,11 @@ const outcome = (page) => page.getByTestId("outcome");
 const rows = (page) => page.getByTestId("attempts").locator("li[data-attempt]");
 async function openAttempts(page) {
   const details = page.getByTestId("attempts");
-  if (!(await details.evaluate((el) => el.open))) await details.locator("summary").click();
+  if (!(await details.evaluate((el) => el.open))) await details.locator(":scope > summary").click();
 }
 async function submit(page, token, text) {
   await injectAuth(page, token);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
   await page.getByLabel("Your words", { exact: true }).fill(text);
   await page.getByRole("radio", { name: /Specific rule or thesis/ }).check();
@@ -78,7 +78,7 @@ test("a request runs the mounted Hermes once, shows its attempt and usage, is sa
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toBeVisible();
   await expect(page.getByTestId("revision")).toContainText("Read back from the database");
-  const revision = (await page.getByTestId("revision-id").innerText()).trim();
+  const revision = (await page.getByTestId("revision-id").textContent()).trim();
   await openAttempts(page);
   await expect(rows(page)).toHaveCount(1); // adopting and saving started no other attempt
   await expect(rows(page).first()).toHaveAttribute("data-attempt", attempt);
@@ -90,7 +90,7 @@ test("a request runs the mounted Hermes once, shows its attempt and usage, is sa
   const writes = [];
   reopened.on("request", (request) => { if (request.method() !== "GET") writes.push(`${request.method()} ${request.url()}`); });
   await injectAuth(reopened, tokens.a);
-  await reopened.goto(`/#/research/${id}`);
+  await reopened.goto(`/app#/research/${id}`);
   await expect(reopened.getByTestId("revision-id")).toHaveText(revision, { timeout: 30_000 });
   await openAttempts(reopened);
   await expect(rows(reopened)).toHaveCount(1);
@@ -102,7 +102,7 @@ test("a request runs the mounted Hermes once, shows its attempt and usage, is sa
   const other = await browser.newContext({ viewport: page.viewportSize() ?? undefined });
   const foreign = await other.newPage();
   await injectAuth(foreign, tokens.b);
-  await foreign.goto(`/#/research/${id}`);
+  await foreign.goto(`/app#/research/${id}`);
   await expect(foreign.getByText("This request was not found.")).toBeVisible();
   await expect(foreign.getByTestId("attempts")).toHaveCount(0);
   await other.close();
@@ -116,8 +116,8 @@ test("a lost provider reply is an unknown outcome, is not accepted and is not re
   script({ case: "concrete-thesis", transport_fault: "lost_reply" });
   const id = await submit(page, tokens.a, THESIS);
 
-  await expect(page.getByRole("heading", { name: "We do not know if the interpreter finished" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Try the interpreter again" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "We do not know if the research agent finished" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Try the research agent again" })).toHaveCount(0);
   await openAttempts(page);
   await expect(rows(page)).toHaveCount(1);
   await expect(rows(page).first()).toContainText("Outcome unknown");

@@ -8,6 +8,7 @@ import AxeBuilder from "@axe-core/playwright";
 import fs from "node:fs";
 import path from "node:path";
 import { injectAuth, tokens } from "./fixture-auth.mjs";
+import { detailValue, permissionRow } from "./research-flow.mjs";
 
 const evidence = process.env.P03_EVIDENCE_DIR ?? ".evidence";
 const outDir = path.join(evidence, "quality");
@@ -17,21 +18,21 @@ const MIN = 44;
 
 async function open(page, token) {
   await injectAuth(page, token);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
 }
 
 async function saveSpotReplay(page) {
   const replay = page.getByTestId("spot-replay");
-  await replay.getByRole("button", { name: "Add entry dependency" }).click();
-  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  await replay.getByRole("button", { name: "Add an input for entry" }).click();
+  await replay.getByRole("button", { name: "Add an input for entry" }).click();
   await replay.getByLabel("entry dependency offset 2").fill("-3");
-  await replay.getByRole("button", { name: "Add exit dependency" }).click();
-  await replay.getByRole("button", { name: "Add exit dependency" }).click();
+  await replay.getByRole("button", { name: "Add an input for exit" }).click();
+  await replay.getByRole("button", { name: "Add an input for exit" }).click();
   await replay.getByLabel("exit dependency offset 2").fill("-1");
-  await replay.getByLabel("I reviewed the entry dependency set").check();
-  await replay.getByLabel("I reviewed the exit dependency set").check();
-  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await replay.getByLabel("I reviewed the entry inputs").check();
+  await replay.getByLabel("I reviewed the exit inputs").check();
+  await replay.getByRole("button", { name: "Replay on example data" }).click();
   await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
   return replay;
 }
@@ -184,7 +185,7 @@ test("modal conversation keeps focus after an answer and after adoption", async 
   // adopt the remaining settings inside the dialog
   await dialog.getByRole("button", { name: "Adopt these settings" }).focus();
   await page.keyboard.press("Enter");
-  await expect(dialog.getByText("No question is open for this revision.")).toBeVisible();
+  await expect(dialog.getByText("No question is open for this version.")).toBeVisible();
   await expect.poll(inDialog, { message: "focus must stay in the dialog after adoption" }).toBe(true);
   for (let i = 0; i < 8; i++) { await page.keyboard.press("Tab"); expect(await inDialog()).toBe(true); }
   for (let i = 0; i < 8; i++) { await page.keyboard.press("Shift+Tab"); expect(await inDialog()).toBe(true); }
@@ -582,7 +583,7 @@ test("a lost reply on the first submit says the request may be saved and refresh
 test("signing out and back in keeps focus on the sign-in heading and returns to Research", async ({ page }) => {
   await open(page, tokens.a);
   await page.getByRole("button", { name: "Sign out" }).click();
-  const heading = page.getByRole("heading", { name: "Sign in to start" });
+  const heading = page.getByRole("heading", { name: "Sign in to Edge OS" });
   await expect(heading).toBeVisible();
   await expect(heading).toBeFocused();
   const signIn = page.getByRole("button", { name: "Sign in" });
@@ -614,7 +615,7 @@ test("a rejected session explains itself, keeps the draft for the same person an
     ? route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ code: "auth_invalid", findings: [{ detail: "The credential is not valid for this application." }] }) })
     : route.continue());
   await page.getByRole("button", { name: "Prepare request" }).click();
-  await expect(page.getByRole("heading", { name: "Sign in to start" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in to Edge OS" })).toBeVisible();
   const message = page.locator('[role="alert"]', { hasText: "session was rejected" });
   await expect(message).toBeVisible();
   await expect(message).toBeFocused(); // no silent drop to the page body
@@ -630,7 +631,7 @@ test("signing out removes the draft, and another person never sees it", async ({
   await page.getByLabel("Your words", { exact: true }).fill("Owner A private unsent hunch.");
   await page.getByRole("button", { name: /Add “no leverage”/ }).click();
   await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page.getByRole("heading", { name: "Sign in to start" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in to Edge OS" })).toBeVisible();
   const kept = await page.evaluate(() => Object.keys(window.sessionStorage).filter((k) => k.startsWith("edge-os:")));
   expect(kept, "nothing this app stored may survive a sign-out").toEqual([]);
   await page.evaluate((token) => { window.__EDGE_OS_TEST_AUTH__.getAccessToken = async () => token; }, tokens.b); // the next person signs in
@@ -649,12 +650,12 @@ test("a failed load of a saved request keeps the retry button, focus and a visib
   await expect(page.locator("button.card-open").first()).toBeVisible();
   await page.route("**/v1/research/requests/*", (route) => route.request().method() === "GET" ? route.fulfill(unavailable) : route.continue());
   await page.locator("button.card-open").first().click();
-  await expect(alerts(page)).toContainText("could not be loaded");
+  await expect(alerts(page)).toContainText("A required service is unavailable. Retry later.");
   const retry = page.getByRole("button", { name: "Try again" });
   await retry.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("button", { name: "Try again", exact: true })).toBeVisible(); // the second attempt has finished (and failed)
-  await expect(alerts(page)).toContainText("could not be loaded"); // a second failure is still shown, never a silent state
+  await expect(alerts(page)).toContainText("A required service is unavailable. Retry later."); // a second failure is still shown, never a silent state
   await expect(page.getByRole("button", { name: "Try again", exact: true })).toBeFocused();
   await page.unroute("**/v1/research/requests/*");
   await page.keyboard.press("Enter");
@@ -732,12 +733,14 @@ test("P19 expanded permission histories keep every saved value inside the viewpo
   for (const [state, approvalId] of states) {
     const saved = rows.find((row) => row.content.approval_id === approvalId);
     expect(saved, `${state} permission source is present in the saved account view`).toBeTruthy();
-    const stateLabel = saved.content.status === "CHANGE_APPLIED" ? "ACTIVE AT APPLICATION" : saved.content.activation_state;
-    const summary = agent.getByText(`${approvalId} · ${saved.content.status} · ${stateLabel}`, { exact: true });
+    const stateLabel = saved.content.status === "CHANGE_APPLIED" ? "active when applied" : saved.content.activation_state.replaceAll("_", " ").toLowerCase();
+    const item = permissionRow(agent, approvalId);
+    const summary = item.locator("summary");
     await expect(summary).toHaveCount(1);
+    await expect(summary).toHaveText(`${saved.content.status.replaceAll("_", " ").toLowerCase()} · ${stateLabel}`);
+    await expect(detailValue(item, "Saved status codes")).toContainText(saved.content.status);
     const details = summary.locator("xpath=..");
     await expect(details).toHaveCount(1);
-    const item = details.locator("xpath=..");
     await summary.focus();
     await expect(summary).toBeFocused();
     const summaryBox = await summary.boundingBox();
@@ -755,15 +758,15 @@ test("P19 expanded permission histories keep every saved value inside the viewpo
     measurements.push(measurement);
     fs.writeFileSync(path.join(outDir, `p19-permission-expanded-${info.project.name}.json`), JSON.stringify(measurements, null, 2));
     await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-p19-expanded-${state.toLowerCase()}.png`), fullPage: true });
-    await expect(item.locator("dd").nth(0)).toContainText(saved.owner_id);
-    await expect(item.locator("dd").nth(0)).toContainText(saved.content.agent_id);
-    await expect(item.locator("dd").nth(0)).toContainText(saved.content.wallet_id);
-    await expect(item.locator("dd").nth(0)).toContainText(saved.content.network_id);
-    await expect(item.locator("dd").nth(1)).toContainText(saved.content.strategy_revision);
-    await expect(item.locator("dd").nth(1)).toContainText(saved.content.mandate_id);
-    await expect(item.locator("dd").nth(3)).toContainText(saved.content.signer_binding);
-    await expect(item.locator("dd").nth(3)).toContainText(saved.content.policy_binding);
-    await expect(item.locator("dd").nth(7)).toHaveText(saved.content.terms_hash);
+    await expect(item.locator("dd").nth(2)).toContainText(saved.owner_id);
+    await expect(item.locator("dd").nth(2)).toContainText(saved.content.agent_id);
+    await expect(item.locator("dd").nth(2)).toContainText(saved.content.wallet_id);
+    await expect(item.locator("dd").nth(2)).toContainText(saved.content.network_id);
+    await expect(item.locator("dd").nth(3)).toContainText(saved.content.strategy_revision);
+    await expect(item.locator("dd").nth(3)).toContainText(saved.content.mandate_id);
+    await expect(item.locator("dd").nth(5)).toContainText(saved.content.signer_binding);
+    await expect(item.locator("dd").nth(5)).toContainText(saved.content.policy_binding);
+    await expect(item.locator("dd").nth(9)).toHaveText(saved.content.terms_hash);
     const termsText = item.locator("dl");
     for (const value of [saved.content.terms.expiry, ...saved.content.terms.supported_assets,
       ...saved.content.terms.supported_routes, ...saved.content.terms.actions, ...saved.content.terms.stop_effects,
@@ -792,7 +795,7 @@ test("P17 wallet setup surface keeps controls usable and meets accessibility che
   await expect(page.getByTestId("revision")).toBeVisible();
   const setup = page.getByRole("region", { name: "Agent wallet setup" });
   await expect(setup).toBeVisible();
-  await expect(setup).toContainText("authored local fixture");
+  await expect(setup).toContainText("This build uses example wallet data.");
 
   const axeTags = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
   const overflow = () => page.evaluate(() => ({ innerWidth: window.innerWidth, documentWidth: document.documentElement.scrollWidth }));
@@ -811,13 +814,13 @@ test("P17 wallet setup surface keeps controls usable and meets accessibility che
   // Confirmed empty state: no setup saved yet.
   await inspect("empty");
 
-  // Saved, not dispatched: the setup records before any creation.
+  // Saved, not started: the setup records before any creation.
   const confirmedAgent = `q17-wallet-${info.project.name}`;
   await setup.getByLabel("Agent ID").fill(confirmedAgent);
   await setup.getByRole("button", { name: "Check saved setup" }).click();
   await expect(setup.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
   await setup.getByRole("button", { name: "Save wallet setup" }).click();
-  await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Saved, not dispatched");
+  await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Saved, not started");
   await inspect("saved");
   await setup.getByRole("button", { name: "Create wallet now" }).focus();
   await expect(setup.getByRole("button", { name: "Create wallet now" })).toBeFocused();
@@ -835,14 +838,14 @@ test("P17 wallet setup surface keeps controls usable and meets accessibility che
   await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Outcome unknown");
   await inspect("unknown");
 
-  // Cancelled before dispatch.
+  // Cancelled before start.
   const cancelAgent = `q17-cancel-${info.project.name}`;
   await setup.getByLabel("Agent ID").fill(cancelAgent);
   await setup.getByRole("button", { name: "Check saved setup" }).click();
   await expect(setup.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
   await setup.getByRole("button", { name: "Save wallet setup" }).click();
   await setup.getByRole("button", { name: "Cancel before creating" }).click();
-  await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Cancelled before dispatch");
+  await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Cancelled before start");
   await inspect("cancelled");
 
   fs.writeFileSync(path.join(outDir, `p17-accessibility-${info.project.name}.json`), JSON.stringify(states, null, 2));

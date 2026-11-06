@@ -103,7 +103,8 @@ def second_process_checks(env: dict[str, str], evidence: Path, signer: Any, proc
     changed = {**env, "EDGE_OS_WRITE_RATE_PER_MINUTE": "2",
                "EDGE_OS_USAGE_GLOBAL_COMPUTE_SECONDS": str(int(env.get("EDGE_OS_USAGE_GLOBAL_COMPUTE_SECONDS",
                                                                        "10000000")) + 1)}
-    api = harness.start_api(changed, port, evidence / "logs", name="api-runtime-limits")
+    api = harness.start_api(changed, port, evidence / "logs", name="api-runtime-limits",
+                            factory="harness:create_app_fixture", app_dir=harness.P03_DIR)
     processes.append(api)
     try:
         harness.wait_http(f"{url}/healthz")

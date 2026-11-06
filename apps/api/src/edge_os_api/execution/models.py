@@ -64,6 +64,8 @@ class DecisionRow(ExecutionBase):
     decision_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     operation: Mapped[str | None] = mapped_column(Text)
+    decision_basis: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'RULE'"))
+    owner_trigger_attempt: Mapped[int | None] = mapped_column(BigInteger)
     reasons: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     rule_results: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
     inputs_hash: Mapped[str] = mapped_column(Text, nullable=False)
@@ -73,8 +75,13 @@ class DecisionRow(ExecutionBase):
     __table_args__ = (
         UniqueConstraint("owner_id", "decision_id", name="uq_execution_decisions_owner_decision"),
         CheckConstraint("status IN ('SIGNAL','NO_SIGNAL','INELIGIBLE')", name="ck_execution_decisions_status"),
+        CheckConstraint("decision_basis IN ('RULE','OWNER_TRIGGER')", name="ck_execution_decisions_basis"),
+        CheckConstraint("(decision_basis = 'OWNER_TRIGGER') = (owner_trigger_attempt IS NOT NULL)",
+                        name="ck_execution_decisions_attempt"),
         Index("ix_execution_decisions_owner_wallet", "owner_id", "wallet_id", "network_id"),
         Index("ix_execution_decisions_owner_revision", "owner_id", "revision_id"),
+        Index("uq_execution_decisions_owner_trigger", "owner_id", "agent_id", "wallet_id", "network_id",
+              "owner_trigger_attempt", unique=True, postgresql_where=text("decision_basis = 'OWNER_TRIGGER'")),
     )
 
 

@@ -1,8 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Details } from "./Details";
 import { api, ApiError } from "../lib/api";
+import { useOptionalAuth } from "../lib/auth";
 import type { WalletSetupRecord } from "../lib/types";
+import { claimStorageWorks, forgetClaim, retainClaim, retainedClaim, walletProviderMode, walletSetupApi, type CreatedWallet, type WalletProviderMode } from "../lib/wallet-setup-api";
+import { CANCELLATION_INTENT, plain } from "../lib/labels";
 
 export interface WalletSetupRevision { strategyId: string; strategyRevisionId: string }
 
@@ -23,13 +27,17 @@ const REASON_COPY: Record<string, string> = {
   CONFLICTING_WALLET: "That wallet already belongs to another agent of this owner. It was not bound.",
 };
 
+const STORAGE_BLOCKED = "This browser cannot keep the new wallet's details, so no wallet was created. Allow site storage and try again.";
+const SIGN_IN_FIRST = "Sign in with Privy before creating this agent's wallet. Nothing was created.";
+const UNSUPPORTED_WALLET = "The wallet that came back is not an Ethereum wallet. Nothing was bound and no second wallet is created.";
+
 function stateTitle(record: WalletSetupRecord): string {
   switch (record.state) {
-    case "REQUESTED": return "Saved, not dispatched";
-    case "PENDING": return "Creation pending";
+    case "REQUESTED": return "Saved, not started";
+    case "PENDING": return "Creating";
     case "UNKNOWN": return "Outcome unknown";
     case "CONFIRMED": return "Wallet confirmed";
-    case "FAILED": return record.reason === "CANCELLED_BEFORE_DISPATCH" ? "Cancelled before dispatch" : "Setup failed";
+    case "FAILED": return record.reason === "CANCELLED_BEFORE_DISPATCH" ? "Cancelled before start" : "Setup failed";
   }
 }
 
@@ -57,14 +65,17 @@ export function WalletSetup({ agentId, revision, onClose }: {
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [error, setError] = useState("");
-  const [mode, setMode] = useState<"fixture" | "unavailable" | null>(null);
+  const [mode, setMode] = useState<WalletProviderMode | null>(null);
+  const auth = useOptionalAuth();
+  const createEmbeddedWallet = auth?.createEmbeddedWallet ?? null;
+  const ownerId = auth?.userId ?? null;
   // One sequence for every operation that changes what the panel shows. A late response, from an older
   // read or an older mutation, can never overwrite the current selection.
   const viewSeq = useRef(0);
 
   useEffect(() => {
     let current = true;
-    api.walletProvider().then((info) => { if (current) setMode(info.provider); })
+    api.walletProvider().then((info) => { if (current) setMode(walletProviderMode(info.provider)); })
       .catch(() => { if (current) setMode("unavailable"); }); // fail safe: never claim a fixture that is not confirmed
     return () => { current = false; };
   }, []);
@@ -148,7 +159,8 @@ export function WalletSetup({ agentId, revision, onClose }: {
     }
   }, [busy, uncertain]);
 
-  const canPrepare = Boolean(revision) && /^[A-Za-z0-9_-]{1,64}$/.test(agent) && mode === "fixture";
+  const actualCreation = mode === "privy_lookup" && createEmbeddedWallet !== null;
+  const canPrepare = Boolean(revision) && /^[A-Za-z0-9_-]{1,64}$/.test(agent) && (mode === "fixture" || actualCreation);
   const prepare = () => {
     if (!revision || !canPrepare) return;
     void run(agent, () => api.prepareWalletSetup(agent, {
@@ -157,7 +169,31 @@ export function WalletSetup({ agentId, revision, onClose }: {
     }), "The wallet setup was not saved.");
   };
 
-  const creationAvailable = mode === "fixture";
+  const creationAvailable = mode === "fixture" || actualCreation;
+
+  // Send the retained returned wallet for the server's independent lookup. It never creates. Without a claim kept
+  // in this browser for this owner, the server resumes from the claim it retained itself.
+  const completeRetained = async (agentId: string, returned?: CreatedWallet): Promise<WalletSetupRecord> => {
+    const claim = returned ?? retainedClaim(ownerId, agentId);
+    if (!claim) return api.resumeWalletSetup(agentId);
+    if (claim.chainType !== "ethereum") { setError(UNSUPPORTED_WALLET); return api.walletSetup(agentId); }
+    const saved = await walletSetupApi.completeBrowserCreation(agentId, { wallet_id: claim.id, address: claim.address, wallet_index: claim.walletIndex, chain_type: claim.chainType });
+    if (saved.state === "CONFIRMED" && ownerId) forgetClaim(ownerId, agentId);
+    return saved;
+  };
+
+  // The server commits the intent first and permits one SDK call only. A refused or repeated begin creates nothing.
+  const createActual = async (agentId: string): Promise<WalletSetupRecord> => {
+    if (retainedClaim(ownerId, agentId)) return completeRetained(agentId);
+    // Checked before begin: a missing owner or a blocked store must never use up the only permission.
+    if (!ownerId || !createEmbeddedWallet) { setError(SIGN_IN_FIRST); return api.walletSetup(agentId); }
+    if (!claimStorageWorks()) { setError(STORAGE_BLOCKED); return api.walletSetup(agentId); }
+    const begun = await walletSetupApi.beginBrowserCreation(agentId);
+    if (!begun.create_permitted) return begun;
+    const wallet = await createEmbeddedWallet();
+    retainClaim(ownerId, agentId, wallet); // a copy for refresh; completion uses the wallet held in memory
+    return completeRetained(agentId, wallet);
+  };
   const blocked = busy || uncertain;
 
   return (
@@ -167,8 +203,10 @@ export function WalletSetup({ agentId, revision, onClose }: {
         {onClose ? <button className="btn btn-ghost" style={{ minHeight: 44 }} type="button" onClick={onClose}>Close setup</button> : null}
       </div>
       {mode === null && <p className="muted">Checking the wallet provider…</p>}
-      {mode === "fixture" && <p className="muted">This build uses an authored local fixture. It is not a real wallet or provider. Creation adds no funding, signer, mandate, position or trading action.</p>}
-      {mode === "unavailable" && <p className="muted">Real wallet creation is unavailable in this build. No provider is configured, so no wallet can be created. It adds no funding, signer, mandate, position or trading action.</p>}
+      {mode === "fixture" && <p className="muted">This build uses example wallet data. It is not a real wallet or provider. Creation adds no funding, signer, permission, position or trading action.</p>}
+      {actualCreation && <p className="muted">This creates one additional wallet in your own Privy account for this agent. It adds no funding, signer, permission, position or trading action.</p>}
+      {mode === "privy_lookup" && !createEmbeddedWallet && <p className="muted">Sign in with Privy to create this agent's wallet.</p>}
+      {mode === "unavailable" && <p className="muted">Real wallet creation is unavailable in this build. No provider is configured, so no wallet can be created. It adds no funding, signer, permission, position or trading action.</p>}
 
       {!agentId && (
         <div>
@@ -203,14 +241,14 @@ export function WalletSetup({ agentId, revision, onClose }: {
         <div>
           <h3>No wallet setup saved</h3>
           {!revision ? (
-            <p className="muted">Choose an exact saved strategy revision in Research to set up a wallet for this agent.</p>
+            <p className="muted">Choose an exact saved version in Research to set up a wallet for this agent.</p>
           ) : !creationAvailable ? (
-            <p className="muted">A durable setup can be saved here only when wallet creation is available. This build uses no provider, so creation is refused.</p>
+            <p className="muted">A saved setup can be recorded here only when wallet creation is available. This build uses no provider, so creation is refused.</p>
           ) : (
             <div>
-              <p>The setup binds this exact saved revision. It never uses a first or latest wallet.</p>
+              <p>The setup binds this exact saved version. It never uses a first or latest wallet.</p>
               <dl className="kv">
-                <dt>Strategy revision</dt><dd className="mono">{revision.strategyRevisionId}</dd>
+                <dt>Saved version</dt><dd className="mono">{revision.strategyRevisionId}</dd>
               </dl>
               <label htmlFor="wallet-setup-network">Requested network</label>
               <select id="wallet-setup-network" className="input" style={{ minHeight: 44 }} value={network}
@@ -236,10 +274,11 @@ export function WalletSetup({ agentId, revision, onClose }: {
             <dt>Agent</dt><dd>{record.agent_id}</dd>
             <dt>Requested network</dt><dd>{record.network_id}</dd>
             <dt>Strategy revision</dt><dd className="mono">{record.strategy_revision_id}</dd>
-            <dt>Cancellation intent</dt><dd>{record.cancellation_intent}</dd>
+            <dt>Cancellation</dt><dd>{plain(CANCELLATION_INTENT, record.cancellation_intent, "Unknown")}</dd>
             <dt>Wallet</dt><dd className="mono" data-testid="wallet-setup-wallet">{record.wallet_id ?? "Not bound"}</dd>
             <dt>Updated</dt><dd><time dateTime={record.updated_at}>{record.updated_at}</time></dd>
           </dl>
+          <Details summary="Details"><p className="mono">State {record.state} · cancellation {record.cancellation_intent}{record.reason ? ` · reason ${record.reason}` : ""}</p></Details>
           <p>Requested network is an application binding. It does not prove provider-chain enforcement.</p>
           {record.reason ? <p className="muted">{REASON_COPY[record.reason] ?? record.reason}</p> : null}
 
@@ -247,7 +286,7 @@ export function WalletSetup({ agentId, revision, onClose }: {
             <>
               <div className="btn-row">
                 <button className="btn btn-primary" style={{ minHeight: 44 }} type="button" disabled={blocked}
-                  onClick={() => void run(record.agent_id, () => api.dispatchWalletSetup(record.agent_id), "The wallet request was not sent.")}>
+                  onClick={() => void run(record.agent_id, () => actualCreation ? createActual(record.agent_id) : api.dispatchWalletSetup(record.agent_id), "The wallet request was not sent.")}>
                   {busy ? "Creating…" : "Create wallet now"}
                 </button>
                 <span className="muted">One creation attempt. A repeat never creates a second wallet.</span>
@@ -262,7 +301,7 @@ export function WalletSetup({ agentId, revision, onClose }: {
           {(record.state === "PENDING" || record.state === "UNKNOWN") && (
             <div className="btn-row">
               <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={blocked}
-                onClick={() => void run(record.agent_id, () => api.resumeWalletSetup(record.agent_id), "The saved setup could not be checked.")}>
+                onClick={() => void run(record.agent_id, () => actualCreation ? completeRetained(record.agent_id) : api.resumeWalletSetup(record.agent_id), "The saved setup could not be checked.")}>
                 {busy ? "Checking…" : "Check the saved setup again"}
               </button>
               <span className="muted">This only reads the saved setup. It never replays a creation.</span>
@@ -280,7 +319,7 @@ export function WalletSetup({ agentId, revision, onClose }: {
           {record.state === "CONFIRMED" && record.cancellation_intent === "NONE" && (
             <button className="btn btn-secondary" style={{ minHeight: 44 }} type="button" disabled={blocked}
               onClick={() => void run(record.agent_id, () => api.cancelWalletSetup(record.agent_id), "The cancellation was not saved.")}>
-              Record cancellation intent
+              Record a cancellation
             </button>
           )}
         </div>

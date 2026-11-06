@@ -1,0 +1,314 @@
+{
+ "accounting": {
+  "admitted": {
+   "hypersync": 25,
+   "quicknode": 17
+  },
+  "ceilings": {
+   "hypersync": 49,
+   "quicknode": 17
+  },
+  "reply_bytes": 3080121,
+  "resolved": 42,
+  "unknown_liability": 0
+ },
+ "anchor": {
+  "handoff_sha256": "b309d2ffacb0455bf99798535398886281076347c30b7ca9b20a78ef622eab88",
+  "provenance_sha256": "54b731bfe4a1b343d5df0b63b0646a0bc033992e39c2b54f60171428802a4578",
+  "receipts_sha256": "26f4336543285945a93cfa59aa614fb2d9ba58111182bca6d55d3e3bf40e35c3",
+  "schema_version": "edge-os.forward-history-binding/2"
+ },
+ "attempt_id": "moe-wmon-fwd2h-actual-20261022a",
+ "buckets": [
+  {
+   "end_utc": "2026-10-22T21:45:00Z",
+   "index": 0,
+   "payload_sha256": "174a1729d0d20df6f2cc0bab1c30f6e4ff716b2b2e469c42ec8b4bb73060eb1b",
+   "received_at_utc": "2026-10-22T21:45:32Z",
+   "record_count": 4,
+   "reply_body_sha256": "015893f136c2d2f847592f09561ae5b31e1fe1aba8075b2077aa6514fa78ed5b",
+   "start_utc": "2026-10-22T21:40:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T21:50:00Z",
+   "index": 1,
+   "payload_sha256": "25bbd5838ab845b3d92f7ac276902c1f472e0e246edbe22d6330d3ec6084ffb8",
+   "received_at_utc": "2026-10-22T21:50:32Z",
+   "record_count": 4,
+   "reply_body_sha256": "ffdc85713ef1b1e8df9c2d91fc8a3a0dd1f031b7e29f6030234e33f637f2d2b1",
+   "start_utc": "2026-10-22T21:45:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T21:55:00Z",
+   "index": 2,
+   "payload_sha256": "b55ea0ac6ec8e359ffb9826bb7bb660b06e73c6563b409dbca81294d16437423",
+   "received_at_utc": "2026-10-22T21:55:32Z",
+   "record_count": 4,
+   "reply_body_sha256": "8ca9b6d5b6f23d7a8d88cf43243dcef28ad3ac5616a8c7055c409ad64c17c2ff",
+   "start_utc": "2026-10-22T21:50:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T22:00:00Z",
+   "index": 3,
+   "payload_sha256": "97276938b9e58b94c555074898d69659d3db08afe035f9e15e68ffdbe21a68a6",
+   "received_at_utc": "2026-10-22T22:00:32Z",
+   "record_count": 4,
+   "reply_body_sha256": "86a226a6a8ea9a0a94e22462a40b2737b5f40e6b64deb849a0bbbd14f07235ee",
+   "start_utc": "2026-10-22T21:55:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T22:05:00Z",
+   "index": 4,
+   "payload_sha256": "8fd9dcfadc7f8cb335a092dc68e5a02133b0df3930cb0a09530adbc39a105a41",
+   "received_at_utc": "2026-10-22T22:05:32Z",
+   "record_count": 4,
+   "reply_body_sha256": "16ed2920795a46ae9c148ef49be56705f3408f77a9fc1af8c3c5991996c6d9de",
+   "start_utc": "2026-10-22T22:00:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T22:10:00Z",
+   "index": 5,
+   "payload_sha256": "46d57b24fb242174f5a559c3289f36383d865e32ad032af8ba6e1bbd54e3d25c",
+   "received_at_utc": "2026-10-22T22:10:32Z",
+   "record_count": 2,
+   "reply_body_sha256": "e9300df1e04ea5c058b59a6a3dcc067ce79435c0215c1f2ebde103b5219e664f",
+   "start_utc": "2026-10-22T22:05:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T22:15:00Z",
+   "index": 6,
+   "payload_sha256": "dc1a6bdb6e71ed1157e62ebe04dbb61ef313a9b0985bed407f57a711c8473128",
+   "received_at_utc": "2026-10-22T22:15:32Z",
+   "record_count": 4,
+   "reply_body_sha256": "c53e865435be002195fb8ef58f5c1f945a518f1bae744b749d7fa5d3c7758b57",
+   "start_utc": "2026-10-22T22:10:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T22:20:00Z",
+   "index": 7,
+   "payload_sha256": "80623b3c818d9e039ba0daa3c9601f2f60896e5f6881780ae2eb141065a5bd49",
+   "received_at_utc": "2026-10-22T22:20:32Z",
+   "record_count": 2,
+   "reply_body_sha256": "d290c5b0fc61285704d7d0e9a8296f54eccf4ba87ade2ca35a0106bd5eaf0fff",
+   "start_utc": "2026-10-22T22:15:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T22:25:00Z",
+   "index": 8,
+   "payload_sha256": "f97790f41af9780d0f9cde03ce58dae38ea10e49e9fffd26ebcea48a4acd29c8",
+   "received_at_utc": "2026-10-22T22:25:32Z",
+   "record_count": 4,
+   "reply_body_sha256": "18e40d4f1105821e3ea1b5469b1f51942a55eb4db038e354b497c69cf1395f68",
+   "start_utc": "2026-10-22T22:20:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T22:30:00Z",
+   "index": 9,
+   "payload_sha256": "10165e3d89870df2a207eeeac90845fbff813603fa5e596bbbc5f37ebe421768",
+   "received_at_utc": "2026-10-22T22:30:32Z",
+   "record_count": 4,
+   "reply_body_sha256": "054801a7af68e716ddcd9fd3dd49383cdd31f225155d7f1afd9496530b6eee53",
+   "start_utc": "2026-10-22T22:25:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T22:35:00Z",
+   "index": 10,
+   "payload_sha256": "76a0f91f1baa42b16513b9e002a1a3cd6d53117b8614dbdee1d9e96e74509c8a",
+   "received_at_utc": "2026-10-22T22:35:32Z",
+   "record_count": 4,
+   "reply_body_sha256": "d63c252e7665898dfcef329120c3380410c86d729750a35adafda417d184ce7b",
+   "start_utc": "2026-10-22T22:30:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T22:40:00Z",
+   "index": 11,
+   "payload_sha256": "aaa7f8dda764c2b9dc58e235f1937538e09be4f9f46e7219bbec4fe3d3e4e581",
+   "received_at_utc": "2026-10-22T22:40:32Z",
+   "record_count": 2,
+   "reply_body_sha256": "f7da1ba02d2e9e8f3e77f8874f5a784e3ca167a5ed3284c71da01810854b70cb",
+   "start_utc": "2026-10-22T22:35:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T22:45:00Z",
+   "index": 12,
+   "payload_sha256": "e5a3b594b7c4b493ae2bda60a8b2ec792be08e0008d314de8830691f5753f5f2",
+   "received_at_utc": "2026-10-22T22:45:32Z",
+   "record_count": 4,
+   "reply_body_sha256": "d34f3b322c88a1cbacc3e573e3b726fe10db6d0cf5320215adcff1c1df16730a",
+   "start_utc": "2026-10-22T22:40:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T22:50:00Z",
+   "index": 13,
+   "payload_sha256": "ade18e58bf74f9c8b6b52703f14782e535f3dba91ae88828c059d3d0f46fc192",
+   "received_at_utc": "2026-10-22T22:50:32Z",
+   "record_count": 4,
+   "reply_body_sha256": "f6dc211dc6c67b77b5a215cd2cabdb26d133add8617b36e6149f30f1041881ba",
+   "start_utc": "2026-10-22T22:45:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T22:55:00Z",
+   "index": 14,
+   "payload_sha256": "47fbfb2ceb17cac1a27226162c93e69edf928a8292b0e87949b07216bb93bb04",
+   "received_at_utc": "2026-10-22T22:55:32Z",
+   "record_count": 2,
+   "reply_body_sha256": "5d8e7a51a63c6c40e8411f93c8beaed88667ec2cab6a3882f1bbbbbcde6b5911",
+   "start_utc": "2026-10-22T22:50:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T23:00:00Z",
+   "index": 15,
+   "payload_sha256": "06adb2dba36a1ef5f8f4e8f4a5e03d21bbb7d5e931bef561621e09bb842c7e9d",
+   "received_at_utc": "2026-10-22T23:00:32Z",
+   "record_count": 4,
+   "reply_body_sha256": "c6f219a840a0e5c280d856fef4ded2f1910fbe85320217e3d61a9887813a2590",
+   "start_utc": "2026-10-22T22:55:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T23:05:00Z",
+   "index": 16,
+   "payload_sha256": "5beefb992a9242853fd93b43c17a2451c5dc4bfdf10b8742e03345d2de51d4a7",
+   "received_at_utc": "2026-10-22T23:05:32Z",
+   "record_count": 4,
+   "reply_body_sha256": "389cec0baf765d5cbc2c973a43f653f2aaab220e630565f5062bf182e259b3fc",
+   "start_utc": "2026-10-22T23:00:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T23:10:00Z",
+   "index": 17,
+   "payload_sha256": "c231153fb66f0f504ba955ba7eb17a6963b431d1fa9d134b22f8f5e5763cf76c",
+   "received_at_utc": "2026-10-22T23:10:32Z",
+   "record_count": 10,
+   "reply_body_sha256": "feaad3815859619f7220c5be772fbeaf70e17a095a97ebc09e6257c5c0663c8f",
+   "start_utc": "2026-10-22T23:05:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T23:15:00Z",
+   "index": 18,
+   "payload_sha256": "f9f7ba3aec99c898d4508b4cc5c82dff05660f0e5873711f9e7fbd3d75cb9d88",
+   "received_at_utc": "2026-10-22T23:15:37Z",
+   "record_count": 4,
+   "reply_body_sha256": "a34bfbb3064a39b129432473bbd2f26a7f063213623b95ce58b2f6fbfd7e2d92",
+   "start_utc": "2026-10-22T23:10:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T23:20:00Z",
+   "index": 19,
+   "payload_sha256": "162b948f88b39e5e78243f3fbd8f75f6b43c63ecc20303bf0c383f418ed572fc",
+   "received_at_utc": "2026-10-22T23:20:32Z",
+   "record_count": 4,
+   "reply_body_sha256": "8a40ec9d59c50ba4ebde617bf3e1405aa4ce4a6ba253df8b69d3055b15d60fb2",
+   "start_utc": "2026-10-22T23:15:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T23:25:00Z",
+   "index": 20,
+   "payload_sha256": "0546a54ce74734517915ee61efea1f8fe2ca939668e7aa0cfabbfef41bacbc39",
+   "received_at_utc": "2026-10-22T23:25:33Z",
+   "record_count": 2,
+   "reply_body_sha256": "dce40b9ce3ba87e0147f255299c2451d65628d58cd3caeb2db3d141b4804cd3c",
+   "start_utc": "2026-10-22T23:20:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T23:30:00Z",
+   "index": 21,
+   "payload_sha256": "6bde7e4f50c19237a8163df3c6a59bf45d47cf508fc7185eccc1e62696a34132",
+   "received_at_utc": "2026-10-22T23:30:34Z",
+   "record_count": 4,
+   "reply_body_sha256": "f2c0c3b4e4a092578d1c7e6e73d8f77bd1fcb5cde8640f056d1c4c7b744c3935",
+   "start_utc": "2026-10-22T23:25:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T23:35:00Z",
+   "index": 22,
+   "payload_sha256": "9f1a7bc2e071896a3954cb5bb6a9f0dd3f66c76f571fd27d20658ec9d4d5785a",
+   "received_at_utc": "2026-10-22T23:35:33Z",
+   "record_count": 2,
+   "reply_body_sha256": "7f3d5e492dffc8ef2a335b9dd27fd7f10ac02a8a8c88447c272a907ccc577900",
+   "start_utc": "2026-10-22T23:30:00Z",
+   "status": "DELIVERED"
+  },
+  {
+   "end_utc": "2026-10-22T23:40:00Z",
+   "index": 23,
+   "payload_sha256": "33b9900dd429e27d0a1fef86bb9e92d5811ae82f0c5d0abaaea9b6906be509bc",
+   "received_at_utc": "2026-10-22T23:40:33Z",
+   "record_count": 4,
+   "reply_body_sha256": "bfda61127859c1c2eafd5f95ea29badea8d1d4d54279d8675f225bf7f46544ee",
+   "start_utc": "2026-10-22T23:35:00Z",
+   "status": "DELIVERED"
+  }
+ ],
+ "claim_limit": "Frozen manifest for the code-owned anchor. Not provider authentication or source rights.",
+ "delivery_records": {
+  "2026-10-22T21:40:00Z": "2026-10-22T21:45:32Z",
+  "2026-10-22T21:45:00Z": "2026-10-22T21:50:32Z",
+  "2026-10-22T21:50:00Z": "2026-10-22T21:55:32Z",
+  "2026-10-22T21:55:00Z": "2026-10-22T22:00:32Z",
+  "2026-10-22T22:00:00Z": "2026-10-22T22:05:32Z",
+  "2026-10-22T22:05:00Z": "2026-10-22T22:10:32Z",
+  "2026-10-22T22:10:00Z": "2026-10-22T22:15:32Z",
+  "2026-10-22T22:15:00Z": "2026-10-22T22:20:32Z",
+  "2026-10-22T22:20:00Z": "2026-10-22T22:25:32Z",
+  "2026-10-22T22:25:00Z": "2026-10-22T22:30:32Z",
+  "2026-10-22T22:30:00Z": "2026-10-22T22:35:32Z",
+  "2026-10-22T22:35:00Z": "2026-10-22T22:40:32Z",
+  "2026-10-22T22:40:00Z": "2026-10-22T22:45:32Z",
+  "2026-10-22T22:45:00Z": "2026-10-22T22:50:32Z",
+  "2026-10-22T22:50:00Z": "2026-10-22T22:55:32Z",
+  "2026-10-22T22:55:00Z": "2026-10-22T23:00:32Z",
+  "2026-10-22T23:00:00Z": "2026-10-22T23:05:32Z",
+  "2026-10-22T23:05:00Z": "2026-10-22T23:10:32Z",
+  "2026-10-22T23:10:00Z": "2026-10-22T23:15:37Z",
+  "2026-10-22T23:15:00Z": "2026-10-22T23:20:32Z",
+  "2026-10-22T23:20:00Z": "2026-10-22T23:25:33Z",
+  "2026-10-22T23:25:00Z": "2026-10-22T23:30:34Z",
+  "2026-10-22T23:30:00Z": "2026-10-22T23:35:33Z",
+  "2026-10-22T23:35:00Z": "2026-10-22T23:40:33Z"
+ },
+ "market": {
+  "base": "0xd8e004acba279417c04c0633cb5a21ceca207777",
+  "pool": "0x97199b34564911936bc850ac45ede785892b5aad",
+  "quote": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+  "token0": "0x3bd359c1119da7da1d913d1c4d2b7c461115433a",
+  "token1": "0xd8e004acba279417c04c0633cb5a21ceca207777"
+ },
+ "network": {
+  "chain_id": 143
+ },
+ "recorder_code_sha256": "d312a52948d50b4ed92b398beffacc8d64741117f4310134ddcacea8165f2072",
+ "scan": {
+  "from_block": 115721086,
+  "to_block_exclusive": 115744931
+ },
+ "schema_version": "edge-os.moe-history-anchor/1",
+ "source_id": "actual-moe-wmon-fwd2h/1",
+ "status": "COMPLETED",
+ "window": {
+  "bucket_seconds": 300,
+  "end_utc": "2026-10-22T23:40:00Z",
+  "start_utc": "2026-10-22T21:40:00Z"
+ }
+}

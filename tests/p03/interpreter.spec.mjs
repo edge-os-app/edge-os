@@ -46,7 +46,7 @@ async function shot(page, project, name) {
 
 async function open(page, token) {
   await injectAuth(page, token);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
 }
 
@@ -92,7 +92,7 @@ const attemptRows = (page) => page.getByTestId("attempts").locator("li[data-atte
 /** The list opens by itself for a failure. In other states it is closed, and a click would close an open one. */
 async function openAttempts(page) {
   const details = page.getByTestId("attempts");
-  if (!(await details.evaluate((el) => el.open))) await details.locator("summary").click();
+  if (!(await details.evaluate((el) => el.open))) await details.locator(":scope > summary").click();
 }
 
 test.describe.configure({ mode: "serial" });
@@ -109,7 +109,7 @@ test("a provider failure is a system failure, keeps its attempt, and retries onl
   const id = await submit(page, THESIS);
 
   await expect(outcome(page)).toHaveAttribute("data-outcome", "INVALID_INPUT");
-  await expect(page.getByRole("heading", { name: "The interpreter did not answer" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "The research agent did not answer" })).toBeVisible();
   await expect(page.getByText("This is not a verdict on your idea.")).toBeVisible();
   await expect(page.getByText("Could not be interpreted")).toHaveCount(0);
   await expect(page.getByTestId("failure-detail")).not.toContainText("sk-LEAK");
@@ -121,10 +121,10 @@ test("a provider failure is a system failure, keeps its attempt, and retries onl
   await shot(page, project, "failure");
   await inspect(page, project, "failure");
 
-  const retry = page.getByRole("button", { name: "Try the interpreter again" });
+  const retry = page.getByRole("button", { name: "Try the research agent again" });
   await retry.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("status").filter({ hasText: /Trying the interpreter again/ })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: /Trying the research agent again/ })).toBeVisible();
   await expect(outcome(page)).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION", { timeout: 90_000 });
   await expect(page.locator("#state-title")).toBeFocused();
   await openAttempts(page);
@@ -140,17 +140,17 @@ test("unusable model output and an unknown outcome are named apart, and an unkno
   await open(page, tokens.a);
   script({ case: "multiple-objects" });
   const malformed = await submit(page, THESIS);
-  await expect(page.getByRole("heading", { name: "The interpreter's answer was not usable" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "The research agent's answer was not usable" })).toBeVisible();
   await expect(attemptRows(page).first()).toContainText("Rejected: multiple objects");
-  await expect(page.getByRole("button", { name: "Try the interpreter again" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Try the research agent again" })).toBeVisible();
   await inspect(page, project, "malformed");
 
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
   script({ case: "provider-hang" });
   const unknown = await submit(page, THESIS);
-  await expect(page.getByRole("heading", { name: "We do not know if the interpreter finished" })).toBeVisible({ timeout: 90_000 });
-  await expect(page.getByRole("button", { name: "Try the interpreter again" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "We do not know if the research agent finished" })).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByRole("button", { name: "Try the research agent again" })).toHaveCount(0);
   await expect(page.getByTestId("retry-blocked")).toContainText("Nothing was replayed.");
   await expect(attemptRows(page).first()).toContainText(/outcome unknown/);
   await shot(page, project, "unknown");
@@ -182,7 +182,7 @@ test("a rough hunch is answered in the user's own words by keyboard, then adopte
   await expect(entry).toContainText("Enter when price rose more than 2%");
   await openAttempts(page);
   await expect(attemptRows(page)).toHaveCount(2);
-  await expect(attemptRows(page).nth(1)).toContainText("Reading your reply");
+  await expect(attemptRows(page).nth(1)).toContainText("Read your reply");
   await shot(page, project, "words-read");
 
   await asked(page).getByRole("button", { name: "Adopt these settings" }).click();
@@ -207,7 +207,7 @@ test("a reply with two values is a conflict, and a reply that would change a cho
   await shot(page, project, "conflict");
   await inspect(page, project, "conflict");
 
-  await page.goto("/");
+  await page.goto("/app");
   script({ case: "rough-hunch" }, { follow_up: "reply-overwrites-chosen-entry" });
   const rejectedId = await submit(page, HUNCH, /Rough hunch/);
   await asked(page).getByRole("radio", { name: /Price up more than 1% over the last 15 minutes/ }).check();
@@ -232,15 +232,15 @@ test("an unsupported capability is not a failure, and another owner cannot open 
   const id = await submit(page, LAUNCH_AGE, /Rough hunch/);
   await expect(outcome(page)).toHaveAttribute("data-outcome", "UNSUPPORTED");
   await expect(page.getByText(/token_launch_age_filter/)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Try the interpreter again" })).toHaveCount(0);
-  await expect(page.getByText("The interpreter did not answer")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Try the research agent again" })).toHaveCount(0);
+  await expect(page.getByText("The research agent did not answer")).toHaveCount(0);
   await shot(page, project, "unsupported");
   await inspect(page, project, "unsupported");
 
   const other = await browser.newContext({ viewport: page.viewportSize() ?? undefined });
   const foreign = await other.newPage();
   await injectAuth(foreign, tokens.b);
-  await foreign.goto(`/#/research/${id}`);
+  await foreign.goto(`/app#/research/${id}`);
   await expect(foreign.getByText("This request was not found.")).toBeVisible();
   await expect(foreign.getByTestId("attempts")).toHaveCount(0);
   await other.close();
@@ -270,11 +270,11 @@ test("a request whose outcome was not saved is worded from its attempt, offers t
 
   // A settled provider failure: the retry button must be there.
   await withoutOutcome(page, id, () => {});
-  await page.goto(`/#/research/${id}`);
+  await page.goto(`/app#/research/${id}`);
   await page.reload();
   await expect(outcome(page)).toHaveAttribute("data-reading", "FAILED");
-  await expect(page.getByRole("heading", { name: "The interpreter did not answer" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Try the interpreter again" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "The research agent did not answer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Try the research agent again" })).toBeVisible();
   await expect(page.getByText("Could not be interpreted")).toHaveCount(0);
   await shot(page, project, "no-outcome-failed");
   await inspect(page, project, "no-outcome-failed");
@@ -289,7 +289,7 @@ test("a request whose outcome was not saved is worded from its attempt, offers t
   await page.reload();
   await expect(outcome(page)).toHaveAttribute("data-reading", "RUNNING_OR_STOPPED");
   await expect(page.getByTestId("reading-state")).toContainText("may still be running, or it may have stopped");
-  await expect(page.getByRole("button", { name: "Try the interpreter again" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Try the research agent again" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Check the saved request again" })).toBeVisible();
   await shot(page, project, "no-outcome-running");
   await inspect(page, project, "no-outcome-running");
@@ -314,7 +314,7 @@ test("a request whose outcome was not saved is worded from its attempt, offers t
   await page.reload();
   await expect(outcome(page)).toHaveAttribute("data-reading", "UNCERTAIN");
   await expect(page.getByTestId("retry-blocked")).toContainText("Nothing was replayed.");
-  await expect(page.getByRole("button", { name: "Try the interpreter again" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Try the research agent again" })).toHaveCount(0);
   await inspect(page, project, "no-outcome-uncertain");
 
   // Looking again reads the saved record and starts nothing.
@@ -335,7 +335,7 @@ test("after a retry, the page describes the latest attempt and not an older fail
   await open(page, tokens.a);
   script({ case: "provider-503" });
   const id = await submit(page, THESIS);
-  await expect(page.getByRole("heading", { name: "The interpreter did not answer" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "The research agent did not answer" })).toBeVisible();
 
   // Attempt 1 failed and has its outcome. Attempt 2 timed out and its outcome was not saved: only the GET response is changed.
   await page.route(new RegExp(`/v1/research/requests/${id}$`), async (route) => {
@@ -351,8 +351,8 @@ test("after a retry, the page describes the latest attempt and not an older fail
   });
   await page.reload();
   await expect(outcome(page)).toHaveAttribute("data-reading", "UNCERTAIN");
-  await expect(page.getByRole("heading", { name: "We do not know if the interpreter finished" })).toBeVisible();
-  await expect(page.getByText("The interpreter did not answer")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "We do not know if the research agent finished" })).toBeVisible();
+  await expect(page.getByText("The research agent did not answer")).toHaveCount(0);
   await expect(page.getByText(/did not return a result/)).toHaveCount(0);
   await expect(page.getByTestId("retry-blocked")).toContainText("Nothing was replayed.");
   await shot(page, project, "latest-attempt-unknown");
@@ -365,10 +365,10 @@ test("the saved-requests list tags each request from its latest attempt and neve
   await open(page, tokens.a);
   script({ case: "provider-503" });
   const id = await submit(page, THESIS);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
   const card = page.locator(`#req-${id}`);
-  await expect(card).toContainText("Interpreter did not answer");
+  await expect(card).toContainText("Research agent did not answer");
   await expect(card).not.toContainText("Could not be interpreted");
 
   // Attempt 1 failed and has its outcome. Attempt 2 was accepted and its save did not finish: only the list response is changed.
@@ -397,7 +397,7 @@ test("a no-thesis question with no declared market offers the labelled synthetic
   const id = await submit(page, "I have no view. Look at this market over the last two days and tell me whether anything is worth testing.", /No thesis/);
   await expect(outcome(page)).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
   await expect(asked(page).getByText(/Review the suggested settings/)).toBeVisible();
-  await expect(asked(page).getByText("Synthetic fixture market (not a real pool)")).toBeVisible();
+  await expect(asked(page).getByText("Example market (not a real pool)")).toBeVisible();
   await expect(asked(page).getByRole("textbox")).toHaveCount(0); // no question the user must answer in words
   await expect(page.getByText(/before the investigation can be reviewed/)).toBeVisible();
   await inspect(page, project, "no-thesis-undeclared-market");

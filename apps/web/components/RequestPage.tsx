@@ -7,6 +7,7 @@ import { FAILURE_COPY, RETRY_BLOCKED, firstReading, replyCopy, sourceQuote, syst
 import type { Bundle, Finding, Strategy } from "../lib/types";
 import type { ConversationContext } from "./Conversation";
 import { InterpretationAttempts } from "./InterpretationAttempts";
+import { Details } from "./Details";
 import { AnswerMessage, QuestionForm } from "./QuestionForm";
 import { RulesReview } from "./RulesReview";
 import { InvestigationReview } from "./InvestigationReview";
@@ -52,7 +53,12 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
   useEffect(() => {
     let cancelled = false;
     api.get(id).then((b) => { if (!cancelled) { setBundle(b); setOpened("loaded"); setError(""); } })
-      .catch((e: unknown) => { if (!cancelled) setError(e instanceof ApiError && e.status === 404 ? "This request was not found." : "The request could not be loaded."); })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        if (e instanceof ApiError && e.status === 404) { setError("This request was not found."); return; }
+        const unavailable = e instanceof ApiError && [0, 502, 503, 504].includes(e.status);
+        setError(unavailable ? e.detail : "The request could not be loaded.");
+      })
       .finally(() => { if (!cancelled) setRetrying(false); });
     return () => { cancelled = true; };
   }, [id, attempt]);
@@ -70,7 +76,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
     const surface = origin?.closest<HTMLElement>("[data-focus-surface]") ?? null;
     const surfaceName = surface?.dataset.focusSurface ?? "main";
     setBusy(true); setAnswerMessage(undefined);
-    setWork("answer_text" in body ? "The interpreter is reading your words. This can take a few seconds." : "Saving your answer.");
+    setWork("answer_text" in body ? "The research agent is reading your words. This can take a few seconds." : "Saving your answer.");
     try {
       setBundle(await api.answer(id, { previous_revision_id: bundle.head.interpretation_revision_id, question_id: questionId, ...body }));
       focusSurface.current = surface; // the answered form is gone; the layout effect lands focus on the new state
@@ -103,7 +109,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
   const retryInterpretation = async () => {
     if (busy || !bundle || !bundle.head.retry.allowed) return;
     setBusy(true); setError(""); setNotice(""); setAnswerMessage(undefined);
-    setWork(bundle.attempts.length === 0 ? "Starting the interpreter. This can take a few seconds." : "Trying the interpreter again. This can take a few seconds.");
+    setWork(bundle.attempts.length === 0 ? "Starting the research agent. This can take a few seconds." : "Trying the research agent again. This can take a few seconds.");
     focusSurface.current = null; // the retry button may disappear; focus lands on the new state
     try {
       setBundle(await api.retryInterpretation(id, bundle.head.retry.retry_of));
@@ -165,10 +171,10 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
       focusSurface.current = undefined;
       if (e instanceof ApiError && e.code === "parent_revision_conflict") {
         focusSurface.current = null;
-        if (await reload()) setNotice("A revision of this rule was already saved. The saved record is shown.");
+        if (await reload()) setNotice("A version of this rule was already saved. The saved record is shown.");
       } else if (e instanceof ApiError && e.status === 0) {
-        setError("We could not confirm the save. Press save again. It reuses the same key, so it cannot create a second revision.");
-      } else setError(e instanceof ApiError ? e.detail : "The revision was not saved.");
+        setError("We could not confirm the save. Press save again. It reuses the same key, so it cannot create a second version.");
+      } else setError(e instanceof ApiError ? e.detail : "The version was not saved.");
     } finally { setBusy(false); }
   };
 
@@ -248,21 +254,21 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
         <p className="visually-hidden" role="status">{pending ? pending.title : failure ? FAILURE_COPY[failure].title : copy.title}</p>
         <h2 id="state-title" ref={stateHeading} tabIndex={-1}><span className={`tag tag-${pending ? "neutral" : copy.tone}`} style={{ marginRight: 8 }}>{pending ? pending.title : failure ? FAILURE_COPY[failure].title : copy.title}</span></h2>
         {outcome === "NEEDS_CLARIFICATION" && <p>We need {head.questions.length === 1 ? "one answer" : "a few answers"} before the {intake.requested_job === "CREATE_STRATEGY" ? "rules" : "investigation"} can be reviewed. Nothing is guessed. Answer here or in the conversation.</p>}
-        {outcome === "COMPILED" && <p>These rules came from your words and the settings you adopted. Check them, then save. Saving makes an immutable revision. It does not show the rules work.</p>}
-        {outcome === "PUBLISHED" && <p>This revision is saved. Reopening it later shows the same record from storage.</p>}
+        {outcome === "COMPILED" && <p>These rules came from your words and the settings you adopted. Check them, then save. Saving makes a saved version. It does not show the rules work.</p>}
+        {outcome === "PUBLISHED" && <p>This version is saved. Reopening it later shows the same saved record.</p>}
         {pending ? (
           <>
             <p data-testid="reading-state">{pending.lead}</p>
             <div className="btn-row">
               {pending.action === "START" || pending.action === "RETRY" ? (
                 <button className="btn btn-primary" type="button" onClick={retryInterpretation} aria-disabled={busy || undefined}>
-                  {busy ? "Working…" : pending.action === "START" ? "Read my request now" : "Try the interpreter again"}</button>
+                  {busy ? "Working…" : pending.action === "START" ? "Read my request now" : "Try the research agent again"}</button>
               ) : (
                 <button className="btn btn-secondary" type="button" onClick={checkAgain} aria-disabled={busy || undefined}>{busy ? "Checking…" : "Check the saved request again"}</button>
               )}
-              <span className="muted">{pending.action === "START" ? "This starts one interpreter attempt."
-                : pending.action === "RETRY" ? "A retry is a separate attempt. The earlier attempt stays in the list below."
-                  : "This only reads the saved record. It starts no interpreter attempt."}</span>
+              <span className="muted">{pending.action === "START" ? "This starts one read by the research agent."
+                : pending.action === "RETRY" ? "A retry is a separate read. The earlier read stays in the list below."
+                  : "This only reads the saved record. It starts no read."}</span>
             </div>
             {pending.action === "CHECK_AGAIN" && head.retry.reason && RETRY_BLOCKED[head.retry.reason] ? <p className="muted" data-testid="retry-blocked">{RETRY_BLOCKED[head.retry.reason]}</p> : null}
           </>
@@ -274,7 +280,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
             <p>Your words and restrictions are saved. No strategy was created.</p>
             {head.retry.allowed ? (
               <div className="btn-row">
-                <button className="btn btn-primary" type="button" onClick={retryInterpretation} aria-disabled={busy || undefined}>{busy ? "Trying again…" : "Try the interpreter again"}</button>
+                <button className="btn btn-primary" type="button" onClick={retryInterpretation} aria-disabled={busy || undefined}>{busy ? "Trying again…" : "Try the research agent again"}</button>
                 <span className="muted">A retry is a separate attempt. The earlier attempt stays in the list below.</span>
               </div>
             ) : <p className="muted" data-testid="retry-blocked">{RETRY_BLOCKED[head.retry.reason ?? ""] ?? "A retry is not available."}</p>}
@@ -343,15 +349,19 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
 
       {revision && (
         <section className="panel" aria-labelledby="rev-title" data-testid="revision">
-          <h2 id="rev-title">Saved revision</h2>
+          <h2 id="rev-title">Saved version</h2>
           <dl className="kv">
-            <dt>Revision ID</dt><dd className="mono" data-testid="revision-id">{revision.revision_id}</dd>
-            <dt>Strategy ID</dt><dd className="mono">{revision.strategy_id}</dd>
-            <dt>Content hash</dt><dd className="mono">{revision.content_sha256}</dd>
-            <dt>Meaning manifest hash</dt><dd className="mono">{revision.manifest_sha256}</dd>
             <dt>Saved</dt><dd>{formatTime(revision.created_at)}</dd>
             <dt>Stored copy</dt><dd>{verified === null ? "Checking" : verified ? "Read back from the database. Its hash matches." : "Could not be confirmed."}</dd>
           </dl>
+          <Details summary="Details">
+            <dl className="kv">
+              <dt>Version ID</dt><dd className="mono" data-testid="revision-id">{revision.revision_id}</dd>
+              <dt>Strategy ID</dt><dd className="mono">{revision.strategy_id}</dd>
+              <dt>Content hash</dt><dd className="mono">{revision.content_sha256}</dd>
+              <dt>Meaning manifest hash</dt><dd className="mono">{revision.manifest_sha256}</dd>
+            </dl>
+          </Details>
         </section>
       )}
 
@@ -360,7 +370,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
       {revision && draft && <SpotReplayPanel strategy={draft.content.source_syntax as Strategy}
         strategyId={revision.strategy_id} strategyRevisionId={revision.revision_id} />}
 
-      <InterpretationAttempts attempts={bundle.attempts} lateResults={bundle.late_results} currentRevisionId={head.interpretation_revision_id}
+      <InterpretationAttempts attempts={bundle.attempts} modelCost={bundle.model_cost} modelBudget={bundle.model_budget ?? null} lateResults={bundle.late_results} currentRevisionId={head.interpretation_revision_id}
         open={Boolean(failure) || Boolean(pending) || Boolean(head.reply) || (lastAttempt !== undefined && lastAttempt.status !== "COMPLETED")} />
 
       <details>
@@ -381,16 +391,16 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
               ))}
             </tbody>
           </table>
-        ) : <p className="muted">No interpretation was made for this request.</p>}
+        ) : <p className="muted">The research agent did not read this request.</p>}
       </details>
 
       <details>
         <summary>Record details</summary>
         <dl className="kv">
           <dt>Request</dt><dd className="mono">{bundle.intake.record_id}</dd>
-          <dt>Current revision</dt><dd className="mono">{head.interpretation_revision_id ?? "none"}</dd>
-          <dt>Revisions in history</dt><dd>{bundle.interpretations.length}</dd>
-          <dt>Interpreter</dt><dd>{bundle.interpreter.kind} · {bundle.interpreter.id}</dd>
+          <dt>Current version</dt><dd className="mono">{head.interpretation_revision_id ?? "none"}</dd>
+          <dt>Versions in history</dt><dd>{bundle.interpretations.length}</dd>
+          <dt>Research agent</dt><dd>{bundle.interpreter.kind} · {bundle.interpreter.id}</dd>
           {lastAttempt ? <>
             <dt>Model and route</dt><dd>{lastAttempt.identity.model} · {lastAttempt.identity.route} · {lastAttempt.identity.runtime_label}</dd>
             <dt>Latest request hash</dt><dd className="mono">{lastAttempt.identity.task_sha256.slice(0, 16)}</dd>

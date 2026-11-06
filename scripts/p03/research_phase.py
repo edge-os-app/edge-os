@@ -1050,7 +1050,8 @@ def run_release_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_p
         host.stop()
         ok &= run_bound_release_phase(rec, pg, env, api_port, api_url, evidence, ui_env, run_playwright, processes,
                                       nansen_port, nansen_log, logs)
-        standard = harness.start_api(env, api_port, logs, name="api-after-research-release")
+        standard = harness.start_api(env, api_port, logs, name="api-after-research-release",
+                                     factory="harness:create_app_fixture", app_dir=harness.P03_DIR)
         processes.append(standard)
         harness.wait_http(f"{api_url}/readyz")
         run = next(iter(value for key, value in results.items() if key.startswith("release-")), {})
@@ -1078,7 +1079,8 @@ def run_release_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_p
             except Exception as error:  # noqa: BLE001
                 ok &= rec.step("RESEARCH-RUNTIME: stop the release API", False, f"{type(error).__name__}: {error}")
         if standard is current_api:  # a step raised before the standard API was restarted
-            standard = harness.start_api(env, api_port, logs, name="api-after-research-release")
+            standard = harness.start_api(env, api_port, logs, name="api-after-research-release",
+                                         factory="harness:create_app_fixture", app_dir=harness.P03_DIR)
             processes.append(standard)
             harness.wait_http(f"{api_url}/readyz")
     return bool(ok), standard

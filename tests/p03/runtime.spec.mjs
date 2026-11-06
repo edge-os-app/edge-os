@@ -44,12 +44,12 @@ test("F1: the saved connected state shows service projections without inventing 
   const project = info.project.name;
   const { agentId } = saved(`main-${project}`);
   await injectAuth(page, tokens.a);
-  await page.goto(`/#/positions?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/positions?agent=${encodeURIComponent(agentId)}`);
   const panel = page.getByRole("region", { name: "Saved connected state" });
   const list = panel.getByRole("list", { name: "Projected records" });
   await expect(list).toBeVisible();
-  await expect(panel).toContainText("Ports: authored local fixtures.");
-  await expect(list.locator('[data-kind="AGENT"]')).toContainText("Agent: STOPPED");
+  await expect(panel).toContainText("Connections: example data.");
+  await expect(list.locator('[data-kind="AGENT"]')).toContainText("Agent: Stopped");
   await expect(list.locator('[data-kind="POSITION"]')).toContainText("unrealized result and mark unknown");
   await expect(list.locator('[data-kind="CAPITAL_FLOW"]').first()).toContainText("Not a trading result.");
   await expect(list.locator('[data-kind="ACTION"]').first()).toContainText("CONFIRMED");
@@ -62,7 +62,7 @@ test("F1: the saved connected state shows service projections without inventing 
   const other = await page.context().browser().newContext({ baseURL: info.project.use.baseURL, viewport: page.viewportSize() });
   const otherPage = await other.newPage();
   await injectAuth(otherPage, tokens.b);
-  await otherPage.goto(`/#/positions?agent=${encodeURIComponent(agentId)}`);
+  await otherPage.goto(`/app#/positions?agent=${encodeURIComponent(agentId)}`);
   await expect(otherPage.getByRole("region", { name: "Saved connected state" }))
     .toContainText("No connected-service state is saved for this agent.");
   await other.close();
@@ -72,7 +72,7 @@ test("F2: a saved change whose read-back fails keeps the funding controls paused
   const project = info.project.name;
   const { agentId } = saved(`lost-ack-${project}`);
   await injectAuth(page, tokens.a);
-  await page.goto(`/#/funds?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/funds?agent=${encodeURIComponent(agentId)}`);
   const funding = page.getByRole("region", { name: "Agent funding" });
   const check = funding.getByRole("button", { name: "Check deposits" });
   await expect(check).toBeEnabled();
@@ -86,7 +86,7 @@ test("F2: a saved change whose read-back fails keeps the funding controls paused
   await check.click();
   await expect(funding.getByRole("alert")).toContainText("The change was saved, but the current funding could not be read.");
   await expect(check).toBeDisabled();
-  await expect(funding.getByRole("button", { name: "Save reviewed deposit" })).toBeDisabled();
+  await expect(funding.getByRole("button", { name: "Save deposit plan" })).toBeDisabled();
   await expect(funding.getByTestId("funding-flows")).toBeVisible(); // the last saved view stays, marked unconfirmed
   expect(failedReads).toBeGreaterThan(0);
   await shot(page, project, "readback-failed");
@@ -102,7 +102,7 @@ test("F5: keyboard-only pass over the connected-agent and funding controls", asy
   const project = info.project.name;
   const { agentId } = saved(`lost-ack-${project}`);
   await injectAuth(page, tokens.a);
-  await page.goto(`/#/funds?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/funds?agent=${encodeURIComponent(agentId)}`);
   const funding = page.getByRole("region", { name: "Agent funding" });
   await expect(funding.getByRole("button", { name: "Check deposits" })).toBeEnabled();
   await expect(page.getByRole("region", { name: "Saved connected state" }).getByRole("list")).toBeVisible();

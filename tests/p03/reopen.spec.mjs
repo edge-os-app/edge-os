@@ -30,8 +30,8 @@ test("after an API restart the saved rules reopen with their exact review text",
   expect(investigation, "the first run must have saved a P08 declaration").toBeTruthy();
   await page.goto(investigation.url);
   await expect(page.getByTestId("investigation-saved")).toContainText(investigation.declarationId);
-  await expect(page.getByLabel("I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.")).toHaveCount(0);
-  await page.getByRole("button", { name: "Reopen saved declaration" }).click();
+  await expect(page.getByLabel("I reviewed the hypothesis and every required setting above. I adopt this exact, example-only rule for a future investigation.")).toHaveCount(0);
+  await page.getByRole("button", { name: "Reopen saved rule" }).click();
   await expect(page.getByTestId("investigation-saved")).toContainText("No study started");
   await expect(page.getByTestId("investigation-saved")).toContainText("DECLARATION_SAVED");
   await page.screenshot({ path: path.join(evidence, "screenshots", `${info.project.name}-investigation-reopened-after-restart.png`), fullPage: true });
@@ -60,7 +60,7 @@ test("after an API restart the saved rules reopen with their exact review text",
   await expect(replayPanel.getByTestId("spot-replay-id")).toHaveText(replay.replayId);
   await expect(replayPanel.getByTestId("spot-replay-result")).toContainText(replay.replayHash);
   await expect(replayPanel.getByTestId("spot-replay-result")).toContainText(replay.expectedEndingCashQuote);
-  await expect(replayPanel.getByRole("heading", { name: "Simulated replay summary" })).toBeVisible();
+  await expect(replayPanel.getByRole("heading", { name: "Replay summary" })).toBeVisible();
   const reopenedChart = replayPanel.getByRole("img", { name: "Account balance in quote over the replay window" });
   await expect(reopenedChart).toBeVisible();
   const savedInputs = replayPanel.getByTestId("spot-replay-saved-inputs");
@@ -70,7 +70,7 @@ test("after an API restart the saved rules reopen with their exact review text",
   await expect(savedInputs).toContainText("2026-10-01 12:05:00 UTC to 2026-10-01 12:35:00 UTC");
   await expect(savedInputs).toContainText("1000 quote cash");
   await expect(savedInputs).toContainText("100 QUOTE:0x2222222222222222222222222222222222222222");
-  await expect(savedInputs).toContainText("3 scheduled buckets");
+  await expect(savedInputs).toContainText("3 scheduled five-minute periods");
   await expect(savedInputs).toContainText("synthetic:adopted-cost-profile");
   await expect(savedInputs).toContainText("price@0, price@-3");
   await expect(savedInputs).toContainText("price@0, price@-1");
@@ -104,6 +104,7 @@ test("after an API restart the saved rules reopen with their exact review text",
     }
   }
   const saved = exactReplayBody.content.inputs;
+  await savedInputs.locator("xpath=ancestor::details[1]").locator(":scope > summary").click();
   const visible = await savedInputs.innerText();
   const displayUtc = (value) => {
     const iso = new Date(value).toISOString();
@@ -129,7 +130,8 @@ test("after an API restart the saved rules reopen with their exact review text",
     await replayPanel.getByRole("button", { name: "Load saved replay" }).click();
     await expect(replayPanel.getByTestId("spot-replay-id")).toHaveText(unavailable.replayId);
     await expect(replayPanel.getByTestId("spot-replay-result")).toContainText("Saved replay: unavailable");
-    await expect(replayPanel.getByRole("alert")).toContainText(reason);
+    await expect(replayPanel.getByRole("alert")).toBeVisible();
+    await expect(replayPanel.getByRole("alert").locator("xpath=following-sibling::details[1]")).toContainText(reason);
     await expect(replayPanel.getByTestId("spot-replay-saved-inputs")).toContainText(summary);
     await expect(replayPanel.getByRole("img", { name: "Account balance in quote over the replay window" })).toBeVisible();
     await expect(replayPanel.getByText("No saved balance samples are available.")).toBeVisible();
@@ -165,7 +167,7 @@ test("after an API restart the saved rules reopen with their exact review text",
   await reopenedAgent.getByRole("button", { name: "Inspect agent context" }).click();
   const persistedContext = page.getByRole("region", { name: `${p19.agentId} context` });
   await expect(persistedContext).toContainText("Agent context · version 5");
-  await expect(persistedContext).toContainText("CLEARED");
+  await expect(persistedContext).toContainText("State. Cleared.");
   await expect(persistedContext.getByRole("listitem")).toHaveCount(0);
   const longMonitoring = results[`p19-long-monitoring-${info.project.name}`];
   expect(longMonitoring, "the first browser drive must capture full matching monitoring fields at both viewports").toBeTruthy();
@@ -180,7 +182,7 @@ test("after an API restart the saved rules reopen with their exact review text",
   expect(savedLongMonitoring.network_id).toBe(longMonitoring.identity.networkId);
   expect(savedLongMonitoring.next_work).toBe(longMonitoring.nextWork);
   expect(savedLongMonitoring.blocking_reason).toBe(longMonitoring.blockingReason);
-  await page.goto(`${process.env.P03_WEB_URL}/#/agents?record=${longMonitoring.recordId}`);
+  await page.goto(`${process.env.P03_WEB_URL}/app#/agents?record=${longMonitoring.recordId}`);
   const reopenedLongMonitoring = page.locator(`#record-${longMonitoring.recordId}`);
   await expect(reopenedLongMonitoring).toHaveCount(1);
   await expect(reopenedLongMonitoring).toBeVisible();
@@ -220,7 +222,7 @@ test("after an API restart the saved rules reopen with their exact review text",
     headers: { Authorization: `Bearer ${tokens.a}` },
   });
   expect(reopenedResearch.status()).toBe(200);
-  await page.goto(`${process.env.P03_WEB_URL}/#/agents?record=${p19.sourceActionId}`);
+  await page.goto(`${process.env.P03_WEB_URL}/app#/agents?record=${p19.sourceActionId}`);
   const restartedSourceAction = page.locator(`#record-${p19.sourceActionId}`);
   const restartedSourcePosition = page.locator(`#record-${p19.sourcePositionId}`);
   await expect(restartedSourceAction).toHaveCount(1);
@@ -240,7 +242,7 @@ test("after an API restart the saved rules reopen with their exact review text",
     });
     expect(exactSourceResolver.status()).toBe(200);
     expect((await exactSourceResolver.json()).destination_record_id).toBe(sourceId);
-    await page.goto(`${process.env.P03_WEB_URL}/#/agents?record=${sourceId}`);
+    await page.goto(`${process.env.P03_WEB_URL}/app#/agents?record=${sourceId}`);
     const reopenedExactSource = page.locator(`#record-${sourceId}`);
     await expect(reopenedExactSource).toHaveCount(1);
     await expect(reopenedExactSource).toBeVisible();

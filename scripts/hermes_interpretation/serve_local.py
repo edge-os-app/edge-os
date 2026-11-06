@@ -9,6 +9,7 @@ EDGE_OS_INTERPRETER=hermes_local.
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import uvicorn
@@ -16,7 +17,10 @@ import uvicorn
 from authored_cases import ScriptQueue
 from docker_turn_runner import DockerHermesTurnRunner
 from edge_os_api.core.settings import load_settings
-from edge_os_api.main import create_app
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "scripts" / "p03"))
+import harness  # noqa: E402
 
 
 def build_app(*, image: str, run_id: str, evidence_dir: Path, script_file: Path, run_budget_seconds: int = 60,
@@ -25,7 +29,7 @@ def build_app(*, image: str, run_id: str, evidence_dir: Path, script_file: Path,
     runner = DockerHermesTurnRunner(image=image, run_id=run_id, evidence_dir=evidence_dir,
                                     script_for=ScriptQueue(script_file), forbidden=[],
                                     run_budget_seconds=run_budget_seconds, timeout_seconds=timeout_seconds)
-    return create_app(settings, hermes_runner=runner)
+    return harness.create_app_fixture(settings, hermes_runner=runner)
 
 
 def main() -> None:

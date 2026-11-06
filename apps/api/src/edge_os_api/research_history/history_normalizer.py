@@ -202,8 +202,11 @@ def normalize(profile: Mapping[str, Any], collection: Mapping[str, Any],
         "pool_tokens": evidence["pool_tokens"],
         "pool_venue": evidence["pool_venue"],
     }
-    observations["event_meaning"] = {"decimals": evidence["decimals"],
-                                     "fee_transfer_semantics": evidence["fee_transfer_semantics"]}
+    event_meaning = {"decimals": evidence["decimals"],
+                     "fee_transfer_semantics": evidence["fee_transfer_semantics"]}
+    if "token_mechanics" in evidence:  # optional: the bounded observed-behavior record, validated by the qualifier
+        event_meaning["token_mechanics"] = evidence["token_mechanics"]
+    observations["event_meaning"] = event_meaning
     observations["corroboration"] = dict(evidence["corroboration"])
     observations["finality_at_collection"] = evidence["finality_at_collection"]
     observations["feasibility"] = _resolve_feasibility(evidence, assembled, bound["availability"])

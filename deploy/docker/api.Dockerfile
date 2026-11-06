@@ -19,9 +19,11 @@ RUN uv sync --frozen --no-dev --no-install-project --python /usr/local/bin/pytho
 
 FROM ${PYTHON_IMAGE} AS runtime
 ARG EDGE_OS_SOURCE_COMMIT=unknown
+# LOCAL is the rehearsal default; the release workflow passes PRODUCTION. The value is an image label only.
+ARG EDGE_OS_PROFILE=LOCAL
 LABEL org.opencontainers.image.title="edge-os-api" \
       org.opencontainers.image.revision="${EDGE_OS_SOURCE_COMMIT}" \
-      edge-os.profile="LOCAL"
+      edge-os.profile="${EDGE_OS_PROFILE}"
 ENV PATH=/opt/edge-os/venv/bin:${PATH} \
     PYTHONPATH=/app/apps/api/src \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -43,6 +45,7 @@ COPY scripts/hermes_interpretation /app/scripts/hermes_interpretation
 COPY scripts/hermes_job_support /app/scripts/hermes_job_support
 # The accepted forward-history checker, loaded by path for saved-history payload binding (pinned bytes).
 COPY scripts/history_payload_binding.py /app/scripts/history_payload_binding.py
+COPY scripts/history_payload_binding_v2.py /app/scripts/history_payload_binding_v2.py
 COPY deploy/local/public_entry.py deploy/local/http_probe.py /app/deploy/local/
 WORKDIR /app/apps/api
 USER 10001:10001

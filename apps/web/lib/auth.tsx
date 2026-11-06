@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, ApiError, setTokenSource, setUnauthorizedHandler } from "./api";
 import { clearClientState } from "./draft";
+import type { CreatedWallet } from "./wallet-setup-api";
 
 export type AuthStatus = "loading" | "signed-out" | "signing-in" | "ready" | "unavailable";
 
@@ -34,9 +35,16 @@ export interface AuthValue {
   explicitSignOut: boolean;
   login(): void;
   logout(): void;
+  /** Present only in a Privy session. Creates one additional embedded Ethereum wallet. */
+  createEmbeddedWallet: (() => Promise<CreatedWallet>) | null;
 }
 
 const AuthContext = createContext<AuthValue | null>(null);
+
+/** For panels that also render outside a signed-in shell (tests, fixtures). Returns null without AuthRoot. */
+export function useOptionalAuth(): AuthValue | null {
+  return useContext(AuthContext);
+}
 
 export function useAuth(): AuthValue {
   const value = useContext(AuthContext);
@@ -55,6 +63,7 @@ export interface Source {
   logout(): void;
   /** Counts sign-in attempts that ended in an error or a closed window. */
   loginErrors?: number;
+  createEmbeddedWallet?: () => Promise<CreatedWallet>;
 }
 
 const SIGN_IN_SLOW_MS = 60_000;
@@ -164,8 +173,9 @@ function AuthSession({ source, fixtureLabel, unavailable, children }: {
     clearClientState(); // the next person in this tab must not see this person's unsent words or retry keys
     setUserId(null); setExplicitSignOut(true); setSignInMessage(null); setStatus("signed-out"); source?.logout();
   }, [source]);
+  const createEmbeddedWallet = source?.createEmbeddedWallet ?? null;
   const value = useMemo<AuthValue>(
-    () => ({ status, fixtureLabel, unavailableReason: reason, userId, signInMessage, signInSlow, explicitSignOut, login, logout }),
-    [status, fixtureLabel, reason, userId, signInMessage, signInSlow, explicitSignOut, login, logout]);
+    () => ({ status, fixtureLabel, unavailableReason: reason, userId, signInMessage, signInSlow, explicitSignOut, login, logout, createEmbeddedWallet }),
+    [status, fixtureLabel, reason, userId, signInMessage, signInSlow, explicitSignOut, login, logout, createEmbeddedWallet]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

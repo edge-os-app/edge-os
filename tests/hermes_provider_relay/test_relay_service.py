@@ -260,3 +260,26 @@ def test_no_reply_is_written_into_a_channel_after_its_grant_was_revoked(host) ->
     time.sleep(0.3)
     assert not (host.channel("a19") / "reply.json").exists()
     assert "late_reply_not_written" in [e["kind"] for e in host.events("a19")]
+
+
+# --- The per-call output limit (ORBIO_CREDIT_DESIGN 2b) ----------------------------------------------------------------
+
+def test_a_restart_never_resends_a_started_request_with_a_lowered_limit(host) -> None:
+    from host_relay import POLICY
+    host.script("a20", {"kind": "hang"})
+    host.grant("a20", policy={**POLICY, "max_output_tokens": 1880})
+    host.request("a20", body_b64=base64.b64encode(body("a20", max_tokens=1880)).decode())
+    host.record("a20", "started", 5)
+    deadline = time.monotonic() + 5
+    while not host.receipts("a20") and time.monotonic() < deadline:
+        time.sleep(0.01)
+    host.kill_relay()
+
+    host.start_relay()
+
+    assert host.record("a20", "finished", 5)["outcome"] == "unknown_restart"
+    assert host.reply("a20")["outcome"] == "lost"
+    os.unlink(host.channel("a20") / "reply.json")
+    host.request("a20", body_b64=base64.b64encode(body("a20", max_tokens=1880)).decode())  # the same request again
+    time.sleep(0.4)
+    assert len(host.receipts("a20")) == 1 and "already_started" in [e.get("reason") for e in host.events("a20")]

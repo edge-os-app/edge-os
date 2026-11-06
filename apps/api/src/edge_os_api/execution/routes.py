@@ -78,7 +78,8 @@ def _iso(value: Any) -> str | None:
 
 def decision_view(row: DecisionRow) -> dict[str, Any]:
     return {"decision_id": str(row.decision_id), "decision_at": _iso(row.decision_at), "status": row.status,
-            "operation": row.operation, "reasons": row.reasons, "rule_results": row.rule_results,
+            "operation": row.operation, "basis": row.decision_basis, "reasons": row.reasons,
+            "rule_results": row.rule_results,
             "revision_id": row.revision_id, "content_hash": row.content_hash,
             "market_binding_id": row.market_binding_id, "inputs_hash": row.inputs_hash}
 
@@ -87,6 +88,19 @@ def queue_view(row: QueueRow) -> dict[str, Any]:
     return {"queue_id": str(row.queue_id), "action_id": row.action_id, "operation": row.operation,
             "position_id": row.position_id, "state": row.state, "blocking_reason": row.blocking_reason,
             "enqueued_at": _iso(row.enqueued_at), "updated_at": _iso(row.updated_at)}
+
+
+REFUSAL_MESSAGES = {"WALLET_POLICY_REFUSED": "Refused by the wallet policy."}
+
+
+def refusal_view(attempts: list[SubmissionAttemptRow]) -> dict[str, str] | None:
+    """The newest attempt's definite refusal, with the owner-facing text the web can show."""
+    content = attempts[-1].content if attempts else None
+    original = content.get("original_transaction") if isinstance(content, dict) else None
+    reason = original.get("reason") if isinstance(original, dict) else None
+    if reason in REFUSAL_MESSAGES:
+        return {"reason": reason, "message": REFUSAL_MESSAGES[reason]}
+    return None
 
 
 @router.post("/agents/{agent_id}/actions")
@@ -243,4 +257,5 @@ def read_action(action_id: str, request: Request, principal: Principal = Depends
                                           "original_transaction"))},
                           "started_at": _iso(row.started_at), "completed_at": _iso(row.completed_at)}
                          for row in attempts],
+            "refusal": refusal_view(attempts),
             "recovery": recovery}

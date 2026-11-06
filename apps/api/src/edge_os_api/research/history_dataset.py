@@ -163,7 +163,14 @@ def check_release_source(runtime: released_source_runtime.ReleasedSourceRuntime)
 
 
 def served_sources(runtime: released_source_runtime.ReleasedSourceRuntime | None = None) -> dict[str, dict[str, Any]]:
-    """The recorded sources, plus the release history source when this process composes an operating release."""
+    """The sources this server offers and accepts for a declaration.
+
+    An approved ACTUAL release replaces the recorded test scenarios: this composition runs the real provider source,
+    so only that source is served. Without such a release, every recorded source stays served and a released
+    stand-in is added when one is composed."""
+    if runtime is not None and runtime.release.history is not None and runtime.release.kind == "ACTUAL":
+        release = released_source_runtime.history_source(runtime)
+        return {release["source_id"]: release}
     sources = recorded_sources()
     if runtime is not None and runtime.release.history is not None:
         release = released_source_runtime.history_source(runtime)

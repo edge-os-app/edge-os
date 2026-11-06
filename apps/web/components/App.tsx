@@ -53,9 +53,9 @@ function Signed() {
         </section>
       ) : (
         <section className="panel">
-          <h2 ref={heading} tabIndex={-1}>Sign in to start</h2>
-          <p>Research on Monad. Your words and restrictions are kept exactly as you write them.</p>
-          <p className="muted">Signing in does not create a wallet, grant permission or move money.</p>
+          <h2 ref={heading} tabIndex={-1}>Sign in to Edge OS</h2>
+          <p>Test a trading idea against real Monad data before you risk money.</p>
+          <p className="muted">Signing in doesn't move funds or approve any trade. You set up a trading wallet later, only if you want one.</p>
           {auth.signInMessage ? <p role="alert" className="status err" ref={message} tabIndex={-1}>{auth.signInMessage}</p> : null}
           {waiting && !auth.signInSlow ? <p role="status" className="muted">Waiting for sign-in to finish.</p> : null}
           {waiting && auth.signInSlow ? <p role="status" className="muted">Still waiting. If the sign-in window is closed or stuck, press Try again.</p> : null}

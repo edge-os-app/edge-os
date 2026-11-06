@@ -48,7 +48,8 @@ SLUG = "synthetic-provider"
 SCHEMA = {"type": "json_schema", "json_schema": {"name": "interpretation", "strict": True, "schema": {"type": "object"}}}
 ROUTING = {"only": [SLUG], "allow_fallbacks": False, "require_parameters": True, "data_collection": "deny",
            "max_price": {"prompt": 4, "completion": 10}}
-IMAGE = "sha256:" + "d" * 64  # the Docker image id the relay operator launches, not a registry digest reference
+IMAGE = "sha256:" + "d" * 64  # the arm64 Docker image id the relay operator launches, not a registry digest reference
+AMD64_IMAGE = "sha256:" + "9" * 64  # the amd64 id of the same source; a listed id only for that platform
 REFERENCE = "edge-os-p05-hermes:synthetic-local"  # the operator's local tag for that id; it names, never selects
 CHANNEL = "app"
 # Deliberately not the LOCAL authored 2.00 / 7.50: the ledger must use the snapshot's own rates.
@@ -79,8 +80,10 @@ def definition(*, record_fields: dict[str, Any] | None = None, snapshot: bytes |
     raw = canonical(record(**(record_fields or {})))
     fields: dict[str, Any] = {"record": raw, "record_sha256": hashlib.sha256(raw).hexdigest(),
                               "price_snapshot": canonical(SNAPSHOT) if snapshot is None else snapshot,
-                              "response_format": SCHEMA, "image": IMAGE, "channel_root": CHANNEL,
-                              "global_cap_usd": Decimal("0.30"), "owner_cap_usd": Decimal("0.15"), **changes}
+                              "response_format": SCHEMA,
+                              "images": (("linux/arm64", IMAGE), ("linux/amd64", AMD64_IMAGE)),
+                              "channel_root": CHANNEL, "global_cap_usd": Decimal("0.30"),
+                              "owner_cap_usd": Decimal("0.15"), **changes}
     return RelayApplicationDefinition(**fields)
 
 
@@ -113,16 +116,18 @@ def unreachable(monkeypatch: pytest.MonkeyPatch):
     return load_settings({**env, "EDGE_OS_INTERPRETER": "hermes_local"})
 
 
-def handoff(root: Path, given: RelayApplicationDefinition, channel: str = CHANNEL, **changes: Any) -> dict[str, Any]:
+def handoff(root: Path, given: RelayApplicationDefinition, channel: str = CHANNEL, image_id: str | None = None,
+            **changes: Any) -> dict[str, Any]:
     """What the lane-1 operator writes once for the relay it started (`edge-os.relay-operator-handoff/1`)."""
     actual = json.loads(given.record)
     relay = root / "relay"
+    pinned = image_id or composition.image_for_platform(given, composition._host_platform())
     return {"format": "edge-os.relay-operator-handoff/1", "operation_id": "op-synthetic-1", "config_sha256": "e" * 64,
             "kind": "ACTUAL", "release_record": {"path": "/synthetic/release.json", "sha256": given.record_sha256},
             "release": {"release_id": actual["release_id"], "route_id": actual["route_id"], "kind": "ACTUAL",
                         "model": actual["model"], "max_output_tokens": actual["max_tokens"],
                         "max_request_bytes": actual["max_request_bytes"], "max_reply_bytes": actual["max_reply_bytes"]},
-            "ca_bundle_sha256": actual["ca_bundle_sha256"], "image": {"reference": REFERENCE, "id": given.image},
+            "ca_bundle_sha256": actual["ca_bundle_sha256"], "image": {"reference": REFERENCE, "id": pinned},
             "endpoint": {"grants": str(relay / "grants"), "revocations": str(relay / "revocations"),
                          "state": str(relay / "state"), "admission_key_file": str(relay / "admission.key"),
                          "channel_root": channel, "heartbeat_max_age_seconds": 2.0},
@@ -166,13 +171,6 @@ def test_production_and_another_interpreter_are_refused_before_any_effect(unreac
     assert list(tmp_path.iterdir()) == []
 
 
-def test_two_approved_definitions_are_refused_before_the_handoff_is_read(unreachable, approve, tmp_path: Path) -> None:
-    approve(definition(), definition(record_fields={"release_id": "rel-app-synthetic-2"}))
-    with pytest.raises(MountRefused, match="at most one"):
-        open_with(unreachable, tmp_path)
-    assert list(tmp_path.iterdir()) == []
-
-
 def test_a_handoff_for_exactly_the_bound_release_gives_its_endpoint_and_evidence_folder(approve, tmp_path: Path) -> None:
     [given] = approve(definition())
     path, sha = write_handoff(tmp_path / "operator", handoff(tmp_path, given))
@@ -180,15 +178,87 @@ def test_a_handoff_for_exactly_the_bound_release_gives_its_endpoint_and_evidence
     assert found == endpoint(tmp_path / "relay") and evidence == tmp_path / "jobs"
 
 
+@pytest.mark.parametrize("target_platform, expected", [("linux/arm64", IMAGE), ("linux/amd64", AMD64_IMAGE)])
+def test_each_admitted_platform_picks_its_own_pinned_id(approve, target_platform: str, expected: str) -> None:
+    [given] = approve(definition())
+    assert composition.image_for_platform(given, target_platform) == expected
+
+
+@pytest.mark.parametrize("target_platform", ["linux/riscv64", "linux/arm64/v8", "windows/amd64", "", "LINUX/AMD64"])
+def test_a_platform_outside_the_pair_is_refused_and_the_pair_is_named(approve, target_platform: str) -> None:
+    [given] = approve(definition())
+    with pytest.raises(MountRefused, match="linux/arm64 and linux/amd64"):
+        composition.image_for_platform(given, target_platform)
+
+
+@pytest.mark.parametrize("system, machine, expected", [
+    ("Darwin", "arm64", "linux/arm64"), ("Darwin", "x86_64", "linux/amd64"),
+    ("Linux", "aarch64", "linux/arm64"), ("Linux", "x86_64", "linux/amd64")])
+def test_the_host_platform_is_read_as_a_docker_platform(system: str, machine: str, expected: str) -> None:
+    assert composition._docker_platform(system, machine) == expected
+
+
+@pytest.mark.parametrize("system, machine", [("Windows", "AMD64"), ("Linux", "riscv64"), ("Plan9", "mips")])
+def test_a_host_outside_the_pair_is_refused_before_binding(system: str, machine: str) -> None:
+    with pytest.raises(MountRefused, match="linux/arm64 and linux/amd64"):
+        composition._docker_platform(system, machine)
+
+
+def test_binding_selects_the_id_for_the_host_platform(approve, monkeypatch: pytest.MonkeyPatch) -> None:
+    [given] = approve(definition())
+    for target_platform, expected in (("linux/arm64", IMAGE), ("linux/amd64", AMD64_IMAGE)):
+        monkeypatch.setattr(composition, "_host_platform", lambda target=target_platform: target)
+        assert bind_release(given).image == expected
+
+
+def test_no_environment_value_supplies_the_image_id(approve, monkeypatch: pytest.MonkeyPatch) -> None:
+    [given] = approve(definition())
+    monkeypatch.setattr(composition, "_host_platform", lambda: "linux/arm64")
+    for name in ("EDGE_OS_HERMES_IMAGE", "EDGE_OS_HERMES_IMAGE_ID", "EDGE_OS_DOCKER_PLATFORM"):
+        monkeypatch.setenv(name, AMD64_IMAGE)
+    assert bind_release(given).image == IMAGE  # the code-owned pair alone decides
+
+
+@pytest.mark.parametrize("images", [
+    (("linux/arm64", IMAGE),),
+    (("linux/arm64", IMAGE), ("linux/amd64", AMD64_IMAGE), ("linux/riscv64", IMAGE)),
+    (("linux/arm64", IMAGE), ("windows/amd64", AMD64_IMAGE)),
+    (("linux/arm64", IMAGE), ("linux/arm64", AMD64_IMAGE)),
+    (("linux/arm64", IMAGE), ("linux/amd64", "edge-os/pinned-hermes:latest")),
+    (("linux/arm64", "sha256:" + "D" * 64), ("linux/amd64", AMD64_IMAGE)),
+    ("linux/arm64",),
+])
+def test_a_definition_that_does_not_pin_exactly_the_two_platforms_is_refused(approve, images: Any) -> None:
+    [bad] = approve(definition(images=images))
+    with pytest.raises(MountRefused, match="job image"):
+        bind_release(bad)
+
+
+def test_a_definition_that_pins_one_id_for_both_platforms_is_refused(approve) -> None:
+    [bad] = approve(definition(images=(("linux/arm64", IMAGE), ("linux/amd64", IMAGE))))
+    with pytest.raises(MountRefused, match="different Docker image id"):
+        composition.image_for_platform(bad, "linux/arm64")
+
+
+def test_a_listed_id_for_another_platform_is_refused_in_the_handoff(approve, tmp_path: Path,
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    [given] = approve(definition())
+    monkeypatch.setattr(composition, "_host_platform", lambda: "linux/arm64")
+    release = bind_release(given)
+    content = handoff(tmp_path, given, image_id=AMD64_IMAGE)  # listed, but pinned for linux/amd64 only
+    with pytest.raises(MountRefused, match="platform"):
+        composition._handoff(*write_handoff(tmp_path / "operator", content), release)
+
+
 def test_the_job_runs_the_exact_image_id_the_operator_started_whatever_its_local_tag(approve, tmp_path: Path) -> None:
     [given] = approve(definition())
     release = bind_release(given)
     for reference in (REFERENCE, "edge-os/pinned-hermes@sha256:" + "9" * 64, "x"):  # names only; Docker checked them
-        content = handoff(tmp_path, given, image={"reference": reference, "id": IMAGE})
+        content = handoff(tmp_path, given, image={"reference": reference, "id": release.image})
         composition._handoff(*write_handoff(tmp_path / reference.replace("/", "_"), content), release)
     app = compose_application(release, lazy_engine(), endpoint=endpoint(tmp_path / "relay"), run_id="rc-unit",
                               evidence_dir=tmp_path / "jobs")
-    assert app.supervision.image == IMAGE == release.image  # the launch argument is the immutable id itself
+    assert app.supervision.image == release.image  # the launch argument is the immutable id itself
 
 
 def tampered(content: dict[str, Any], **changes: Any) -> dict[str, Any]:
@@ -261,8 +331,10 @@ def test_the_factory_refuses_a_release_configuration_without_its_runner_local_in
 # --- Pure: one bound release identity ----------------------------------------------------------------------------
 
 
-def test_an_approved_definition_binds_route_policy_model_schema_and_the_snapshot_price(approve) -> None:
+def test_an_approved_definition_binds_route_policy_model_schema_and_the_snapshot_price(
+        approve, monkeypatch: pytest.MonkeyPatch) -> None:
     [given] = approve(definition())
+    monkeypatch.setattr(composition, "_host_platform", lambda: "linux/arm64")
     release = bind_release(given)
 
     assert release.actual.record_sha256 == given.record_sha256 and release.actual.release.kind == "ACTUAL"
@@ -332,10 +404,11 @@ def test_a_routing_price_limit_that_cannot_bound_the_snapshot_is_refused(approve
 @pytest.mark.parametrize("changes", [
     {"response_format": None},
     {"response_format": {"type": "json_object"}},
-    {"image": "edge-os/pinned-hermes:latest"},
-    {"image": "edge-os/pinned-hermes@" + IMAGE},  # a digest reference names an image; it is not the bare id
-    {"image": "sha256:" + "D" * 64},
-    {"image": "d" * 64},
+    {"images": (("linux/arm64", "edge-os/pinned-hermes:latest"), ("linux/amd64", AMD64_IMAGE))},
+    # a digest reference names an image; it is not the bare id
+    {"images": (("linux/arm64", "edge-os/pinned-hermes@" + IMAGE), ("linux/amd64", AMD64_IMAGE))},
+    {"images": (("linux/arm64", "sha256:" + "D" * 64), ("linux/amd64", AMD64_IMAGE))},
+    {"images": (("linux/arm64", "d" * 64), ("linux/amd64", AMD64_IMAGE))},
     {"channel_root": "../app"},
 ])
 def test_an_output_schema_image_or_channel_that_is_not_bound_is_refused(approve, changes: dict[str, Any]) -> None:
@@ -368,7 +441,7 @@ def test_the_ledger_and_the_relay_runner_hold_the_same_token_price_object_and_co
     app = compose_application(release, lazy_engine(), endpoint=endpoint(tmp_path / "relay"), run_id="rc-unit",
                               evidence_dir=tmp_path / "jobs")
     relay_runner = app.runner._delegate  # type: ignore[attr-defined] - accepted GuardedTurnRunner over RelayTurnRunner
-    assert app.spend._configured.price is release.price  # what PostgresSpendLedger reserves and settles with
+    assert app.spend._price is release.price  # what PostgresSpendLedger reserves and settles with
     assert relay_runner._price is release.price and relay_runner._actual is release.actual  # E1-COST1 check
     assert app.runner._policy is release.policy and app.config is release.config  # type: ignore[attr-defined]
     assert list(tmp_path.iterdir()) == []
@@ -494,6 +567,15 @@ def saved(app_client: TestClient, attempt_id: str) -> dict[str, Any]:
     return dict(zip(keys, row))
 
 
+def test_before_first_use_the_application_budget_view_is_the_releases_configured_limits(mounted, client, owner_a) -> None:
+    app, _serving = mounted("budget", StandInJob(mounted.relay))
+    owner = client.get("/v1/me", headers=owner_a).json()["user_id"]
+    with client.app.state.session_factory() as session:
+        view = app.budget_view(session, owner)
+    assert view == {"owner_cap": 150_000_000, "global_cap": 300_000_000, "settled": 0, "held": 0, "held_calls": 0,
+                    "available": 150_000_000}
+
+
 def test_a_saved_request_is_sent_once_settled_at_the_snapshot_price_reopened_elsewhere_and_denied_to_another_owner(
         mounted, owner_a, owner_b) -> None:
     job = StandInJob(mounted.relay, (reply_record(), RETURNED))
@@ -609,3 +691,34 @@ def test_a_reservation_that_no_longer_names_the_saved_owner_gets_no_grant_and_is
     [(new_owner,)] = moved  # exactly one reservation row was moved before the subject check
     row = saved(app_client, attempt["attempt_id"])
     assert row["reserved_owner"] == new_owner != row["owner"]
+
+
+# --- The per-call output limit (ORBIO_CREDIT_DESIGN 2b) ----------------------------------------------------------------
+
+def test_no_registered_release_sets_a_smallest_output_limit() -> None:
+    # The release value is an open builder question (design Q2, status-file item 3): the mechanism exists, but every call keeps the full limit.
+    assert [d.min_output_tokens for d in composition.RELEASE_DEFINITIONS] == [None] * len(composition.RELEASE_DEFINITIONS)
+
+
+def test_a_definition_without_a_smallest_limit_composes_a_runner_that_never_lowers_the_limit(approve, tmp_path: Path) -> None:
+    [given] = approve(definition())
+    release = bind_release(given)
+    app = compose_application(release, lazy_engine(), endpoint=endpoint(tmp_path / "relay"), run_id="rc-unit",
+                              evidence_dir=tmp_path / "jobs")
+    assert release.min_output_tokens is None and app.runner._min_output_tokens is None  # type: ignore[attr-defined]
+
+
+def test_the_definitions_smallest_limit_reaches_the_guarded_runner(approve, tmp_path: Path) -> None:
+    [given] = approve(definition(min_output_tokens=512))
+    release = bind_release(given)
+    app = compose_application(release, lazy_engine(), endpoint=endpoint(tmp_path / "relay"), run_id="rc-unit",
+                              evidence_dir=tmp_path / "jobs")
+    assert release.min_output_tokens == 512 and app.runner._min_output_tokens == 512  # type: ignore[attr-defined]
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("smallest", [0, -1, True, 4097, "512", 512.0])
+def test_a_smallest_limit_outside_one_to_the_records_limit_is_refused_at_binding(approve, smallest: Any) -> None:
+    [given] = approve(definition(min_output_tokens=smallest))
+    with pytest.raises(MountRefused, match="min_output_tokens"):
+        bind_release(given)

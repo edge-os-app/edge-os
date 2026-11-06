@@ -116,7 +116,7 @@ def _native_page(from_block: int, next_block: int, indices: range, first_ts: int
     last_hash = _hex32(f"native-block-{next_block - 1}")
     blocks[next_block - 1] = {"number": next_block - 1, "timestamp": last_ts, "hash": last_hash}
     return {"archive_height": ARCHIVE_HEIGHT, "next_block": hex(next_block), "total_execution_time": 4,
-            "data": {"blocks": [blocks[key] for key in sorted(blocks)], "logs": [_native_log(e) for e in events]},
+            "data": [{"blocks": [blocks[key] for key in sorted(blocks)], "logs": [_native_log(e) for e in events]}],
             "rollback_guard": {"block_number": next_block - 1, "timestamp": last_ts, "hash": last_hash,
                                "first_block_number": from_block}}
 
@@ -185,7 +185,7 @@ def build_bundle() -> dict[str, Any]:
     """Every supported native recording. Each id names its scenario; none is observed market history."""
     pages = _pages()
     no_end_fact = copy.deepcopy(pages)
-    no_end_fact[1]["data"]["blocks"] = no_end_fact[1]["data"]["blocks"][:-1]
+    no_end_fact[1]["data"][0]["blocks"] = no_end_fact[1]["data"][0]["blocks"][:-1]
     no_end_fact[1].pop("rollback_guard")
     wrong_network = copy.deepcopy(pages)
     wrong_network[0]["chain_id"] = "0x1"

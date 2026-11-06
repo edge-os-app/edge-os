@@ -208,7 +208,9 @@ export const api = {
   createSpotReplay: (body: SpotReplayBody | HistorySpotReplayBody) =>
     request<SpotReplayRecord>("/v1/spot-replays", { method: "POST", body: JSON.stringify(body) }).then((r) => r.body),
   spotReplay: (id: string) => request<SpotReplayRecord>(`/v1/spot-replays/${id}`).then((r) => r.body),
-  historySources: () => request<{ label: string; mode: string; sources: HistorySource[] }>("/v1/research/history-sources").then((r) => r.body),
+  historySources: () => request<{ label: string; mode: string;
+    operating_release?: { release_id: string; sha256: string; kind: string } | null;
+    sources: HistorySource[] }>("/v1/research/history-sources").then((r) => r.body),
   historyInvestigations: (id: string) =>
     request<{ declarations: HistoryDeclaration[] }>(`/v1/research/requests/${id}/history-investigations`).then((r) => r.body),
   historyInvestigation: (id: string, declarationId: string) =>

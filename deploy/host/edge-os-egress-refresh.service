@@ -1,0 +1,9 @@
+[Unit]
+Description=Edge OS egress allowlist and Coolify address refresh (adds addresses; never clears the set)
+After=edge-os-egress-firewall.service docker.service
+Requires=edge-os-egress-firewall.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/edge-os-egress-firewall refresh

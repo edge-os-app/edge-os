@@ -1,8 +1,8 @@
 """Saved-history payload binding: the application's in-process use of the accepted forward-history checker.
 
 An operating release may name one frozen recorder handoff in `HistoryRelease.provider_facts["forward_history_binding"]`
-as `{handoff_json, handoff_sha256}`. Admission validates it before any credential read; the initial implementation
-admits it only on a local/test `STAND_IN` release. After collection the worker saves the dataset, flushes it, reads the
+as a legacy `{handoff_json, handoff_sha256}` anchor or a complete versioned `/2` graph. Admission validates the
+matching SYNTHETIC/STAND_IN or ACTUAL version before credentials. After collection the worker saves the dataset, flushes it, reads the
 stored owner-scoped row back and runs the checker on that row's own `raw_records`. One immutable
 `HISTORY_PAYLOAD_BOUND` event, in the dataset transaction, keeps the exact handoff text, the report, its hash and the
 checker identity.
@@ -41,12 +41,24 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 CHECKER_RELATIVE_PATH = "scripts/history_payload_binding.py"
 CHECKER_PATH = REPO_ROOT / CHECKER_RELATIVE_PATH
 # The accepted lane 4 checker bytes. A changed checker is unavailable (INCOMPLETE) until a reviewed change pins it.
-CHECKER_SHA256 = "1c74d8c9bce020e35bb372dd4a363641f1ed35566263163a9dd18807264fd667"
+CHECKER_SHA256 = "813cc91fd10d16222cdc4622071406bc9bb614f0efdaf74c3ab51ab2bf13acaa"
+
+CHECKER_RELATIVE_PATH_V2 = "scripts/history_payload_binding_v2.py"
+CHECKER_SHA256_V2 = "24a4948f83c235339ecf301ac8cc21eee5f02b89e69b024c24244f22b45a6cd9"
+# All trusted projection, canonicalization and time helpers, including their loaded contract assets.
+CHECKER_DEPENDENCIES_V2 = {'scripts/history_payload_binding.py': '813cc91fd10d16222cdc4622071406bc9bb614f0efdaf74c3ab51ab2bf13acaa',
+ 'apps/api/src/edge_os_api/records/contract_adapter.py': '092a87ea75384138e4663aea1d48249d9e7a8cc92a23b1d493887bae560e1b0e',
+ 'apps/api/src/edge_os_api/research_history/qualification_engine.py': '6cd74eefaee6a01ba81bdc7641cdf47e3cfa6edcce1cb98fec1e8ee70fc2b782',
+ 'docs/contracts/p02/check_contract.py': '06f3820a2ccfcf1445aef8240e5808977f8adc708ab32aecfedf28ef323d8f79',
+ 'docs/contracts/p02/contract.json': '1ce8a41cc6d6a097f73cf1fbd24cd8fc4d99c685c52ebf25437427a1a7948768',
+ 'docs/contracts/p02/fixtures/complete-strategy.json': '9ff3ab72c10616aacd37d2381a9a10500789fdbe671f2adb8314ed6a54479771',
+ 'docs/qualification/p07/qualification.py': '2566a07ad60f2e3bdeae89588d44cd0e95c40b3b5cc7bdd7b80ce3e0a3711e28',
+ 'apps/api/src/edge_os_api/research_history/http_clients/http_transport.py': '89aa0a18442fb1a28a51d31a9a06da2da9fee4f3e2731239e34a00d44c725f0d'}
 
 REQUIREMENT_KEY = "payload_binding_requirement"
 EVENT_KIND = "HISTORY_PAYLOAD_BOUND"
 EVENT_VERSION = "edge-os.history-payload-bound/1"
-PRIVATE_EVENT_FIELDS = frozenset({"handoff_json"})
+PRIVATE_EVENT_FIELDS = frozenset({"handoff_json", "provenance_json", "receipts_json", "raw_records"})
 PASS, MISMATCH, INCOMPLETE, NOT_REQUIRED = "PASS", "MISMATCH", "INCOMPLETE", "NOT_REQUIRED"
 ACTUAL_CLASS = "PROVIDER_ACTUAL"
 CLAIM_LIMIT = ("Payload binding only. Not provider provenance, source rights, P07 qualification, market adoption, "
@@ -61,31 +73,51 @@ class CheckerUnavailable(RuntimeError):
         self.code = code
 
 
-@functools.lru_cache(maxsize=1)
-def checker() -> ModuleType:
-    """The accepted checker, loaded by repository path from the exact pinned bytes (the P02 adapter pattern).
-
-    The verified bytes are the ones executed, so a file swapped after the hash check is never run. A failure is not
-    cached: a later call tries again."""
+def checker(version: int = 1) -> ModuleType:
+    """Check bytes on every use, including cached executions. A changed helper fails closed."""
+    path = CHECKER_PATH if version == 1 else REPO_ROOT / CHECKER_RELATIVE_PATH_V2
+    pin = CHECKER_SHA256 if version == 1 else CHECKER_SHA256_V2
+    if version not in (1, 2):
+        raise CheckerUnavailable("CHECKER_VERSION_INVALID")
     try:
-        body = CHECKER_PATH.read_bytes()
+        body = path.read_bytes()
+        if hashlib.sha256(body).hexdigest() != pin:
+            raise CheckerUnavailable("CHECKER_CHANGED")
+        if version == 2:
+            for relative, digest in CHECKER_DEPENDENCIES_V2.items():
+                if hashlib.sha256((REPO_ROOT / relative).read_bytes()).hexdigest() != digest:
+                    raise CheckerUnavailable("CHECKER_DEPENDENCY_CHANGED")
     except OSError:
         raise CheckerUnavailable("CHECKER_MISSING") from None
-    if hashlib.sha256(body).hexdigest() != CHECKER_SHA256:
-        raise CheckerUnavailable("CHECKER_CHANGED")
-    spec = importlib.util.spec_from_file_location("edge_os_history_payload_checker", CHECKER_PATH)
+    return _load_checker(version, body)
+
+
+@functools.lru_cache(maxsize=2)
+def _load_checker(version: int, body: bytes) -> ModuleType:
+    path = CHECKER_PATH if version == 1 else REPO_ROOT / CHECKER_RELATIVE_PATH_V2
+    spec = importlib.util.spec_from_file_location(f"edge_os_history_payload_checker_v{version}", path)
     if spec is None:
         raise CheckerUnavailable("CHECKER_MISSING")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    exec(compile(body, str(CHECKER_PATH), "exec", dont_inherit=True), module.__dict__)  # noqa: S102 - the pinned, reviewed checker
+    try:
+        exec(compile(body, str(path), "exec", dont_inherit=True), module.__dict__)
+    except (OSError, ValueError, ImportError):
+        raise CheckerUnavailable("CHECKER_DEPENDENCY_UNAVAILABLE") from None
     return module
 
 
-def checker_identity() -> dict[str, str]:
-    module = checker()
-    return {"path": CHECKER_RELATIVE_PATH, "sha256": CHECKER_SHA256, "report_schema": module.REPORT_SCHEMA,
-            "canonicalization_version": module.CANONICALIZATION_VERSION}
+checker.cache_clear = _load_checker.cache_clear  # existing tests and callers retain their explicit cache reset
+
+
+def checker_identity(version: int = 1) -> dict[str, Any]:
+    module = checker(version)
+    identity = {"path": CHECKER_RELATIVE_PATH if version == 1 else CHECKER_RELATIVE_PATH_V2,
+                "sha256": CHECKER_SHA256 if version == 1 else CHECKER_SHA256_V2,
+                "report_schema": module.REPORT_SCHEMA, "canonicalization_version": module.CANONICALIZATION_VERSION}
+    if version == 2:
+        identity["dependencies"] = dict(CHECKER_DEPENDENCIES_V2)
+    return identity
 
 
 # ------------------------------------------------------------------------------------------- release definition
@@ -95,14 +127,22 @@ def _refused(detail: str) -> ReleaseRefused:
 
 
 def check_definition(kind: str, history: HistoryRelease) -> None:
-    """Validate a release's optional binding definition. Pure: no credential, file write or request. Raises
-    `ReleaseRefused` with a stable code; a release without the field is unchanged."""
+    """Validate a release binding before effects. Pure: no credential, file write or request. Raises
+    `ReleaseRefused` with a stable code; the field remains optional for STAND_IN."""
     value = history.provider_facts.get(BINDING_FACT)
     if value is None:
+        if kind == "ACTUAL":
+            raise ReleaseRefused("forward_history_binding_not_admitted", "ACTUAL history needs a complete /2 binding")
         return
-    if kind != "STAND_IN":
+    actual = kind == "ACTUAL"
+    if kind not in ("STAND_IN", "ACTUAL"):
         raise ReleaseRefused("forward_history_binding_not_admitted",
-                             "a forward history binding is admitted only on a local stand-in release")
+                             "a forward history binding requires a supported release kind")
+    if actual:
+        if isinstance(value, Mapping) and set(value) == {"handoff_json", "handoff_sha256"}:
+            raise ReleaseRefused("forward_history_binding_not_admitted", "legacy binding evidence cannot bind ACTUAL")
+        _check_actual_definition(value, history)
+        return
     if (not isinstance(value, Mapping) or set(value) != {"handoff_json", "handoff_sha256"}
             or not isinstance(value["handoff_json"], str) or not isinstance(value["handoff_sha256"], str)):
         raise _refused("the binding must be exactly {handoff_json: text, handoff_sha256: text}")
@@ -141,9 +181,60 @@ def check_definition(kind: str, history: HistoryRelease) -> None:
         raise _refused("the handoff scan differs from the release scan")
 
 
-def requirement(definition: Mapping[str, Any]) -> dict[str, str]:
-    """The requirement identity copied into the attempt and the dataset content. Never the handoff text."""
-    return {"basis": "RELEASE_FORWARD_HISTORY_BINDING", "handoff_sha256": definition["handoff_sha256"]}
+def _check_actual_definition(value: Any, history: HistoryRelease) -> None:
+    try:
+        module = checker(2)
+    except CheckerUnavailable:
+        raise ReleaseRefused("forward_history_checker_unavailable", "the accepted /2 checker is unavailable") from None
+    if not isinstance(value, Mapping) or set(value) != module.ANCHOR_KEYS or value.get("schema_version") != module.ANCHOR_SCHEMA:
+        raise _refused("the ACTUAL binding anchor must have the complete /2 schema")
+    if not isinstance(value.get("handoff_json"), str) or not isinstance(value.get("provenance_json"), str):
+        raise _refused("the ACTUAL binding must retain exact artifact texts")
+    try:
+        h_body, p_body = value["handoff_json"].encode("utf-8"), value["provenance_json"].encode("utf-8")
+        h = module.strict_json(h_body, "HANDOFF_NOT_STRICT_JSON")
+        if isinstance(h, Mapping) and h.get("schema_version") == "edge-os.forward-history-handoff/1":
+            raise ReleaseRefused("forward_history_binding_not_admitted", "legacy evidence cannot bind ACTUAL")
+        module.check_artifacts(h_body, p_body, {**value, "recorder_attempt_id": h.get("attempt_id")})
+    except (module.PayloadError, UnicodeError, AttributeError):
+        raise _refused("the ACTUAL artifact graph is incomplete or contradictory") from None
+    if h["status"] != "COMPLETED" or h["clock"]["trusted"] is not True or any(
+            bucket["status"] != "DELIVERED" for bucket in h["buckets"]):
+        raise _refused("ACTUAL admission requires complete delivery evidence and a trusted clock")
+    if h["scan"] is None:
+        raise _refused("ACTUAL admission requires the complete recorded scan")
+    profile = history.profile
+    window = (profile.get("dataset") or {}).get("window") or {}
+    roles = {token.get("role"): token.get("address") for token in profile.get("pool_tokens", [])}
+    if (h["source_id"] != history.source_id or dict(h["scan"]) != dict(history.scan)
+            or h["window"]["start_utc"] != window.get("start_utc") or h["window"]["end_utc"] != window.get("end_utc")
+            or h["network"]["chain_id"] != (profile.get("network") or {}).get("chain_id")
+            or h["market"]["pool"] != (profile.get("venue") or {}).get("pool_address")
+            or [token.get("address") for token in profile.get("pool_tokens", [])] != [
+                h["market"]["token0"], h["market"]["token1"]]
+            or h["market"]["base"] != roles.get("BASE") or h["market"]["quote"] != roles.get("QUOTE")
+            or profile.get("orientation") != "QUOTE_PER_BASE"):
+        raise _refused("the artifact market, source, window or scan differs from the release")
+
+
+def public_definition(kind: str, history: HistoryRelease) -> dict[str, str]:
+    """Keep the legacy public view; revalidate ACTUAL graphs before exposing that class."""
+    if kind == "ACTUAL":
+        check_definition(kind, history)
+    value = history.provider_facts[BINDING_FACT]
+    return {"handoff_sha256": value["handoff_sha256"], "evidence_class": "ACTUAL" if kind == "ACTUAL" else "SYNTHETIC"}
+
+
+def requirement(definition: Mapping[str, Any]) -> dict[str, Any]:
+    """Freeze graph and checker identities in the attempt and dataset. Private artifact text stays in the event."""
+    wanted = {"basis": "RELEASE_FORWARD_HISTORY_BINDING", "handoff_sha256": definition["handoff_sha256"]}
+    if definition.get("schema_version") == "edge-os.forward-history-binding/2":
+        module = checker(2)
+        handoff = module.strict_json(definition["handoff_json"].encode("utf-8"), "HANDOFF_NOT_STRICT_JSON")
+        wanted.update(schema_version=definition["schema_version"],
+                      receipts_sha256=definition["receipts_sha256"], provenance_sha256=definition["provenance_sha256"],
+                      recorder_attempt_id=handoff["attempt_id"], checker=checker_identity(2))
+    return wanted
 
 
 # ------------------------------------------------------------------------------------------- checker run
@@ -165,7 +256,8 @@ def _started(session: Session, owner_id: uuid.UUID, job_id: str, attempt_id: str
         InvestigationEventRow.kind == "ATTEMPT_STARTED")).scalar_one_or_none()
 
 
-def _expected(owner_id: uuid.UUID, dataset_id: uuid.UUID, started: Mapping[str, Any] | None) -> dict[str, Any] | None:
+def _expected(owner_id: uuid.UUID, dataset_id: uuid.UUID, started: Mapping[str, Any] | None, *,
+              job_id: str | None = None, attempt_id: str | None = None) -> dict[str, Any] | None:
     """Trusted identities from application state only: the owner, the dataset row and the attempt's frozen release,
     source and handoff requirement (`started` is the attempt's started-event content). None when it froze none."""
     content = started or {}
@@ -174,9 +266,14 @@ def _expected(owner_id: uuid.UUID, dataset_id: uuid.UUID, started: Mapping[str, 
     source_id = (content.get("input") or {}).get("source_id")
     if not isinstance(release, Mapping) or not isinstance(wanted, Mapping) or not isinstance(source_id, str):
         return None
-    return {"owner_id": str(owner_id), "dataset_id": str(dataset_id), "source_id": source_id,
+    expected = {"owner_id": str(owner_id), "dataset_id": str(dataset_id), "source_id": source_id,
             "release": {key: release.get(key) for key in ("release_id", "sha256", "kind")},
             "handoff_sha256": wanted.get("handoff_sha256")}
+    if wanted.get("schema_version") == "edge-os.forward-history-binding/2":
+        expected.update({key: wanted.get(key) for key in ("schema_version", "receipts_sha256", "provenance_sha256",
+                                                         "recorder_attempt_id", "checker")})
+        expected.update(job_id=job_id, attempt_id=attempt_id)
+    return expected
 
 
 def _reason(report: Mapping[str, Any]) -> str | None:
@@ -193,13 +290,19 @@ def _reason(report: Mapping[str, Any]) -> str | None:
 
 
 def run_checker(handoff_text: str, row: HistoryDatasetRow,
-                expected: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str, str | None]:
+                expected: Mapping[str, Any], *, provenance_text: str | None = None
+                ) -> tuple[dict[str, Any] | None, str, str | None]:
     """Run the accepted checker in process on one stored row. Returns (report or None, result, reason).
 
     The CLI's byte ceilings are enforced here, before the checker reads anything, because this caller bypasses the
     CLI's bounded file reads. A ceiling, a refused input or an unavailable checker is INCOMPLETE, never PASS."""
     try:
-        module = checker()
+        version = 2 if expected.get("schema_version") == "edge-os.forward-history-binding/2" else 1
+        if version == 1 and (expected.get("release") or {}).get("kind") == "ACTUAL":
+            return None, INCOMPLETE, "forward_history_binding_not_admitted"
+        module = checker(version)
+        if version == 2 and expected.get("checker") != checker_identity(2):
+            return None, INCOMPLETE, "CHECKER_IDENTITY_DIFFERS"
     except CheckerUnavailable as error:
         return None, INCOMPLETE, error.code
     export = {"dataset_id": str(row.dataset_id), "owner_id": str(row.owner_id), "content_sha256": row.content_sha256,
@@ -215,7 +318,12 @@ def run_checker(handoff_text: str, row: HistoryDatasetRow,
         if size > limit:
             return None, INCOMPLETE, code
     try:
-        report = module.check_saved_export(handoff, export, expected)
+        if version == 2:
+            if not isinstance(provenance_text, str):
+                return None, INCOMPLETE, "PROVENANCE_MISSING"
+            report = module.check_saved_export(handoff, export, expected, provenance_bytes=provenance_text.encode("utf-8"))
+        else:
+            report = module.check_saved_export(handoff, export, expected)
     except module.PayloadError as error:
         return None, INCOMPLETE, error.code
     return report, report["overall"], _reason(report)
@@ -232,19 +340,24 @@ def record_binding(session: Session, *, owner_id: uuid.UUID, job_id: uuid.UUID, 
     session.flush()
     row = _stored_row(session, owner_id, dataset_id)
     started = _started(session, owner_id, str(job_id), str(attempt_id))
-    expected = _expected(owner_id, dataset_id, None if started is None else started.content)
+    expected = _expected(owner_id, dataset_id, None if started is None else started.content,
+                         job_id=str(job_id), attempt_id=str(attempt_id))
     if row is None or expected is None:
         report, result, reason = None, INCOMPLETE, "DATASET_OR_ATTEMPT_IDENTITY_MISSING"
     else:
-        report, result, reason = run_checker(definition["handoff_json"], row, expected)
+        report, result, reason = run_checker(definition["handoff_json"], row, expected,
+                                               provenance_text=definition.get("provenance_json"))
     try:
-        identity: dict[str, str] | None = checker_identity()
+        identity: dict[str, Any] | None = checker_identity(
+            2 if definition.get("schema_version") == "edge-os.forward-history-binding/2" else 1)
     except CheckerUnavailable:
         identity = None
     content = {"schema_version": EVENT_VERSION, "dataset_id": str(dataset_id), "result": result, "reason": reason,
                "handoff_json": definition["handoff_json"], "handoff_sha256": definition["handoff_sha256"],
                "expected": expected, "checker": identity, "report": report,
                "report_sha256": None if report is None else record_contract.sha256_hex(report)}
+    if definition.get("schema_version") == "edge-os.forward-history-binding/2":
+        content.update({key: definition[key] for key in ("provenance_json", "provenance_sha256", "receipts_sha256")})
     session.add(InvestigationEventRow(event_id=uuid.uuid4(), owner_id=owner_id, job_id=job_id, kind=EVENT_KIND,
                                       attempt_id=attempt_id, content=content,
                                       created_at=dt.datetime.now(dt.timezone.utc)))
@@ -302,7 +415,8 @@ def evaluate(content: Mapping[str, Any], dataset_id: uuid.UUID, owner_id: uuid.U
     required_by = _required_by(content, started)
     if required_by is None:
         return _state(NOT_REQUIRED, None, None)
-    expected = _expected(owner_id, dataset_id, started)
+    expected = _expected(owner_id, dataset_id, started, job_id=content.get("job_id"),
+                         attempt_id=content.get("attempt_id"))
     if expected is None or started is None:
         return _state(INCOMPLETE, required_by, "BINDING_REQUIREMENT_MISSING")
     if content.get(REQUIREMENT_KEY) != started[REQUIREMENT_KEY]:
@@ -321,11 +435,21 @@ def evaluate(content: Mapping[str, Any], dataset_id: uuid.UUID, owner_id: uuid.U
         return _state(MISMATCH, required_by, "SAVED_REPORT_HASH_DIFFERS", **facts)
     if saved_report is None:  # a binding refused or unavailable when saved stays incomplete; a later rerun cannot fill it
         return _state(INCOMPLETE, required_by, f"SAVED_{saved.get('reason') or 'REPORT_MISSING'}", **facts)
-    if facts["checker_sha256"] != CHECKER_SHA256:
+    version = 2 if expected.get("schema_version") == "edge-os.forward-history-binding/2" else 1
+    if facts["checker_sha256"] != (CHECKER_SHA256_V2 if version == 2 else CHECKER_SHA256):
         return _state(INCOMPLETE, required_by, "CHECKER_IDENTITY_DIFFERS", **facts)
     if stored is None:
         return _state(INCOMPLETE, required_by, "DATASET_MISSING", **facts)
-    report, result, reason = run_checker(handoff_text, stored, expected)
+    if version == 2:
+        try:
+            current_identity = checker_identity(2)
+        except CheckerUnavailable as error:
+            return _state(INCOMPLETE, required_by, error.code, **facts)
+        if saved.get("checker") != expected.get("checker") or saved.get("checker") != current_identity:
+            return _state(INCOMPLETE, required_by, "CHECKER_IDENTITY_DIFFERS", **facts)
+        if any(saved.get(key) != expected.get(key) for key in ("receipts_sha256", "provenance_sha256")):
+            return _state(MISMATCH, required_by, "ARTIFACT_IDENTITY_DIFFERS", **facts)
+    report, result, reason = run_checker(handoff_text, stored, expected, provenance_text=saved.get("provenance_json"))
     report_sha256 = None if report is None else record_contract.sha256_hex(report)
     facts.update(report_sha256=report_sha256, evidence_class=_handoff_class(handoff_text))
     if result == PASS and report_sha256 != saved.get("report_sha256"):
@@ -366,10 +490,20 @@ def lineage(state: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def public_event(kind: str, content: Mapping[str, Any]) -> Mapping[str, Any]:
-    """A job event as an owner sees it: the private handoff text is replaced by its size."""
+    """An owner-facing binding event: recursively replace known private artifact fields with sizes or counts."""
     if kind != EVENT_KIND:
         return content
-    shown = {key: value for key, value in content.items() if key not in PRIVATE_EVENT_FIELDS}
-    text = content.get("handoff_json")
-    shown["handoff_bytes"] = len(text.encode("utf-8")) if isinstance(text, str) else None
-    return shown
+    def redact(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            shown = {}
+            for key, item in value.items():
+                if key in PRIVATE_EVENT_FIELDS:
+                    size_key = key.removesuffix("_json") + "_bytes" if key.endswith("_json") else "raw_record_count"
+                    shown[size_key] = len(item.encode("utf-8")) if isinstance(item, str) else len(item) if isinstance(item, list) else None
+                else:
+                    shown[key] = redact(item)
+            return shown
+        if isinstance(value, list):
+            return [redact(item) for item in value]
+        return value
+    return redact(content)

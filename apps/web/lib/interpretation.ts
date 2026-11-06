@@ -1,5 +1,6 @@
 import { OUTCOME_COPY } from "./describe";
-import type { Attempt, AttemptStatus, AttemptUsage, Bundle, Finding, ReplyState, RequestSummary } from "./types";
+import { plural } from "./plural";
+import type { Attempt, AttemptSpend, AttemptStatus, AttemptUsage, Bundle, Finding, ModelBudget, ModelCost, ReplyState, RequestSummary } from "./types";
 
 /** The three ways the interpreter can fail to give a usable answer. None is a verdict on the user's idea. */
 export type FailureKind = "MALFORMED_OUTPUT" | "UNAVAILABLE" | "OUTCOME_UNKNOWN";
@@ -12,16 +13,16 @@ const FAILURE_BY_CODE: Record<string, FailureKind> = {
 
 export const FAILURE_COPY: Record<FailureKind, { title: string; lead: string }> = {
   MALFORMED_OUTPUT: {
-    title: "The interpreter's answer was not usable",
-    lead: "The interpreter returned an answer that broke the rules, so none of it was used. This is not a verdict on your idea.",
+    title: "The research agent's answer was not usable",
+    lead: "The research agent returned an answer that broke the rules, so none of it was used. This is not a verdict on your idea.",
   },
   UNAVAILABLE: {
-    title: "The interpreter did not answer",
-    lead: "A system failure stopped the interpreter. This is not a verdict on your idea.",
+    title: "The research agent did not answer",
+    lead: "A system failure stopped the research agent. This is not a verdict on your idea.",
   },
   OUTCOME_UNKNOWN: {
-    title: "We do not know if the interpreter finished",
-    lead: "The interpreter may or may not have produced an answer. This attempt was not repeated, and nothing was assumed.",
+    title: "We do not know if the research agent finished",
+    lead: "The research agent may or may not have produced an answer. This read was not repeated, and nothing was assumed.",
   },
 };
 
@@ -31,10 +32,33 @@ export function systemFailure(findings: Finding[]): FailureKind | null {
 }
 
 export const RETRY_BLOCKED: Record<string, string> = {
-  attempt_in_flight: "An earlier attempt has no saved result and may still be running, so a retry is not offered.",
-  outcome_uncertain: "An earlier attempt may still finish, so a retry is not offered. Nothing was replayed.",
+  attempt_in_flight: "An earlier read has no saved result and may still be running, so a retry is not offered.",
+  outcome_uncertain: "An earlier read may still finish, so a retry is not offered. Nothing was replayed.",
   stale_reply: "Your saved meaning changed after that reply, so the reply cannot be tried again.",
 };
+
+const ORBIO_ROUTE = "orbio-openrouter-managed";
+
+const ROUTE_WORDS: Record<string, string> = {
+  [ORBIO_ROUTE]: "via Orbio",
+  "openrouter-openai-standard": "via OpenRouter",
+};
+
+/** A saved route in plain words. A missing route, or one with no plain name, gives null: the page shows nothing. */
+export function describeRoute(route: string | null): string | null {
+  return route !== null && Object.hasOwn(ROUTE_WORDS, route) ? ROUTE_WORDS[route] : null;
+}
+
+/**
+ * How many model calls ran through Orbio, in plain words, from each attempt's saved route and request count. A refused
+ * attempt (count 0) is not a call. A missing count may be a call, but it never counts as Orbio. No Orbio call gives null.
+ */
+export function describeRouteSummary(attempts: Attempt[]): string | null {
+  const calls = attempts.filter((a) => a.request_count !== 0);
+  const orbioCalls = calls.filter((a) => a.identity.route === ORBIO_ROUTE && a.request_count !== null).length;
+  if (orbioCalls === 0) return null;
+  return orbioCalls === calls.length ? "Model calls ran through Orbio" : `${orbioCalls} of ${plural(calls.length, "model call")} ran through Orbio`;
+}
 
 export const ATTEMPT_STATUS_LABEL: Record<AttemptStatus, string> = {
   STARTED: "Started, no result saved",
@@ -52,6 +76,73 @@ export function describeUsage(usage: AttemptUsage): string {
     : "Unknown";
 }
 
+const DECIMAL_USD = /^(\d+)(?:\.(\d+))?(?:E([+-]?\d{1,2}))?$/i;
+
+/**
+ * A USD amount from the stored decimal string, never parsed into a float. A plain decimal is shown as stored; the
+ * runner writes very small and round amounts with an exponent ("5E-7", "1E+1"), and those digits are moved, not
+ * rounded, into a plain decimal. Anything else is not a known amount.
+ */
+function usd(amount: string | null): string | null {
+  const match = amount === null ? null : DECIMAL_USD.exec(amount);
+  if (match === null) return null;
+  const [plain, whole, fraction = "", exponent] = match;
+  if (exponent === undefined) return `$${plain}`;
+  const digits = whole + fraction;
+  const point = whole.length + Number(exponent);
+  const integer = point <= 0 ? "0" : digits.slice(0, point).padEnd(point, "0");
+  const decimals = point <= 0 ? "0".repeat(-point) + digits : digits.slice(point);
+  const trimmed = decimals.replace(/0+$/, "");
+  return `$${integer.replace(/^0+(?=\d)/, "")}${trimmed ? `.${trimmed}` : ""}`;
+}
+
+/** An attempt's model cost: its charge only when the ledger settled it. Unknown, released or missing spend is Unknown. */
+export function describeAttemptCost(spend: AttemptSpend): string {
+  return (spend.state === "SETTLED" ? usd(spend.charge_usd) : null) ?? "Unknown";
+}
+
+/** A total with its unknown calls: complete, a lower bound ("at least"), or unknown. Never a zero for unknown. */
+function describeTotal(total: string | null, unknownCalls: number, complete: (total: string) => string): string {
+  if (unknownCalls === 0) return total === null ? "unknown" : complete(total);
+  const unknown = `${unknownCalls} call${unknownCalls === 1 ? "" : "s"} unknown`;
+  return total === null ? `unknown, ${unknown}` : `at least ${total}, ${unknown}`;
+}
+
+/** The request's total model cost. With any unknown call it is a lower bound, and with no settled call it is unknown. */
+export function describeModelCost(cost: ModelCost): string {
+  return describeTotal(cost.settled_calls > 0 ? usd(cost.settled_usd) : null, cost.unknown_calls, (total) => total);
+}
+
+/** An amount in CREDIT (Orbio's unit, exactly USD 1): the same exact decimal as `usd()`, labelled CREDIT. */
+export function describeCredit(amount: string | null): string | null {
+  const dollars = usd(amount);
+  return dollars === null ? null : `${dollars.slice(1)} CREDIT`;
+}
+
+/** The request's model spend in CREDIT. With any unknown call it is a lower bound; with no settled call it is unknown. */
+export function describeCreditSpend(cost: ModelCost): string {
+  // 1 CREDIT is exactly USD 1, so both labels print the one settled amount; two different strings are not a known amount.
+  const same = cost.settled_calls > 0 && cost.settled_credit === cost.settled_usd;
+  const amount = same ? usd(cost.settled_usd) : null;
+  const total = amount === null ? null : `${amount.slice(1)} CREDIT`;
+  return describeTotal(total, cost.unknown_calls, (credit) => `spent ${credit} (USD ${amount!.slice(1)})`);
+}
+
+/** The owner's shared model budget. Held calls are used budget. No budget from the API means no limit is configured, not 0. */
+export function describeModelBudget(budget: ModelBudget | null): string {
+  if (budget === null) return "budget not set";
+  if (budget.state !== "SET") return "unknown";
+  const available = usd(budget.available_credit), cap = describeCredit(budget.owner_cap_credit);
+  const ceiling = describeCredit(budget.global_cap_credit), held = describeCredit(budget.held_credit);
+  const over = describeCredit(budget.over_credit);
+  if (available === null || cap === null || ceiling === null || held === null || over === null
+      || !Number.isInteger(budget.held_calls) || budget.held_calls < 0) return "unknown";
+  const limit = over === "0 CREDIT" ? `available ${available.slice(1)} of ${cap}` : `${available.slice(1)} available, over by ${over}; cap ${cap}`;
+  const shared = `${limit}, shared by all your studies and limited by the global ceiling of ${ceiling}`;
+  if (budget.held_calls === 0) return shared;
+  return `${shared}; ${held} held by ${budget.held_calls} call${budget.held_calls === 1 ? "" : "s"} of unknown cost`;
+}
+
 export function describeLatency(ms: number | null): string {
   return ms === null ? "Unknown" : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
 }
@@ -64,7 +155,7 @@ export function describeParse(parse: string | null): string {
 }
 
 export function describePurpose(attempt: Attempt, byId: Map<string, Attempt>): string {
-  const base = attempt.purpose === "INTERPRET" ? "First reading" : "Reading your reply";
+  const base = attempt.purpose === "INTERPRET" ? "First read" : "Read your reply";
   const earlier = attempt.retry_of ? byId.get(attempt.retry_of) : undefined;
   return earlier ? `${base}, retry of #${earlier.sequence}` : base;
 }
@@ -131,7 +222,7 @@ export function readingOf(facts: ReadingFacts): FirstReading | null {
 
 const READING_TAG: Record<string, string> = {
   UNREAD: "Saved, not read yet", RUNNING_OR_STOPPED: "Attempt not finished", READ_NOT_SAVED: "Read, not saved yet",
-  UNAVAILABLE: "Interpreter did not answer", MALFORMED_OUTPUT: "Answer not usable", OUTCOME_UNKNOWN: "Outcome unknown",
+  UNAVAILABLE: "Research agent did not answer", MALFORMED_OUTPUT: "Answer not usable", OUTCOME_UNKNOWN: "Outcome unknown",
 };
 
 function describeReading(facts: ReadingFacts): Omit<FirstReading, "tag"> | null {
@@ -141,15 +232,15 @@ function describeReading(facts: ReadingFacts): Omit<FirstReading, "tag"> | null 
   if (!last && facts.outcome_present) return null; // fixture interpreter: no attempts, its own outcome
   if (!last) {
     return { kind: "UNREAD", title: "Saved, not read yet", action: facts.retry_allowed ? "START" : "CHECK_AGAIN",
-      lead: "Your request is saved, but the interpreter has not read it yet. Nothing was lost, and nothing was judged." };
+      lead: "Your request is saved, but the research agent has not read it yet. Nothing was lost, and nothing was judged." };
   }
   if (last.status === "STARTED") {
-    return { kind: "RUNNING_OR_STOPPED", title: "An interpreter attempt has not finished", action: "CHECK_AGAIN",
-      lead: "An attempt was started and no result is saved. It may still be running, or it may have stopped. This page cannot tell which. Nothing was judged, and nothing is repeated while it may still run." };
+    return { kind: "RUNNING_OR_STOPPED", title: "A research-agent read has not finished", action: "CHECK_AGAIN",
+      lead: "A read was started and no result is saved. It may still be running, or it may have stopped. This page cannot tell which. Nothing was judged, and nothing is repeated while it may still run." };
   }
   if (last.status === "COMPLETED" && last.parse_result === "ACCEPTED") {
     return { kind: "READ_NOT_SAVED", title: "Your request was read, and the answer is not saved yet", action: "CHECK_AGAIN",
-      lead: "The interpreter answered and the answer was accepted. Saving it did not finish. A restart tries to save it again. If the cause stays, it stays unsaved, and this page cannot tell you why. Nothing was judged. Saving a new request is the way forward until then." };
+      lead: "The research agent answered and the answer was accepted. Saving it did not finish. A restart tries to save it again. If the cause stays, it stays unsaved, and this page cannot tell you why. Nothing was judged. Saving a new request is the way forward until then." };
   }
   if (last.status === "PROVIDER_FAILED") {
     return { kind: "FAILED", failure: "UNAVAILABLE", title: FAILURE_COPY.UNAVAILABLE.title, lead: FAILURE_COPY.UNAVAILABLE.lead,
@@ -173,17 +264,17 @@ export function replyCopy(reply: ReplyState): { title: string; body: string } {
     case "REJECTED":
       return reply.reason_code === "reply_changed_nothing"
         ? { title: "Your last reply could not be used", body: "Your reply matched what is already saved, so nothing changed. Say what you want to change, or answer one of the questions." }
-        : { title: "Your last reply could not be used", body: `The interpreter's reading broke a rule (${reply.reason_code?.replaceAll("_", " ")}), so none of it was used. ${kept}` };
+        : { title: "Your last reply could not be used", body: `The research agent's answer broke a rule (${reply.reason_code?.replaceAll("_", " ")}), so none of it was used. ${kept}` };
     case "UNCERTAIN":
-      return { title: "We do not know if your last reply was read", body: `The interpreter may or may not have read it. This attempt was not repeated, and ${kept.toLowerCase()}` };
+      return { title: "We do not know if your last reply was read", body: `The research agent may or may not have read it. This read was not repeated, and ${kept.toLowerCase()}` };
     case "PENDING_SAVE":
       return { title: "Your last reply was read but is not saved yet",
-        body: `The interpreter read it and the answer was accepted. Saving it did not finish. A restart tries to save it again. If the cause stays, it stays unsaved, and this page cannot tell you why. ${kept}` };
+        body: `The research agent read it and the answer was accepted. Saving it did not finish. A restart tries to save it again. If the cause stays, it stays unsaved, and this page cannot tell you why. ${kept}` };
     case "UNFINISHED":
       return { title: "Your last reply has no saved result",
-        body: `An attempt to read your reply was started and no result is saved. It may still be running, or it may have stopped. This page cannot tell which. ${kept} Nothing is repeated while it may still run.` };
+        body: `A read of your reply was started and no result is saved. It may still be running, or it may have stopped. This page cannot tell which. ${kept} Nothing is repeated while it may still run.` };
     default:
-      return { title: "Your last reply was not read", body: `A system failure stopped the interpreter. ${kept}` };
+      return { title: "Your last reply was not read", body: `A system failure stopped the research agent. ${kept}` };
   }
 }
 

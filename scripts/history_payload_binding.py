@@ -286,16 +286,18 @@ def _project_saved(report: _Report, handoff: Mapping[str, Any], raw: Sequence[An
     return projected
 
 
-def _check_buckets(handoff: Mapping[str, Any], saved: Any, projected: list[dict[str, Any]] | None) -> list[dict]:
+def _check_buckets(handoff: Mapping[str, Any], saved: Any, projected: list[dict[str, Any]] | None,
+                   bucket_count: int = BUCKET_COUNT) -> list[dict]:
+    """The caller may pass the accepted shape's bucket count (version 2 derives it from the window)."""
     expected_buckets = handoff.get("buckets")
     results = []
     saved_list = saved if isinstance(saved, list) else []
     by_start: dict[Any, list[Any]] = {}
     for bucket in saved_list:
         by_start.setdefault(_get(bucket, "bucket_start"), []).append(bucket)
-    if not isinstance(expected_buckets, list) or len(expected_buckets) != BUCKET_COUNT:
+    if not isinstance(expected_buckets, list) or len(expected_buckets) != bucket_count:
         return [{"index": None, "result": INCOMPLETE, "reason": "HANDOFF_BUCKETS_INVALID"}]
-    extra = len(saved_list) != BUCKET_COUNT
+    extra = len(saved_list) != bucket_count
     for bucket in expected_buckets:
         entry: dict[str, Any] = {"index": bucket["index"], "start_utc": bucket["start_utc"],
                                  "expected_count": bucket["record_count"],

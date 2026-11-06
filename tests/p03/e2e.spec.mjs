@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { injectAuth, tokens } from "./fixture-auth.mjs";
 import { expectProvenanceFits, openProvenanceAndMeasure } from "./provenance-layout.mjs";
+import { detailValue, permissionRow } from "./research-flow.mjs";
 
 const evidence = process.env.P03_EVIDENCE_DIR ?? ".evidence";
 const shots = path.join(evidence, "screenshots");
@@ -101,7 +102,7 @@ async function checkP09Interface(page) {
 
 async function open(page, token) {
   await injectAuth(page, token);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByTestId("fixture-banner")).toContainText("TEST AUTH FIXTURE");
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
 }
@@ -110,9 +111,9 @@ test.describe.configure({ mode: "serial" });
 
 test("signed-out and rejected sessions never show data", async ({ page }, info) => {
   await injectAuth(page, tokens.bad);
-  await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Sign in to start" })).toBeVisible();
-  await expect(page.getByText("Signing in does not create a wallet")).toBeVisible();
+  await page.goto("/app");
+  await expect(page.getByRole("heading", { name: "Sign in to Edge OS" })).toBeVisible();
+  await expect(page.getByText("Signing in doesn't move funds")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Saved requests" })).toHaveCount(0);
   await shot(page, info.project.name, "signed-out");
 });
@@ -130,7 +131,7 @@ test("error state when saved requests cannot load", async ({ page }) => {
   await page.route("**/v1/research/requests", (route) => route.request().method() === "GET"
     ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ code: "service_unavailable", findings: [{ detail: "A required service is unavailable. Retry later." }] }) })
     : route.continue());
-  await page.goto("/");
+  await page.goto("/app");
   await expect(alerts(page)).toContainText("unavailable");
 });
 
@@ -155,7 +156,7 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   await expect(page.getByTestId("revision")).toBeVisible();
   await expect(page.locator("#state-title")).toBeFocused(); // the Save button is gone; focus lands on the new state
   await expect(page.getByTestId("revision")).toContainText("Read back from the database");
-  const revisionId = (await page.getByTestId("revision-id").innerText()).trim();
+  const revisionId = (await page.getByTestId("revision-id").textContent()).trim();
   const requestUrl = page.url();
   record(`thesis-${project}`, { url: requestUrl, revisionId, original: THESIS });
   await shot(page, project, "04-saved");
@@ -169,22 +170,22 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   page.on("response", (response) => {
     if (response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/spot-replays") replayStatuses.push(response.status());
   });
-  await replay.getByRole("button", { name: "Add entry dependency" }).click();
-  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  await replay.getByRole("button", { name: "Add an input for entry" }).click();
+  await replay.getByRole("button", { name: "Add an input for entry" }).click();
   await replay.getByLabel("entry dependency offset 2").fill("-3");
-  await replay.getByRole("button", { name: "Add exit dependency" }).click();
-  await replay.getByRole("button", { name: "Add exit dependency" }).click();
+  await replay.getByRole("button", { name: "Add an input for exit" }).click();
+  await replay.getByRole("button", { name: "Add an input for exit" }).click();
   await replay.getByLabel("exit dependency offset 2").fill("-1");
-  await replay.getByLabel("I reviewed the entry dependency set").check();
-  await replay.getByLabel("I reviewed the exit dependency set").check();
-  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await replay.getByLabel("I reviewed the entry inputs").check();
+  await replay.getByLabel("I reviewed the exit inputs").check();
+  await replay.getByRole("button", { name: "Replay on example data" }).click();
   await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: complete");
   await expect(replay.getByTestId("spot-replay-result")).toContainText("SYNTHETIC_FIXTURE");
   await expect(replay.getByTestId("spot-replay-result")).toContainText("BUY_FILLED");
   await expect(replay.getByTestId("spot-replay-result")).toContainText("SELL_FILLED");
   await expect(replay.getByTestId("spot-replay-result")).toContainText("990.51132338308457711442786069651741293532338308458");
   await expect(replay.getByTestId("spot-replay-result")).toContainText("no gas, spread, additional impact, or capacity model");
-  const summary = replay.getByRole("heading", { name: "Simulated replay summary" });
+  const summary = replay.getByRole("heading", { name: "Replay summary" });
   await expect(summary).toBeVisible();
   const balanceChart = replay.getByRole("img", { name: "Account balance in quote over the replay window" });
   await expect(balanceChart).toBeVisible();
@@ -205,8 +206,8 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   await expect(savedInputs).toContainText("p13-config-");
   await expect(savedInputs).toContainText("price@0, price@-3");
   await expect(savedInputs).toContainText("price@0, price@-1");
-  const replayId = (await replay.getByTestId("spot-replay-id").innerText()).trim();
-  const replayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
+  const replayId = (await replay.getByTestId("spot-replay-id").textContent()).trim();
+  const replayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).textContent()).trim();
   const savedReplayResponse = await page.request.get(`${process.env.P03_API_URL}/v1/spot-replays/${replayId}`,
     { headers: { Authorization: `Bearer ${tokens.a}` } });
   expect(savedReplayResponse.status()).toBe(200);
@@ -310,7 +311,8 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
     await replay.getByRole("button", { name: "Load saved replay" }).click();
     await expect(replay.getByTestId("spot-replay-id")).toHaveText(unavailableRecord.replay_id);
     await expect(replay.getByTestId("spot-replay-result")).toContainText("Saved replay: unavailable");
-    await expect(replay.getByRole("alert")).toContainText(item.reason);
+    await expect(replay.getByRole("alert")).toBeVisible();
+    await expect(replay.getByRole("alert").locator("xpath=following-sibling::details[1]")).toContainText(item.reason);
     await expect(replay.getByTestId("spot-replay-saved-inputs")).toContainText(item.summary);
     await expect(replay.getByTestId("spot-replay-result")).toContainText("No trading permission is granted.");
     const unavailableMetrics = replay.getByRole("table", { name: "Quote-denominated replay metrics" });
@@ -335,18 +337,18 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   }
 
   // A definitive 422 rejects only this body. Correcting it starts a new key/body.
-  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  await replay.getByRole("button", { name: "Add an input for entry" }).click();
   const rejectedOffset = replay.getByLabel("entry dependency offset 3");
   await rejectedOffset.fill("1");
-  await replay.getByLabel("I reviewed the entry dependency set").uncheck();
-  await replay.getByLabel("I reviewed the entry dependency set").check();
-  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await replay.getByLabel("I reviewed the entry inputs").uncheck();
+  await replay.getByLabel("I reviewed the entry inputs").check();
+  await replay.getByRole("button", { name: "Replay on example data" }).click();
   await expect(replay.locator(".status.err")).toContainText("rejected before it was saved");
-  await expect(replay.getByRole("button", { name: "Save synthetic replay" })).toBeVisible();
+  await expect(replay.getByRole("button", { name: "Replay on example data" })).toBeVisible();
   await rejectedOffset.fill("-2");
   const correctedResponsePromise = page.waitForResponse((response) =>
     response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/spot-replays");
-  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
+  await replay.getByRole("button", { name: "Replay on example data" }).click();
   const correctedResponse = await correctedResponsePromise;
   expect([200, 201]).toContain(correctedResponse.status());
   const correctedRecord = await correctedResponse.json();
@@ -357,7 +359,7 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   expect(replayPosts[2].idempotency_key).not.toBe(replayPosts[1].idempotency_key);
   expect(replayStatuses).toContain(422);
   const correctedReplayId = correctedRecord.replay_id;
-  const correctedReplayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
+  const correctedReplayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).textContent()).trim();
   record(`spot-replay-corrected-${project}`, { url: requestUrl, revisionId, replayId: correctedReplayId,
     replayHash: correctedReplayHash,
     expectedEntryDependencies: replayPosts[2].essential_fields.entry.essential_dependencies,
@@ -366,7 +368,7 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
     expectedGainLossQuote: "-9.48867661691542288557213930348258706467661691542" });
 
   // Lose the response after the API commits. Retrying must reuse the exact request and recover one row.
-  await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  await replay.getByRole("button", { name: "Add an input for entry" }).click();
   const uncertainOffset = replay.getByLabel("entry dependency offset 4");
   await uncertainOffset.fill("-1");
   let dropCommittedResponse = true;
@@ -377,23 +379,23 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
       await route.abort();
     } else await route.continue();
   });
-  await replay.getByLabel("I reviewed the entry dependency set").uncheck();
-  await replay.getByLabel("I reviewed the entry dependency set").check();
-  await replay.getByRole("button", { name: "Save synthetic replay" }).click();
-  await expect(replay.getByRole("button", { name: "Retry same replay" })).toBeVisible();
+  await replay.getByLabel("I reviewed the entry inputs").uncheck();
+  await replay.getByLabel("I reviewed the entry inputs").check();
+  await replay.getByRole("button", { name: "Replay on example data" }).click();
+  await expect(replay.getByRole("button", { name: "Retry the same replay" })).toBeVisible();
   const uncertainRequest = replayPosts[3];
   const postCountAfterCommitLoss = replayPosts.length;
   await replay.getByLabel("Saved replay ID").fill(correctedReplayId);
   await replay.getByRole("button", { name: "Load saved replay" }).click();
   await expect(replay.getByTestId("spot-replay-id")).toHaveText(correctedReplayId);
-  await expect(replay.getByRole("button", { name: "Retry same replay" })).toBeVisible();
+  await expect(replay.getByRole("button", { name: "Retry the same replay" })).toBeVisible();
   await expect(replay.getByText(/uncertain outcome/)).toBeVisible();
   await expect(replay).toContainText("Loaded the exact saved result. The replay did not run again.");
   expect(replayPosts).toHaveLength(postCountAfterCommitLoss);
   await uncertainOffset.fill("-2");
   const recoveredResponsePromise = page.waitForResponse((response) =>
     response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/spot-replays");
-  await replay.getByRole("button", { name: "Retry same replay" }).click();
+  await replay.getByRole("button", { name: "Retry the same replay" }).click();
   const recoveredResponse = await recoveredResponsePromise;
   expect(recoveredResponse.status()).toBe(200);
   const recoveredRecord = await recoveredResponse.json();
@@ -404,7 +406,7 @@ test("thesis: submit, adopt, review, save, reopen", async ({ page }, info) => {
   expect(replayPosts[4]).toEqual(uncertainRequest);
   expect(replayPosts[4].idempotency_key).toBe(uncertainRequest.idempotency_key);
   const recoveredId = recoveredRecord.replay_id;
-  const uncertainReplayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).innerText()).trim();
+  const uncertainReplayHash = (await replay.getByTestId("spot-replay-result").locator("dd.mono").nth(1).textContent()).trim();
   record(`spot-replay-uncertain-${project}`, { url: requestUrl, revisionId, replayId: recoveredId,
     replayHash: uncertainReplayHash,
     expectedIdempotencyKey: uncertainRequest.idempotency_key,
@@ -437,7 +439,7 @@ test("quote-volume rule: review, save and reopen the scheduled baseline", async 
   await expect(page.getByTestId("rules-review")).toContainText("current quote volume divided by the mean of the previous 10 minutes is above 2");
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toContainText("Read back from the database");
-  const revisionId = (await page.getByTestId("revision-id").innerText()).trim();
+  const revisionId = (await page.getByTestId("revision-id").textContent()).trim();
   const requestUrl = page.url();
   record(`volume-rule-${project}`, { url: requestUrl, revisionId, original: "Enter when current quote volume is above twice its prior 10-minute mean; exit when the 5-minute price return is below zero." });
   const fresh = await page.context().browser().newContext({ viewport: page.viewportSize() });
@@ -464,7 +466,7 @@ test("nested Boolean groups retain their review meaning through save", async ({ 
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toContainText("Read back from the database");
   await expect(page.getByTestId("rules-review")).toContainText(expectedEntry);
-  const revisionId = (await page.getByTestId("revision-id").innerText()).trim();
+  const revisionId = (await page.getByTestId("revision-id").textContent()).trim();
   const requestUrl = page.url();
   record(`grouped-rule-${project}`, { url: requestUrl, revisionId, original: GROUPED_RULE,
     expectedEntry, expectedEntryTree: GROUPED_ENTRY });
@@ -486,7 +488,7 @@ test("a right-nested Boolean group stays distinct through save", async ({ page }
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toContainText("Read back from the database");
   await expect(page.getByTestId("rules-review")).toContainText(expectedEntry);
-  const revisionId = (await page.getByTestId("revision-id").innerText()).trim();
+  const revisionId = (await page.getByTestId("revision-id").textContent()).trim();
   record(`grouped-right-${project}`, { url: page.url(), revisionId, original: GROUPED_RIGHT_RULE,
     expectedEntry, expectedEntryTree: GROUPED_RIGHT_ENTRY });
   await shot(page, project, "grouped-right-rules-saved");
@@ -511,7 +513,7 @@ test("exact negative tiny threshold remains visible through save", async ({ page
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toContainText("Read back from the database");
   await expect(review).toContainText(expectedEntry);
-  const revisionId = (await page.getByTestId("revision-id").innerText()).trim();
+  const revisionId = (await page.getByTestId("revision-id").textContent()).trim();
   const requestUrl = page.url();
   record(`tiny-threshold-${project}`, { url: requestUrl, revisionId, original: TINY_RULE,
     expectedEntry, expectedProvenance, expectedEntryTree: TINY_ENTRY });
@@ -564,7 +566,7 @@ test("loading states are announced while the service is slow", async ({ page }) 
     await new Promise((resolve) => setTimeout(resolve, 1200));
     return route.continue();
   });
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByText("Loading saved requests.")).toBeVisible();
   await expect(page.getByText("Nothing saved yet.")).toBeVisible();
 });
@@ -599,22 +601,22 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   await page.getByRole("button", { name: "Prepare request" }).click();
   await expect(page.getByTestId("investigation-review")).toBeVisible();
   await expect(page.getByTestId("investigation-original-request")).toHaveText("Compare the descriptive launch cohorts in a synthetic fixture.");
-  await expect(page.getByText(/unqualified synthetic fixture/).first()).toBeVisible();
-  await expect(page.getByLabel("Unverified mechanism details and evidence gaps")).toHaveValue(/Participant identity and incentives are unverified\./);
+  await expect(page.getByText(/not approved for production research/).first()).toBeVisible();
+  await expect(page.getByLabel("What we do not know yet and evidence gaps")).toHaveValue(/Participant identity and incentives are unverified\./);
   await expect(page.getByLabel("Outcome horizon (positive integer)")).toHaveValue("15");
   await expect(page.getByText(/Descriptive work covers the complete period without an invented holdout/)).toBeVisible();
   await page.getByRole("checkbox", { name: /I reviewed the hypothesis and every required setting/ }).check();
-  const save = page.getByRole("button", { name: "Adopt and save declaration" });
+  const save = page.getByRole("button", { name: "Adopt and save rule" });
   await save.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByText("Temporary fixture failure.", { exact: true })).toBeVisible();
   await save.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("investigation-saved")).toContainText("No study started");
-  await expect(page.getByRole("heading", { name: "Declaration saved" })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Rule saved" })).toBeFocused();
   await expect(page.getByTestId("investigation-saved")).toContainText("DECLARATION_SAVED");
-  await expect(page.getByTestId("investigation-saved")).toContainText("P08 declaration-time outcome labels read");
-  const declarationId = (await page.getByTestId("investigation-saved").locator("dd").first().innerText()).trim();
+  await expect(page.getByTestId("investigation-saved")).toContainText("Outcome labels read when saved");
+  const declarationId = (await detailValue(page.getByTestId("investigation-saved"), "Rule ID").textContent()).trim();
   await page.getByTestId("investigation-saved").locator("summary").click();
   const uiContent = JSON.parse(await page.getByTestId("investigation-saved").locator("details pre").innerText());
   const intakeId = page.url().split("/research/").at(-1).split("?")[0].split("#")[0];
@@ -630,16 +632,16 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   expect(exact.access_history[0]).toMatchObject({ event: "DECLARATION_SAVED", outcome_labels_read: false,
     provider_queries: 0, study_started: false });
 
-  await page.getByRole("button", { name: "Load explicit synthetic example" }).click();
-  await expect(page.getByText(/This visible example was authored/)).toBeVisible();
-  const runAdoptionText = page.getByLabel(/I reviewed these exact P08 identities/);
+  await page.getByRole("button", { name: "Load the example comparison" }).click();
+  await expect(page.getByText(/This example was written for the local example data/)).toBeVisible();
+  const runAdoptionText = page.getByLabel(/I reviewed these tests, rules, required inputs/);
   await runAdoptionText.focus();
   await page.keyboard.press("Space");
-  const runAdoptButton = page.getByRole("button", { name: "Adopt synthetic run declaration" });
+  const runAdoptButton = page.getByRole("button", { name: "Adopt example comparison" });
   const beforeRun = await checkP09Interface(page);
   expect(beforeRun.sizes.every((item) => item.height >= 44), JSON.stringify(beforeRun.sizes)).toBe(true);
   expect(beforeRun.lowContrast).toEqual([]);
-  const p09Checkbox = page.getByLabel(/I reviewed these exact P08 identities/);
+  const p09Checkbox = page.getByLabel(/I reviewed these tests, rules, required inputs/);
   const p09Focus = await p09Checkbox.evaluate((el) => {
     const parse = (value) => { const match = value.match(/^rgba?\(([^)]+)\)$/); if (!match) return null;
       const parts = match[1].split(/[ ,/]+/).filter(Boolean).map(Number); return { r: parts[0], g: parts[1], b: parts[2], a: parts[3] ?? 1 }; };
@@ -663,7 +665,7 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
   expect(p09Focus.contrast).toBeGreaterThanOrEqual(3);
   await runAdoptButton.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByText(/Run declaration saved\. No report exists yet/)).toBeVisible();
+  await expect(page.getByText(/Comparison saved\. No report yet/)).toBeVisible();
   const runPath = `${process.env.P03_API_URL}/v1/research/requests/${intakeId}/effect-runs`;
   const runsResponse = await page.request.get(runPath, { headers: { Authorization: `Bearer ${tokens.a}` } });
   expect(runsResponse.status()).toBe(200);
@@ -709,15 +711,15 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
     return route.fulfill({ response: savedResponse, status: 503, contentType: "application/json",
       body: JSON.stringify({ code: "service_unavailable", findings: [{ path: "/", detail: "The reply was lost after the server saved the report." }] }) });
   });
-  await page.getByRole("button", { name: "Evaluate synthetic fixture" }).click();
+  await page.getByRole("button", { name: "Evaluate example data" }).click();
   await expect(page.getByTestId("effect-comparison").locator(".status.err")).toContainText("Temporary evaluation failure");
-  await page.getByRole("button", { name: "Evaluate synthetic fixture" }).click();
-  await expect(page.getByTestId("effect-report-saved")).toContainText("UNRESOLVED");
+  await page.getByRole("button", { name: "Evaluate example data" }).click();
+  await expect(page.getByTestId("effect-report-saved")).toContainText("Saved descriptive report · unresolved");
   const reportQuality = await checkP09Interface(page);
   expect(reportQuality.sizes.every((item) => item.height >= 44), JSON.stringify(reportQuality.sizes)).toBe(true);
   expect(reportQuality.lowContrast).toEqual([]);
   await expect(page.getByTestId("effect-comparison").locator(".status.err")).toContainText("reply was lost");
-  await expect(page.getByText(/P09 outcome access: recorded at event sequence/)).toBeVisible();
+  await expect(page.getByText(/Result access: recorded at step/)).toBeVisible();
   const reportId = (await page.getByTestId("effect-report-saved").locator("dd").first().innerText()).trim();
   const reportResponse = await page.request.get(`${runPath}/${runId}`, { headers: { Authorization: `Bearer ${tokens.a}` } });
   expect(reportResponse.status()).toBe(200);
@@ -809,7 +811,7 @@ test("adopt and save a bounded pre-outcome investigation declaration", async ({ 
         finalEventKinds: finalReportReplayState.events.map((event) => event.content.kind),
         alternateMappingStatus: alternateMapping.status(), runCountAfterRejectedMapping: 1 } } });
   await shot(page, project, "investigation-saved");
-  await page.getByRole("button", { name: "Reopen saved declaration" }).click();
+  await page.getByRole("button", { name: "Reopen saved rule" }).click();
   await expect(page.getByTestId("investigation-saved")).toContainText(declarationId);
   await expect(page.getByTestId("investigation-saved")).toContainText("No study started");
 });
@@ -830,8 +832,8 @@ test("clarification refresh keeps a reviewed draft's regenerated-ID plan saveabl
   });
   await open(page, tokens.a);
   await sample(page, /I have no view/).click();
-  await expect(page.getByLabel(/Use the synthetic fixture market/)).toBeChecked();
-  await page.getByLabel(/Use the synthetic fixture market/).uncheck();
+  await expect(page.getByLabel(/Use the example market/)).toBeChecked();
+  await page.getByLabel(/Use the example market/).uncheck();
   await page.getByRole("button", { name: "Prepare request" }).click();
   await expect(page.getByTestId("investigation-review")).toBeVisible();
   const question = page.getByRole("region", { name: "What we need from you" }).locator('[data-question="choose-market"]');
@@ -848,15 +850,15 @@ test("clarification refresh keeps a reviewed draft's regenerated-ID plan saveabl
   await expect(page.getByText(/Your unsaved edits remain in place/)).toBeVisible();
   await expect.poll(() => proposals.length).toBe(2);
   await expect(stopping).toHaveValue("Keep my reviewed stopping rule through clarification.");
-  await expect(page.getByLabel("I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.")).not.toBeChecked();
+  await expect(page.getByLabel("I reviewed the hypothesis and every required setting above. I adopt this exact, example-only rule for a future investigation.")).not.toBeChecked();
 
   const refreshed = proposals[1];
   expect(refreshed.interpretation_revision_id).not.toBe(initial.interpretation_revision_id);
   expect(refreshed.trial_ids).not.toEqual(initial.trial_ids);
   expect(refreshed.evaluation_ids).not.toEqual(initial.evaluation_ids);
-  await page.getByLabel("I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.").check();
-  await page.getByRole("button", { name: "Adopt and save declaration" }).click();
-  await expect(page.getByRole("heading", { name: "Declaration saved" })).toBeFocused();
+  await page.getByLabel("I reviewed the hypothesis and every required setting above. I adopt this exact, example-only rule for a future investigation.").check();
+  await page.getByRole("button", { name: "Adopt and save rule" }).click();
+  await expect(page.getByRole("heading", { name: "Rule saved" })).toBeFocused();
   await expect(page.getByTestId("investigation-saved")).toContainText("No study started");
   expect(saveBodies).toHaveLength(1);
   expect(saveBodies[0].expected_interpretation_revision_id).toBe(refreshed.interpretation_revision_id);
@@ -868,7 +870,7 @@ test("clarification refresh keeps a reviewed draft's regenerated-ID plan saveabl
   expect(saveBodies[0].field_origins.evaluation_plan).toMatchObject({ origin: "USER_CONFIRMED",
     source_ref: "investigation-review/2", adoption: "ADOPTED" });
 
-  const declarationId = (await page.getByTestId("investigation-saved").locator("dd").first().innerText()).trim();
+  const declarationId = (await detailValue(page.getByTestId("investigation-saved"), "Rule ID").textContent()).trim();
   const exactResponse = await page.request.get(`${process.env.P03_API_URL}/v1/research/requests/${intakeId}/investigations/${declarationId}`,
     { headers: { Authorization: `Bearer ${tokens.a}` } });
   expect(exactResponse.status()).toBe(200);
@@ -914,10 +916,10 @@ test("replacement retry saves one coherent new declaration after repeated propos
   await expect(page.getByTestId("investigation-review")).toBeVisible();
   await expect.poll(() => proposals.length).toBe(1);
   const originalProposal = proposals[0];
-  await page.getByLabel("I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.").check();
-  await page.getByRole("button", { name: "Adopt and save declaration" }).click();
-  await expect(page.getByRole("heading", { name: "Declaration saved" })).toBeFocused();
-  const firstDeclarationId = (await page.getByTestId("investigation-saved").locator("dd").first().innerText()).trim();
+  await page.getByLabel("I reviewed the hypothesis and every required setting above. I adopt this exact, example-only rule for a future investigation.").check();
+  await page.getByRole("button", { name: "Adopt and save rule" }).click();
+  await expect(page.getByRole("heading", { name: "Rule saved" })).toBeFocused();
+  const firstDeclarationId = (await detailValue(page.getByTestId("investigation-saved"), "Rule ID").textContent()).trim();
   const intakeId = page.url().split("/research/").at(-1).split("?")[0].split("#")[0];
   const auth = { headers: { Authorization: `Bearer ${tokens.a}` } };
   const firstRead = await page.request.get(`${process.env.P03_API_URL}/v1/research/requests/${intakeId}/investigations/${firstDeclarationId}`, auth);
@@ -928,7 +930,7 @@ test("replacement retry saves one coherent new declaration after repeated propos
   const replacementError = page.getByTestId("investigation-review").locator(".status.err").first();
   await expect(replacementError).toContainText("Temporary replacement proposal failure.");
   await expect(page.getByRole("button", { name: "Retry new hypothesis" })).toBeVisible();
-  await expect(replacementError).toContainText("The saved declaration is unchanged.");
+  await expect(replacementError).toContainText("The saved rule is unchanged.");
   await page.getByRole("button", { name: "Retry new hypothesis" }).click();
   await expect(replacementError).toContainText("Temporary replacement proposal failure.");
   await expect(page.getByRole("button", { name: "Retry new hypothesis" })).toBeVisible();
@@ -940,16 +942,16 @@ test("replacement retry saves one coherent new declaration after repeated propos
   expect(replacementProposal.edge_spec.edge_id).not.toBe(originalProposal.edge_spec.edge_id);
   expect(replacementProposal.trial_ids).not.toEqual(originalProposal.trial_ids);
   expect(replacementProposal.evaluation_ids).not.toEqual(originalProposal.evaluation_ids);
-  await page.getByLabel("I reviewed the hypothesis and every required setting above. I adopt this exact, fixture-only declaration for a future investigation.").check();
-  await page.getByRole("button", { name: "Adopt and save declaration" }).click();
-  await expect(page.getByRole("heading", { name: "Declaration saved" })).toBeFocused();
+  await page.getByLabel("I reviewed the hypothesis and every required setting above. I adopt this exact, example-only rule for a future investigation.").check();
+  await page.getByRole("button", { name: "Adopt and save rule" }).click();
+  await expect(page.getByRole("heading", { name: "Rule saved" })).toBeFocused();
   expect(replacementSaveBodies).toHaveLength(2);
   const newSave = replacementSaveBodies[1];
   expect(newSave.edge_spec.edge_id).toBe(replacementProposal.edge_spec.edge_id);
   expect(newSave.trial_ids).toEqual(replacementProposal.trial_ids);
   expect(newSave.evaluation_ids).toEqual(replacementProposal.evaluation_ids);
   expect(newSave.configuration.evaluation_plan).toEqual(replacementProposal.configuration.evaluation_plan);
-  const secondDeclarationId = (await page.getByTestId("investigation-saved").locator("dd").first().innerText()).trim();
+  const secondDeclarationId = (await detailValue(page.getByTestId("investigation-saved"), "Rule ID").textContent()).trim();
   expect(secondDeclarationId).not.toBe(firstDeclarationId);
   const secondRead = await page.request.get(`${process.env.P03_API_URL}/v1/research/requests/${intakeId}/investigations/${secondDeclarationId}`, auth);
   expect(secondRead.status()).toBe(200);
@@ -960,7 +962,7 @@ test("replacement retry saves one coherent new declaration after repeated propos
   const oldReadAfterSave = await page.request.get(`${process.env.P03_API_URL}/v1/research/requests/${intakeId}/investigations/${firstDeclarationId}`, auth);
   expect(oldReadAfterSave.status()).toBe(200);
   expect((await oldReadAfterSave.json()).declaration.content).toEqual(firstSaved.declaration.content);
-  const reopenButtons = page.getByRole("button", { name: "Reopen saved declaration" });
+  const reopenButtons = page.getByRole("button", { name: "Reopen saved rule" });
   await reopenButtons.first().click();
   await expect(page.getByTestId("investigation-saved")).toContainText(firstDeclarationId);
   await reopenButtons.nth(1).click();
@@ -1132,7 +1134,7 @@ test("P19 account views, exact owner scope, context controls and financial histo
   await agentCard.getByRole("button", { name: "Inspect agent context" }).click();
   const context = page.getByRole("region", { name: `${agentId} context` });
   await expect(context).toContainText("Agent context · version 1");
-  await expect(context).toContainText("SUGGESTED");
+  await expect(context).toContainText("Suggested lesson · Suggested");
   await expect(context.getByRole("button", { name: "Open source record" })).toHaveCount(6);
   await shot(page, project, "p19-agent-context-before-adoption");
   const sourceActionId = agentId === "agent-a" ? process.env.P19_SOURCE_ACTION_ID : process.env.P19_SOURCE_ACTION_B_ID;
@@ -1261,7 +1263,7 @@ test("P19 account views, exact owner scope, context controls and financial histo
   await reopenedContext.getByRole("button", { name: "Check saved context" }).click();
   await expect(reopenedContext).toContainText("Agent context · version 2");
   await expect(reopenedContext).toContainText("contains the requested change");
-  await expect(reopenedContext.locator("li").nth(1)).toContainText("ADOPTED");
+  await expect(reopenedContext.locator("li").nth(1)).toContainText("Adopted");
   await reopenedContext.getByRole("button", { name: "Correct context" }).first().click();
   const correction = reopenedContext.getByLabel("Corrected context");
   await correction.fill("Use exact saved account evidence and keep all claims synthetic.");
@@ -1318,7 +1320,7 @@ test("P19 account views, exact owner scope, context controls and financial histo
   await expect(alerts(page)).toContainText("outcome is not confirmed");
   await reopenedContext.getByRole("button", { name: "Check saved context" }).click();
   await expect(reopenedContext).toContainText("Agent context · version 5");
-  await expect(reopenedContext).toContainText("CLEARED");
+  await expect(reopenedContext).toContainText("State. Cleared.");
   await expect(reopenedContext.getByRole("listitem")).toHaveCount(0);
   const afterContext = await page.request.get(`${accountPath}?limit=500`, { headers: accountHeaders });
   expect(await afterContext.json()).toEqual(financialBefore);
@@ -1358,37 +1360,50 @@ test("P19 account views, exact owner scope, context controls and financial histo
   await expect(page.getByText("action-a-withdrawal-unknown", { exact: false })).toBeVisible();
   await expect(page.getByText("action-a-withdrawal-confirmed", { exact: false })).toBeVisible();
   await expect(page.getByText("action-a-withdrawal-failed", { exact: false })).toBeVisible();
-  await expect(page.locator("li").filter({ hasText: "flow-a-deposit-1" })).toContainText("Capital flow, not trading profit.");
-  await expect(page.locator("li").filter({ hasText: "flow-a-withdrawal-1" })).toContainText("Capital flow, not trading profit.");
+  await expect(page.locator("li").filter({ hasText: "flow-a-deposit-1" })).toContainText("Deposit or withdrawal, not trading profit.");
+  await expect(page.locator("li").filter({ hasText: "flow-a-withdrawal-1" })).toContainText("Deposit or withdrawal, not trading profit.");
   await expect(page.getByText(/Account value, percent return, and drawdown are unavailable/)).toBeVisible();
   await shot(page, project, "p19-funds-synthetic");
   await page.getByRole("group", { name: "Account views" }).getByRole("button", { name: "Agents" }).click();
   const permissionAgent = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: agentId, level: 2 }) });
   await expect(permissionAgent.getByText(/Permission approval history/)).toBeVisible();
   if (agentId === "agent-a") {
-    const failedSnapshot = permissionAgent.locator("li").filter({ hasText: "approval-a-v5 · FAILED · NEVER_ACTIVE" });
-    await expect(failedSnapshot.getByText(/approval-a-v5 · FAILED · NEVER_ACTIVE/)).toBeVisible();
+    const failedSnapshot = permissionRow(permissionAgent, "approval-a-v5");
+    await expect(failedSnapshot.locator("summary")).toBeVisible();
+    await expect(failedSnapshot.locator("summary")).toHaveText("failed · never active");
+    await expect(detailValue(failedSnapshot, "Saved status codes")).toHaveText("FAILED · NEVER_ACTIVE");
     await failedSnapshot.locator("summary").click();
-    await expect(failedSnapshot.locator("dd").nth(6)).toContainText("2026-10-09T11:02:00Z");
-    const pendingSnapshot = permissionAgent.locator("li").filter({ hasText: "approval-a-change-pending-v7 · CHANGE_PENDING · NEVER_ACTIVE" });
+    await expect(failedSnapshot.locator("dd").nth(8)).toContainText("2026-10-09T11:02:00Z");
+    const pendingSnapshot = permissionRow(permissionAgent, "approval-a-change-pending-v7");
+    await expect(pendingSnapshot.locator("summary")).toHaveText("change pending · never active");
+    await expect(detailValue(pendingSnapshot, "Saved status codes")).toHaveText("CHANGE_PENDING · NEVER_ACTIVE");
     await pendingSnapshot.locator("summary").click();
     await expect(pendingSnapshot).toContainText("Not yet checked");
     await expect(pendingSnapshot).toContainText("2026-10-09T13:01:00Z");
     await expect(pendingSnapshot).toContainText("Not applied (never active)");
     await expect(pendingSnapshot).toContainText("approval-a-v4");
-    const cancelledChange = permissionAgent.locator("li").filter({ hasText: "approval-a-change-cancelled-v8 · CANCELLED · NEVER_ACTIVE" });
+    const cancelledChange = permissionRow(permissionAgent, "approval-a-change-cancelled-v8");
+    await expect(cancelledChange.locator("summary")).toHaveText("cancelled · never active");
+    await expect(detailValue(cancelledChange, "Saved status codes")).toHaveText("CANCELLED · NEVER_ACTIVE");
     await cancelledChange.locator("summary").click();
     await expect(cancelledChange).toContainText("Not checked before cancellation");
     await expect(cancelledChange).toContainText("2026-10-09T14:02:00Z");
   } else {
-    await expect(permissionAgent.getByText(/approval-b-v6 · CHANGE_APPLIED · ACTIVE AT APPLICATION/)).toBeVisible();
+    const appliedChange = permissionRow(permissionAgent, "approval-b-v6");
+    await expect(appliedChange.locator("summary")).toBeVisible();
+    await expect(appliedChange.locator("summary")).toHaveText("change applied · active when applied");
+    await expect(detailValue(appliedChange, "Saved status codes")).toContainText("CHANGE_APPLIED");
   }
   const initialAgent = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: "agent-c", level: 2 }) });
-  const failedInitial = initialAgent.locator("li").filter({ hasText: "approval-c-initial-failed-v1 · FAILED · NEVER_ACTIVE" });
+  const failedInitial = permissionRow(initialAgent, "approval-c-initial-failed-v1");
+  await expect(failedInitial.locator("summary")).toHaveText("failed · never active");
+  await expect(detailValue(failedInitial, "Saved status codes")).toHaveText("FAILED · NEVER_ACTIVE");
   await failedInitial.locator("summary").click();
   await expect(failedInitial).toContainText("No earlier approval (initial attempt)");
   await expect(failedInitial).toContainText("2026-10-09T15:02:00Z");
-  const cancelledInitial = initialAgent.locator("li").filter({ hasText: "approval-c-initial-cancelled-v1 · CANCELLED · NEVER_ACTIVE" });
+  const cancelledInitial = permissionRow(initialAgent, "approval-c-initial-cancelled-v1");
+  await expect(cancelledInitial.locator("summary")).toHaveText("cancelled · never active");
+  await expect(detailValue(cancelledInitial, "Saved status codes")).toHaveText("CANCELLED · NEVER_ACTIVE");
   await cancelledInitial.locator("summary").click();
   await expect(cancelledInitial).toContainText("No owner approval recorded");
   await expect(cancelledInitial).toContainText("Not checked before cancellation");
@@ -1407,7 +1422,7 @@ test("P17 wallet setup: prepare, dispatch, uncertain and cancelled states throug
   await page.goto(thesis.url);
   const setup = page.getByRole("region", { name: "Agent wallet setup" });
   await expect(setup).toBeVisible();
-  await expect(setup).toContainText("authored local fixture");
+  await expect(setup).toContainText("This build uses example wallet data.");
   await expect(setup).toContainText("It is not a real wallet or provider");
 
   const dispatchPosts = [];
@@ -1423,7 +1438,7 @@ test("P17 wallet setup: prepare, dispatch, uncertain and cancelled states throug
   await setup.getByRole("button", { name: "Check saved setup" }).click();
   await expect(setup.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
   await setup.getByRole("button", { name: "Save wallet setup" }).click();
-  await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Saved, not dispatched");
+  await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Saved, not started");
   await setup.getByRole("button", { name: "Create wallet now" }).click();
   await expect(setup.getByTestId("wallet-setup-state")).toHaveText("Wallet confirmed");
   const walletId = (await setup.getByTestId("wallet-setup-wallet").innerText()).trim();
@@ -1446,7 +1461,7 @@ test("P17 wallet setup: prepare, dispatch, uncertain and cancelled states throug
   await setupAfterReload.getByRole("button", { name: "Check saved setup" }).click();
   await expect(setupAfterReload.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
   await setupAfterReload.getByRole("button", { name: "Save wallet setup" }).click();
-  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Saved, not dispatched");
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Saved, not started");
   await setupAfterReload.getByRole("button", { name: "Create wallet now" }).click();
   await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Outcome unknown");
   await expect(setupAfterReload.getByTestId("wallet-setup-wallet")).toHaveText("Not bound");
@@ -1460,9 +1475,9 @@ test("P17 wallet setup: prepare, dispatch, uncertain and cancelled states throug
   await setupAfterReload.getByRole("button", { name: "Check saved setup" }).click();
   await expect(setupAfterReload.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
   await setupAfterReload.getByRole("button", { name: "Save wallet setup" }).click();
-  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Saved, not dispatched");
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Saved, not started");
   await setupAfterReload.getByRole("button", { name: "Cancel before creating" }).click();
-  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Cancelled before dispatch");
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Cancelled before start");
   await expect(setupAfterReload).toContainText("No creation call was made");
   await shot(page, project, "p17-wallet-cancelled");
 
@@ -1474,7 +1489,7 @@ test("P17 wallet setup: prepare, dispatch, uncertain and cancelled states throug
   await setupAfterReload.getByRole("button", { name: "Check saved setup" }).click();
   await expect(setupAfterReload.getByRole("heading", { name: "No wallet setup saved" })).toBeVisible();
   await setupAfterReload.getByRole("button", { name: "Save wallet setup" }).click();
-  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Saved, not dispatched");
+  await expect(setupAfterReload.getByTestId("wallet-setup-state")).toHaveText("Saved, not started");
 
   const committedPath = `/v1/wallet-setup/agents/${committedAgent}/dispatch`;
   const providerUrl = `${process.env.P03_API_URL}/v1/wallet-setup/provider`;

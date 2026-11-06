@@ -43,7 +43,10 @@ PROVIDER_TEXT = "provider-private-detail-7731"
 def app(env: dict[str, str], **extra: str) -> TestClient:
     values = {**env, "EDGE_OS_RESEARCH_HISTORY_MODE": "recorded", "EDGE_OS_RESEARCH_BUDGET_PROVIDER_REQUESTS": "400",
               "EDGE_OS_RESEARCH_BUDGET_COMPUTE_SECONDS": "3600", **extra}
-    return TestClient(create_app(load_settings(values)))
+    # The authored-transport scenarios run without the registered release: the scoped fixture override supplies no
+    # release for this composition and restores immediately; the code-owned registries are unchanged.
+    with harness.no_registered_release():
+        return TestClient(create_app(load_settings(values)))
 
 
 @pytest.fixture(scope="module")

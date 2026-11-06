@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import uuid
+from decimal import Decimal
+from functools import partial
 from typing import Any
 
 import pytest
@@ -100,7 +102,7 @@ def test_a_concrete_thesis_is_read_from_the_users_words_and_compiles_only_after_
     assert attempt["parse_result"] == "ACCEPTED" and attempt["request_count"] == 1
     assert attempt["revision_id"] == bundle["head"]["interpretation_revision_id"]
     assert attempt["identity"]["runtime_label"] == "LOCAL_FAKE_PROVIDER"
-    assert attempt["identity"]["prompt_version"] == "p05-interpretation/4"
+    assert attempt["identity"]["prompt_version"] == "p05-interpretation/5"
     assert len(attempt["identity"]["task_sha256"]) == 64
     no_model_text(bundle, '"source_passage"', "Buy when the 15-minute price return is above 1%\", \"value\"")
     assert runner.turns[0].user_message.startswith("{")
@@ -781,7 +783,7 @@ def thesis_variants() -> list[tuple[str, str]]:
     return chosen[:140]
 
 
-def test_every_hostile_planting_ends_published_or_rejected_and_never_stuck(make_client, owner_a) -> None:
+def test_every_hostile_planting_ends_published_or_rejected_and_never_stuck(make_client, signer) -> None:
     """The independent oracle: an answer that settles ACCEPTED must be published for real, and a rejected one retryable."""
     from edge_os_api.research.interpretation_attempts import Usage
     stuck, accepted, rejected = [], 0, 0
@@ -790,14 +792,15 @@ def test_every_hostile_planting_ends_published_or_rejected_and_never_stuck(make_
     base = case("concrete-thesis")["provider"]["model_response"]
     client = make_client(CaseRunner(*[reply(base, usage=Usage(900, 120, 1020, "PROVIDER_REPORTED"), text=text)
                                       for _, text in variants]))  # one application, so connections are not exhausted
-    for label, _ in variants:
-        created = create(client, owner_a, "concrete-thesis")
+    for index, (label, _) in enumerate(variants):
+        headers = {"Authorization": f"Bearer {signer.token(f'did:privy:fuzz-{index}-{uuid.uuid4().hex[:8]}')}"}
+        created = create(client, headers, "concrete-thesis")
         if created.status_code != 201:
             stuck.append((label, created.status_code))
             continue
         bundle = created.json()
         [attempt] = bundle["attempts"]
-        opened = client.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=owner_a)
+        opened = client.get(f"/v1/research/requests/{bundle['intake']['record_id']}", headers=headers)
         if opened.status_code != 200 or attempt["status"] != "COMPLETED":
             stuck.append((label, opened.status_code, attempt["status"]))
         elif attempt["parse_result"] == "ACCEPTED":
@@ -977,3 +980,48 @@ def test_the_reply_dry_run_uses_the_longest_question_identifier_a_real_reply_can
     assert isinstance(parsed, ParsedInterpretation), parsed
     publication.RecordPublicationCheck().reply(intake, evidence, "Which entry?", answer_, parsed)
     assert seen and len(seen[0]) == MAX_IDENTIFIER_CHARS
+
+
+def test_an_application_with_no_spend_ledger_shows_no_budget_rather_than_a_zero_one(make_client, owner_a) -> None:
+    bundle = create(make_client(CaseRunner(turn_result(case("concrete-thesis")["provider"]))), owner_a,
+                    "concrete-thesis").json()
+    assert "model_budget" in bundle and bundle["model_budget"] is None  # "budget not set", never 0
+
+
+def test_before_the_ledger_is_used_the_saved_result_shows_the_configured_limits(env, migrated, owner_a) -> None:
+    from edge_os_api.research.provider_spend_ledger import SpendLimits, TokenPrice, spend_view
+    limits = SpendLimits(Decimal("0.20"), Decimal("0.12"), TokenPrice(Decimal("1"), Decimal("1")))
+    settings = load_settings({**env, "EDGE_OS_INTERPRETER": "hermes_local"})
+    with TestClient(create_app(settings, hermes_runner=CaseRunner(turn_result(case("concrete-thesis")["provider"])),
+                               spend_view=partial(spend_view, limits=limits))) as client:
+        with client.app.state.session_factory() as session:
+            session.execute(text("TRUNCATE usage_local.provider_spend_events, usage_local.provider_spend_reservations, "
+                                 "usage_local.provider_spend_route_prices, usage_local.provider_spend_settings"))
+            session.commit()
+        created = create(client, owner_a, "concrete-thesis")
+
+    assert created.status_code == 201
+    assert created.json()["model_budget"] == {"unit": "CREDIT", "state": "SET", "owner_cap_credit": "0.12",
+                                              "global_cap_credit": "0.2", "settled_credit": "0", "held_credit": "0",
+                                              "held_calls": 0, "available_credit": "0.12", "over_credit": "0"}
+
+
+def test_a_spend_view_without_the_hermes_interpreter_and_its_runner_is_refused(env, migrated) -> None:
+    from edge_os_api.core.settings import ConfigError
+    with pytest.raises(ConfigError, match="spend view"):
+        create_app(load_settings(env), spend_view=lambda session, owner: None)
+
+
+def test_a_budget_that_cannot_be_read_is_unknown_and_the_saved_result_still_loads(env, migrated, owner_a) -> None:
+    def broken(session, owner):
+        raise RuntimeError("the ledger tables cannot be read")
+
+    settings = load_settings({**env, "EDGE_OS_INTERPRETER": "hermes_local"})
+    with TestClient(create_app(settings, hermes_runner=CaseRunner(turn_result(case("concrete-thesis")["provider"])),
+                               spend_view=broken)) as client:
+        created = create(client, owner_a, "concrete-thesis")
+        saved = client.get(f"/v1/research/requests/{created.json()['intake']['record_id']}", headers=owner_a)
+
+    assert created.status_code == 201 and saved.status_code == 200
+    # unknown, which is neither "budget not set" (None) nor a zero budget
+    assert created.json()["model_budget"] == saved.json()["model_budget"] == {"unit": "CREDIT", "state": "UNKNOWN"}

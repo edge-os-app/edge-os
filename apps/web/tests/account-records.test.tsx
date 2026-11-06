@@ -119,7 +119,7 @@ describe("direct account records", () => {
       const matchingAgent = screen.getByRole("heading", { name: "source-agent" }).closest("section.panel");
       expect(screen.queryByRole("region", { name: "Exact agent source" })).toBeNull();
       expect(matchingAgent).toHaveTextContent("No saved permission approval snapshots.");
-      expect(matchingAgent).toHaveTextContent("2 attempts / 1 completions");
+      expect(matchingAgent).toHaveTextContent("2 attempts, 1 completion");
     } else {
       const exactSource = screen.getByRole("region", { name: "Exact agent source" });
       expect(exactSource).toHaveTextContent("source-agent · source-wallet · monad:143");
@@ -173,7 +173,7 @@ describe("direct account records", () => {
     render(<PositionRecords records={[lossPosition]} />);
     await user.click(screen.getByText(/position-a-1/));
     expect(screen.getByText(/Saved note/).parentElement).toHaveTextContent("proceeds 8 minus removed basis 10 equals realized result -2 USDC");
-    expect(screen.getByText(/Historical attributed quantity/).parentElement).toHaveTextContent("Current residual wallet inventory is unavailable.");
+    expect(screen.getByText(/Historical recorded quantity/).parentElement).toHaveTextContent("Current residual wallet inventory is unavailable.");
   });
 
   it("shows a submitted sale under its exact position and keeps marks unknown", async () => {
@@ -201,7 +201,7 @@ describe("direct account records", () => {
     } };
     render(<FundRecords records={[agent, deposit]} />);
     expect(screen.getByText(/Native gas/).parentElement).toHaveTextContent("0.05 monad:143/asset:MON");
-    expect(screen.getByText(/Capital flow, not trading profit/)).toBeInTheDocument();
+    expect(screen.getByText(/Deposit or withdrawal, not trading profit/)).toBeInTheDocument();
   });
 
   it("shows wallet actions under only their exact deposit or withdrawal flow", () => {
@@ -225,12 +225,14 @@ describe("direct account records", () => {
       action("withdrawal-done", "withdrawal-1", "CONFIRMED"), action("withdrawal-failed", "withdrawal-1", "REVERTED"),
       action("wrong-wallet", "deposit-1", "CONFIRMED", "wallet-b")];
     render(<FundRecords records={rows} />);
-    expect(screen.getByText(/deposit-pending · QUEUED/)).toBeInTheDocument();
-    expect(screen.getByText(/withdrawal-unknown · SUBMISSION_UNKNOWN/)).toBeInTheDocument();
-    expect(screen.getByText(/withdrawal-done · CONFIRMED/)).toBeInTheDocument();
-    expect(screen.getByText(/withdrawal-failed · REVERTED/)).toBeInTheDocument();
+    expect(screen.getByText(/deposit-pending · Queued/)).toBeInTheDocument();
+    expect(screen.getByText(/withdrawal-unknown · Outcome unknown/)).toBeInTheDocument();
+    expect(screen.getByText(/withdrawal-done · Confirmed/)).toBeInTheDocument();
+    expect(screen.getByText(/withdrawal-failed · Reverted/)).toBeInTheDocument();
     expect(screen.getByText(/wrong-wallet/)).toBeInTheDocument();
-    expect(screen.getByText("Wallet actions whose flow is not loaded")).toBeInTheDocument();
+    expect(screen.getByText("Wallet actions with no loaded deposit or withdrawal")).toBeInTheDocument();
+    expect(screen.getByText(/status SUBMISSION_UNKNOWN/).closest("details")).not.toBeNull();
+    expect(screen.getAllByText(/kind WITHDRAWAL · status CONFIRMED/)[0].closest("details")).not.toBeNull();
     expect(screen.getAllByText(/Native gas: 0\.000000000000000007/)).toHaveLength(5);
   });
 
@@ -248,13 +250,28 @@ describe("direct account records", () => {
       edge_evidence_status: "UNRESOLVED", status: "UNRESOLVED", reason: "Synthetic only.",
     } };
     render(<AgentRecords records={[agent, monitor]} />);
-    expect(screen.getByText(/4 attempts \/ 2 completions/)).toBeInTheDocument();
+    expect(screen.getByText(/4 attempts, 2 completions/)).toBeInTheDocument();
     expect(screen.getByText(/Pending reconciliation: Yes/)).toBeInTheDocument();
 
     const user = userEvent.setup();
     render(<PositionRecords records={[position, edge]} />);
     await user.click(screen.getByText(/position-a-1/));
     expect(screen.getByText(/edge-a-r2 · UNRESOLVED/)).toBeInTheDocument();
+  });
+
+  it("keeps missing evaluation counts Unknown instead of zero", () => {
+    const agent: AccountViewRecord = { record_id: "agent-null-counts", owner_id: "owner-a", content: {
+      owner_id: "owner-a", evidence_class: "SYNTHETIC_AUTHORED", record_kind: "AGENT", agent_id: "agent-null",
+      wallet_id: "wallet-null", network_id: "monad:143", status: "RUNNING", updated_at: "2026-10-10T10:00:00Z",
+    } };
+    const monitoring: AccountViewRecord = { record_id: "monitor-null-counts", owner_id: "owner-a", content: {
+      ...agent.content, record_kind: "MONITORING", status: "RUNNING", health: "SYNTHETIC_HEALTH",
+      evaluation_attempts: null, evaluation_completions: null, input_updated_at: "2026-10-10T10:00:00Z",
+      pending_reconciliation: false,
+    } };
+    render(<AgentRecords records={[agent, monitoring]} />);
+    expect(screen.getByText(/Unknown attempts, Unknown completions/)).toBeInTheDocument();
+    expect(screen.queryByText(/0 attempts/)).toBeNull();
   });
 
   it("wraps complete matching monitoring next-work and blocking text", () => {
@@ -310,20 +327,20 @@ describe("direct account records", () => {
     } };
     const user = userEvent.setup();
     render(<AgentRecords records={[agent, snapshot, otherWallet, pending, failedInitial]} />);
-    expect(screen.getByText("Permission approval history · synthetic records")).toBeInTheDocument();
-    expect(screen.getByText(/approval-a-v5 · FAILED · NEVER_ACTIVE/)).toBeInTheDocument();
-    expect(screen.getByText(/approval-a-initial-failed · FAILED · NEVER_ACTIVE/)).toBeInTheDocument();
+    expect(screen.getByText("Permission approval history · example records")).toBeInTheDocument();
+    const failed = screen.getAllByText(/failed · never active/);
+    expect(failed).toHaveLength(2);
     expect(screen.queryByText(/approval-b-v1/)).toBeNull();
-    await user.click(screen.getByText(/approval-a-v5 · FAILED · NEVER_ACTIVE/));
-    const failedSnapshot = screen.getByText(/approval-a-v5 · FAILED · NEVER_ACTIVE/).closest("details");
+    await user.click(failed[0]);
+    const failedSnapshot = failed[0].closest("details");
     expect(failedSnapshot).not.toBeNull();
     expect(failedSnapshot?.querySelector("dl")).toHaveTextContent("owner-a · agent-a · wallet-a · monad:143");
     expect(failedSnapshot?.querySelector("dl")).toHaveTextContent("600 quote:USD");
     expect(failedSnapshot?.querySelector("dl")).toHaveTextContent("2026-10-09T08:02:00Z");
-    await user.click(screen.getByText(/approval-a-initial-failed · FAILED · NEVER_ACTIVE/));
+    await user.click(failed[1]);
     expect(screen.getByText(/No earlier approval \(initial attempt\)/)).toBeInTheDocument();
-    await user.click(screen.getByText(/approval-a-change-pending · CHANGE_PENDING · NEVER_ACTIVE/));
-    const pendingSnapshot = screen.getByText(/approval-a-change-pending · CHANGE_PENDING · NEVER_ACTIVE/).closest("details");
+    await user.click(screen.getByText(/change pending · never active/));
+    const pendingSnapshot = screen.getByText(/change pending · never active/).closest("details");
     expect(pendingSnapshot).not.toBeNull();
     expect(pendingSnapshot?.querySelector("dl")).toHaveTextContent("Not yet checked");
     expect(pendingSnapshot?.querySelector("dl")).toHaveTextContent("Not applied (never active)");
@@ -338,7 +355,7 @@ describe("direct account records", () => {
     mocks.adopt.mockResolvedValue(adopted);
     const onChange = vi.fn();
     render(<AgentContext record={context} onChange={onChange} onClose={vi.fn()} />);
-    expect(screen.getByText(/SUGGESTED/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Suggested/).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "Adopt suggestion" }));
     expect(mocks.adopt).toHaveBeenCalledWith("agent-a", 1, "lesson-1");
     expect(onChange).toHaveBeenCalledWith(adopted);
@@ -411,6 +428,19 @@ describe("direct account records", () => {
     expect(window.location.hash).toBe("#/research/intake-record-id?source=source-record-id");
   });
 
+  it("keeps the raw type of an unsupported source in Details", async () => {
+    const context: AgentContextRecord = { owner_id: "owner-a", agent_id: "agent-a", memory_version: 3, state: "ACTIVE", entries: [
+      { context_id: "lesson-other", kind: "LESSON", status: "ADOPTED", text: "Other source.", source_refs: ["other-source-id"] },
+    ] };
+    mocks.resolveSource.mockResolvedValueOnce({ source_record_id: "other-source-id", source_record_type: "ExoticRecord",
+      destination_type: "UNSUPPORTED", destination_record_id: null });
+    const user = userEvent.setup();
+    render(<AgentContext record={context} onChange={vi.fn()} onClose={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Open source record" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("no detail view");
+    expect(screen.getByText(/source type ExoticRecord/).closest("details")).not.toBeNull();
+  });
+
   it("keeps saved context visible when a source cannot be owner-verified", async () => {
     const context: AgentContextRecord = { owner_id: "owner-a", agent_id: "agent-a", memory_version: 3, state: "ACTIVE", entries: [
       { context_id: "lesson-private", kind: "LESSON", status: "ADOPTED", text: "Saved context remains unchanged.", source_refs: ["foreign-source-id"] },
@@ -445,8 +475,8 @@ describe("direct account records", () => {
     mocks.load.mockResolvedValue({ records: [], next_offset: null });
     mocks.getAccountView.mockResolvedValue(action);
     render(<AccountViews initialView="Positions" sourceRecordId="action-source-id" />);
-    expect(await screen.findByText(/action-source-1 · SUBMISSION_UNKNOWN/)).toBeInTheDocument();
-    expect(screen.getByText("Wallet actions whose flow is not loaded")).toBeInTheDocument();
+    expect(await screen.findByText(/action-source-1 · Outcome unknown/)).toBeInTheDocument();
+    expect(screen.getByText("Wallet actions with no loaded deposit or withdrawal")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Funds" })).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -483,7 +513,7 @@ describe("direct account records", () => {
 
     const exactSource = await screen.findByRole("region", { name: "Exact source action" });
     expect(exactSource).toContainElement(document.getElementById(`record-${ownedSale.record_id}`));
-    expect(exactSource).toHaveTextContent("The owner-matched parent position is unavailable");
+    expect(exactSource).toHaveTextContent("The matching parent position is unavailable");
     expect(screen.queryByText(/position-a-1 · monad:143\/asset:MOE · OPEN/)).toBeNull();
     expect(document.getElementById(`record-${foreignPosition.record_id}`)).toBeNull();
   });
@@ -497,8 +527,8 @@ describe("direct account records", () => {
     mocks.load.mockResolvedValue({ records: [], next_offset: null });
     mocks.getAccountView.mockResolvedValue(action);
     render(<AccountViews initialView="Positions" sourceRecordId="action-source-id" />);
-    expect(await screen.findByText(/action-source-1 · SUBMISSION_UNKNOWN/)).toBeInTheDocument();
-    expect(screen.getByText("Wallet actions whose flow is not loaded")).toBeInTheDocument();
+    expect(await screen.findByText(/action-source-1 · Outcome unknown/)).toBeInTheDocument();
+    expect(screen.getByText("Wallet actions with no loaded deposit or withdrawal")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Funds" })).toHaveAttribute("aria-pressed", "true");
   });
 

@@ -2341,10 +2341,12 @@ def test_a_deeply_nested_result_at_the_size_limit_is_read_inside_the_deadline_or
 
 
 def test_the_result_budget_covers_parsing_and_freeing_at_the_worst_measured_rate() -> None:
-    """Round 23 measured up to 0.06 s per MiB to parse deeply nested lists under load, and freeing them costs about as
-    much. Both happen in the turn, so the time that admits a result of the largest size must cover both."""
+    """A 256 KiB invalid nested result measured 0.363 s to parse inside the test process under load on 2026-10-22; the
+    scan and the mapping after it add a little. The time that admits a result of the largest size must cover the
+    measured worst with the same factor of two."""
     import guarded_docker_runner as module
-    worst_seconds = 2 * 0.06 * module.MAX_RESULT_BYTES / (1024 * 1024)
+    measured_bytes = 256 * 1024
+    worst_seconds = 0.363 * module.MAX_RESULT_BYTES / measured_bytes
     admitted = module.RESULT_MIN_SECONDS + module.MAX_RESULT_BYTES * module.RESULT_SECONDS_PER_BYTE
     assert admitted >= 2 * worst_seconds, (admitted, worst_seconds)  # twice the worst, as the constant's comment says
 
@@ -3685,3 +3687,63 @@ def test_a_job_entry_keeps_its_own_copy_of_the_files_and_settings_it_was_given(t
     assert not any("/opt/p05job/b.py" in part for part in argv)
     [job_input] = (tmp_path / "evidence").glob("turn-01-*/input.json")
     assert _json.loads(job_input.read_text())["job_settings"] == {"route": {"id": "a"}}
+
+
+# --- The per-call output limit (ORBIO_CREDIT_DESIGN 2b) ----------------------------------------------------------------
+
+def _stub_runs(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    StubProcess.timeout, StubProcess.returncode, StubProcess.explode = False, 3, False
+    StubProcess.stdout = b"stdout"
+    real_popen, runs = subprocess.Popen, []
+
+    def popen(argv, **kwargs):
+        if argv[:2] == ["docker", "run"]:
+            runs.append(argv)
+            return StubProcess(argv, **kwargs)
+        return real_popen(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    return runs
+
+
+def _job_input(tmp_path: Path) -> dict:
+    import json
+    [path] = tmp_path.glob("evidence/turn-*/input.json")
+    return json.loads(path.read_text())
+
+
+def test_the_job_guard_enforces_the_turns_own_lowered_output_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import asdict, replace
+    runs = _stub_runs(monkeypatch)
+    runner = GuardedDockerTurnRunner(image="unused", run_id="limit-test", evidence_dir=tmp_path / "evidence", policy=POLICY,
+                                     script_for=lambda turn: {}, timeout_seconds=60)
+
+    runner.run_turn(replace(TURN, max_output_tokens=1880))
+
+    job = _job_input(tmp_path)
+    assert len(runs) == 1 and job["max_output_tokens"] == 1880
+    assert job["guard"]["policy"] == {**asdict(POLICY), "max_output_tokens": 1880, "required_extra": {}}
+
+
+def test_a_turn_at_the_policy_limit_gives_the_job_exactly_the_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import asdict
+    _stub_runs(monkeypatch)
+    runner = GuardedDockerTurnRunner(image="unused", run_id="limit-test", evidence_dir=tmp_path / "evidence", policy=POLICY,
+                                     script_for=lambda turn: {}, timeout_seconds=60)
+    runner.run_turn(TURN)
+    assert _job_input(tmp_path)["guard"]["policy"] == {**asdict(POLICY), "required_extra": {}}
+
+
+@pytest.mark.parametrize("limit", [4097, 0, -1, True])
+def test_a_turn_outside_one_to_the_policy_limit_is_refused_before_any_launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                                             limit: int) -> None:
+    from dataclasses import replace
+    runs = _stub_runs(monkeypatch)
+    runner = GuardedDockerTurnRunner(image="unused", run_id="limit-test", evidence_dir=tmp_path / "evidence", policy=POLICY,
+                                     script_for=lambda turn: {}, timeout_seconds=60)
+
+    result = runner.run_turn(replace(TURN, max_output_tokens=limit))
+
+    assert (result.status, result.request_count, result.error_class) == ("PROVIDER_FAILED", 0, "RequestNotAdmitted")
+    assert result.observed["guard_admitted"] == 0 and runs == [] and runner.turn_count == 0
+    assert list(tmp_path.glob("evidence/turn-*")) == []

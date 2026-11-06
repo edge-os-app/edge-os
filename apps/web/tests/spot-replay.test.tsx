@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError } from "../lib/api";
+import { ApiError, type DatasetSummary } from "../lib/api";
 import { ReplayResult } from "../components/ReplayResult";
 import { SpotReplayPanel } from "../components/SpotReplayPanel";
 import type { SpotReplayRecord, SpotReplayDependency } from "../lib/types";
@@ -80,7 +80,7 @@ describe("P13 spot replay", () => {
     };
     render(<ReplayResult replay={saved as SpotReplayRecord} />);
 
-    expect(screen.getByRole("heading", { name: "Simulated replay summary" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Replay summary" })).toBeInTheDocument();
     expect(screen.getByText("-100 quote")).toBeInTheDocument();
     expect(screen.getByText("1 completed trade pair")).toBeInTheDocument();
     expect(screen.getByText("200 quote")).toBeInTheDocument();
@@ -91,7 +91,7 @@ describe("P13 spot replay", () => {
     expect(within(sampleList).getByText("LATE_INPUT")).toBeInTheDocument();
     const chart = screen.getByRole("img", { name: /account balance in quote over the replay window/i });
     expect(chart.querySelectorAll("polyline")).toHaveLength(2);
-    expect(screen.getByRole("heading", { name: "Simulated replay summary" }).compareDocumentPosition(screen.getByTestId("spot-replay-saved-inputs")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Replay summary" }).compareDocumentPosition(screen.getByTestId("spot-replay-saved-inputs")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("keeps exact finite quote values readable when they exceed the chart plotting range", () => {
@@ -214,7 +214,8 @@ describe("P13 spot replay", () => {
     await user.click(screen.getByRole("button", { name: "Load saved replay" }));
 
     expect(await screen.findByRole("heading", { name: "Saved replay: unavailable" })).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent(reasonCode);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(document.body).toHaveTextContent(reasonCode);
     expect(screen.getByTestId("spot-replay-saved-inputs")).toHaveTextContent(expectedText);
     expect(mocks.create).not.toHaveBeenCalled();
   });
@@ -240,14 +241,16 @@ describe("P13 spot replay", () => {
       cost_assumptions: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" } } as never}
       strategyId="strategy-1" strategyRevisionId="22222222-2222-4222-8222-222222222222" />);
 
-    expect(screen.getByText(/authored synthetic fixture/)).toBeInTheDocument();
+    expect(screen.getByText(/example price data/)).toBeInTheDocument();
     expect(screen.getByText(/Fills are assumptions/)).toBeInTheDocument();
     expect(screen.getByText("1000. This fixed amount will be used for a new run.")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Add entry dependency" }));
-    await user.click(screen.getByRole("button", { name: "Add exit dependency" }));
-    await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry dependency set" }));
-    await user.click(screen.getByRole("checkbox", { name: "I reviewed the exit dependency set" }));
-    await user.click(screen.getByRole("button", { name: "Save synthetic replay" }));
+    expect(screen.getByText("Example data only")).toBeInTheDocument();
+    expect(screen.getByText("p13.wc01/1 · synthetic only").closest("details")).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Add an input for entry" }));
+    await user.click(screen.getByRole("button", { name: "Add an input for exit" }));
+    await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry inputs" }));
+    await user.click(screen.getByRole("checkbox", { name: "I reviewed the exit inputs" }));
+    await user.click(screen.getByRole("button", { name: "Replay on example data" }));
 
     expect(await screen.findByTestId("spot-replay-result")).toHaveTextContent("complete");
     expect(mocks.create).toHaveBeenCalledOnce();
@@ -270,7 +273,7 @@ describe("P13 spot replay", () => {
     expect(screen.getByTestId("spot-replay-saved-inputs")).toHaveTextContent("saved-cost-source-9");
     expect(screen.getByTestId("spot-replay-saved-inputs")).toHaveTextContent("price@0, price@-3");
     expect(screen.getByTestId("spot-replay-saved-inputs")).toHaveTextContent("price@0, price@-1");
-    expect(screen.getByText("New run settings (editable)")).toBeInTheDocument();
+    expect(screen.getByText("New replay settings (editable)")).toBeInTheDocument();
     expect(mocks.create).toHaveBeenCalledOnce();
   });
 
@@ -280,17 +283,17 @@ describe("P13 spot replay", () => {
     render(<SpotReplayPanel strategy={{ strategy_id: "strategy-1", data_inputs: ["price"], sizing: { amount: "100", unit: "QUOTE:WMON" }, warmup_buckets: 3,
       cost_assumptions: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" } } as never}
       strategyId="strategy-1" strategyRevisionId="22222222-2222-4222-8222-222222222222" />);
-    await user.click(screen.getByRole("button", { name: "Add entry dependency" }));
+    await user.click(screen.getByRole("button", { name: "Add an input for entry" }));
     const offset = screen.getByRole("spinbutton", { name: "entry dependency offset 1" });
     await user.clear(offset); await user.type(offset, "1");
-    await user.click(screen.getByRole("button", { name: "Add exit dependency" }));
-    await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry dependency set" }));
-    await user.click(screen.getByRole("checkbox", { name: "I reviewed the exit dependency set" }));
-    await user.click(screen.getByRole("button", { name: "Save synthetic replay" }));
+    await user.click(screen.getByRole("button", { name: "Add an input for exit" }));
+    await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry inputs" }));
+    await user.click(screen.getByRole("checkbox", { name: "I reviewed the exit inputs" }));
+    await user.click(screen.getByRole("button", { name: "Replay on example data" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Correct the entry offset.");
-    expect(screen.getByRole("button", { name: "Save synthetic replay" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Replay on example data" })).toBeInTheDocument();
     await user.clear(offset); await user.type(offset, "0");
-    await user.click(screen.getByRole("button", { name: "Save synthetic replay" }));
+    await user.click(screen.getByRole("button", { name: "Replay on example data" }));
     await screen.findByTestId("spot-replay-result");
     expect(mocks.create).toHaveBeenCalledTimes(2);
     expect(mocks.create.mock.calls[0][0].essential_fields.entry.essential_dependencies[0].offset_buckets).toBe(1);
@@ -304,15 +307,15 @@ describe("P13 spot replay", () => {
     render(<SpotReplayPanel strategy={{ strategy_id: "strategy-1", data_inputs: ["price"], sizing: { amount: "100", unit: "QUOTE:WMON" }, warmup_buckets: 3,
       cost_assumptions: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" } } as never}
       strategyId="strategy-1" strategyRevisionId="22222222-2222-4222-8222-222222222222" />);
-    await user.click(screen.getByRole("button", { name: "Add entry dependency" }));
+    await user.click(screen.getByRole("button", { name: "Add an input for entry" }));
     const offset = screen.getByRole("spinbutton", { name: "entry dependency offset 1" });
-    await user.click(screen.getByRole("button", { name: "Add exit dependency" }));
-    await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry dependency set" }));
-    await user.click(screen.getByRole("checkbox", { name: "I reviewed the exit dependency set" }));
-    await user.click(screen.getByRole("button", { name: "Save synthetic replay" }));
-    expect(await screen.findByRole("button", { name: "Retry same replay" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add an input for exit" }));
+    await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry inputs" }));
+    await user.click(screen.getByRole("checkbox", { name: "I reviewed the exit inputs" }));
+    await user.click(screen.getByRole("button", { name: "Replay on example data" }));
+    expect(await screen.findByRole("button", { name: "Retry the same replay" })).toBeInTheDocument();
     await user.clear(offset); await user.type(offset, "-2");
-    await user.click(screen.getByRole("button", { name: "Retry same replay" }));
+    await user.click(screen.getByRole("button", { name: "Retry the same replay" }));
     await screen.findByTestId("spot-replay-result");
     expect(mocks.create).toHaveBeenCalledTimes(2);
     expect(mocks.create.mock.calls[1][0]).toEqual(mocks.create.mock.calls[0][0]);
@@ -328,22 +331,22 @@ describe("P13 spot replay", () => {
     render(<SpotReplayPanel strategy={{ strategy_id: "strategy-1", data_inputs: ["price"], sizing: { amount: "100", unit: "QUOTE:WMON" }, warmup_buckets: 3,
       cost_assumptions: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" } } as never}
       strategyId="strategy-1" strategyRevisionId="22222222-2222-4222-8222-222222222222" />);
-    await user.click(screen.getByRole("button", { name: "Add entry dependency" }));
-    await user.click(screen.getByRole("button", { name: "Add exit dependency" }));
-    await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry dependency set" }));
-    await user.click(screen.getByRole("checkbox", { name: "I reviewed the exit dependency set" }));
-    await user.click(screen.getByRole("button", { name: "Save synthetic replay" }));
-    expect(await screen.findByRole("button", { name: "Retry same replay" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add an input for entry" }));
+    await user.click(screen.getByRole("button", { name: "Add an input for exit" }));
+    await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry inputs" }));
+    await user.click(screen.getByRole("checkbox", { name: "I reviewed the exit inputs" }));
+    await user.click(screen.getByRole("button", { name: "Replay on example data" }));
+    expect(await screen.findByRole("button", { name: "Retry the same replay" })).toBeInTheDocument();
     const uncertainBody = mocks.create.mock.calls[0][0];
 
     await user.type(screen.getByRole("textbox", { name: "Saved replay ID" }), unrelated.replay_id);
     await user.click(screen.getByRole("button", { name: "Load saved replay" }));
     expect(await screen.findByTestId("spot-replay-id")).toHaveTextContent(unrelated.replay_id);
-    expect(screen.queryByRole("button", { name: "Retry same replay" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry the same replay" })).toBeInTheDocument();
     expect(screen.getByText(/uncertain outcome/)).toBeInTheDocument();
     expect(screen.getByText("Loaded the exact saved result. The replay did not run again.")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Retry same replay" }));
+    await user.click(screen.getByRole("button", { name: "Retry the same replay" }));
     await waitFor(() => expect(screen.getByTestId("spot-replay-id")).toHaveTextContent(committed.replay_id));
     expect(mocks.get).toHaveBeenCalledWith(unrelated.replay_id);
     expect(mocks.create).toHaveBeenCalledTimes(2);
@@ -352,7 +355,7 @@ describe("P13 spot replay", () => {
 });
 
 
-describe("RG05 replay on a saved recorded-history dataset", () => {
+describe("RG05 replay on a saved recorded history", () => {
   const dataset = { dataset_id: "d0000000-0000-4000-8000-000000000001", source_id: "recorded-syn-qualified/1",
     evidence_class: "RECORDED_RESPONSE", content_label: "SYNTHETIC_FIXTURE", binding_state: "QUALIFIED_BINDING",
     verdict: { overall: "QUALIFIED" }, window_start: "2026-09-25T10:00:00Z", window_end: "2026-09-25T12:00:00Z",
@@ -368,11 +371,11 @@ describe("RG05 replay on a saved recorded-history dataset", () => {
     await user.selectOptions(screen.getByLabelText("Price data"), dataset.dataset_id);
     expect(screen.getByTestId("spot-replay-history-source")).toHaveTextContent("Simulated fills");
     expect(screen.getByLabelText("Window start (UTC)")).toHaveValue("2026-09-25T10:20:00Z");
-    expect(screen.getByLabelText("Window end (UTC, exclusive)")).toHaveValue("2026-09-25T11:00:00Z"); // protected after 11:00
+    expect(screen.getByLabelText("End (UTC, not included)")).toHaveValue("2026-09-25T11:00:00Z"); // protected after 11:00
     expect(screen.getByTestId("spot-replay-history-source")).toHaveTextContent("Data after 2026-09-25T11:00:00Z is protected");
-    await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry dependency set" }));
-    await user.click(screen.getByRole("checkbox", { name: "I reviewed the exit dependency set" }));
-    await user.click(screen.getByRole("button", { name: "Save replay on recorded history" }));
+    await user.click(screen.getByRole("checkbox", { name: "I reviewed the entry inputs" }));
+    await user.click(screen.getByRole("checkbox", { name: "I reviewed the exit inputs" }));
+    await user.click(screen.getByRole("button", { name: "Replay on saved history" }));
     const body = mocks.create.mock.calls[0][0];
     expect(body.history_dataset_id).toBe(dataset.dataset_id);
     expect("dataset_fixture_id" in body).toBe(false);
@@ -387,7 +390,7 @@ describe("RG05 replay on a saved recorded-history dataset", () => {
       dataset_content_sha256: "h".repeat(64) };
     render(<ReplayResult replay={saved as SpotReplayRecord} />);
     expect(screen.getByTestId("spot-replay-history-lineage")).toHaveTextContent("decl-1");
-    expect(screen.getByText(/Simulated fills on saved recorded-history dataset/)).toBeInTheDocument();
+    expect(screen.getByTestId("spot-replay-result")).toHaveTextContent(/Simulated fills on saved recorded history/);
     expect(screen.getByTestId("spot-replay-saved-binding")).toHaveTextContent("not required for this synthetic recorded dataset");
   });
 
@@ -411,7 +414,22 @@ describe("RG05 replay on a saved recorded-history dataset", () => {
     expect(list).toHaveTextContent(blocked.dataset_id);
     expect(list).toHaveTextContent("Payload binding: INCOMPLETE (BINDING_EVENT_MISSING)");
     await user.selectOptions(screen.getByLabelText("Price data"), passing.dataset_id);
-    expect(screen.getByTestId("spot-replay-history-binding")).toHaveTextContent("Payload binding: PASS against the SYNTHETIC handoff");
+    expect(screen.getByTestId("spot-replay-history-binding")).toHaveTextContent("matches the recorded delivery");
+  });
+
+  it("does not tell the user to avoid usable data that needs no delivery check", async () => {
+    const user = userEvent.setup();
+    const unbound = { ...dataset, dataset_id: "d0000000-0000-4000-8000-000000000004", source_id: "recorded-unbound/1",
+      payload_binding: bindingState("NOT_REQUIRED", null) };
+    mocks.datasets.mockResolvedValue({ datasets: [unbound] });
+    render(<SpotReplayPanel strategy={{ strategy_id: "strategy-1", data_inputs: ["price"], sizing: { amount: "50", unit: "QUOTE:0xbb" }, warmup_buckets: 3,
+      cost_assumptions: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" } } as never}
+      strategyId="strategy-1" strategyRevisionId="22222222-2222-4222-8222-222222222222" />);
+    await screen.findByRole("option", { name: /recorded-unbound/ });
+    await user.selectOptions(screen.getByLabelText("Price data"), unbound.dataset_id);
+    const line = screen.getByTestId("spot-replay-history-binding");
+    expect(line).toHaveTextContent("needs no delivery check");
+    expect(line).not.toHaveTextContent("Do not use");
   });
 
   it("reopens a saved replay with its saved binding lineage and profile identity", () => {
@@ -423,8 +441,191 @@ describe("RG05 replay on a saved recorded-history dataset", () => {
       dataset_content_sha256: "h".repeat(64), payload_binding: { status: "PASS", required_by: "RELEASE_BINDING",
         evidence_class: "SYNTHETIC", handoff_sha256: "e".repeat(64), report_sha256: "9".repeat(64), checker_sha256: "1".repeat(64) } };
     render(<ReplayResult replay={saved as SpotReplayRecord} />);
-    expect(screen.getByTestId("spot-replay-saved-binding")).toHaveTextContent(
-      `Payload binding: PASS against the SYNTHETIC handoff ${"e".repeat(64)}; report ${"9".repeat(64)}.`);
+    expect(screen.getByTestId("spot-replay-saved-binding")).toHaveTextContent("PASS against the SYNTHETIC handoff");
+    expect(document.body).toHaveTextContent(`${"e".repeat(64)}`);
+    expect(document.body).toHaveTextContent(`${"9".repeat(64)}`);
     expect(screen.getByTestId("spot-replay-saved-profile")).toHaveTextContent(`p12.spot-replay/1 · ${"p".repeat(64)}`);
+  });
+});
+
+describe("RG05 replay source-aware labels", () => {
+  const passingBinding = { status: "PASS", required_by: "RELEASE_BINDING", reason: null, evidence_class: "SYNTHETIC",
+    handoff_sha256: "e".repeat(64), report_sha256: "9".repeat(64), checker_sha256: "1".repeat(64),
+    claim_limit: "Payload binding only." };
+
+  // Complete saved-dataset summaries shaped like history_dataset.list_datasets, so each fixture matches the producer
+  // the panel consumes. The actual-class values are synthetic test inputs, never live provider data.
+  const summary = (overrides: Partial<DatasetSummary>): DatasetSummary => ({
+    dataset_id: "d0000000-0000-4000-8000-000000000000", created_at: "2026-09-25T09:00:00Z",
+    content_sha256: "h".repeat(64), hashes_verified: { normalized: true, collection: true },
+    quote_unit: "QUOTE:0xbb", source_id: "recorded-syn-qualified/1", evidence_class: "RECORDED_RESPONSE",
+    content_label: "SYNTHETIC_FIXTURE", profile_evidence_class: "SYNTHETIC_FIXTURE", status: "COMPLETE",
+    verdict: { overall: "QUALIFIED" }, binding_state: "QUALIFIED_BINDING", unavailable_states: [],
+    market_binding: { quote_unit: "QUOTE:0xbb" }, market_binding_id: "m".repeat(64),
+    window_start: "2026-09-25T10:00:00Z", window_end: "2026-09-25T12:00:00Z",
+    declaration_id: "d0000000-0000-4000-8000-0000000000d1", job_id: "j0000000-0000-4000-8000-0000000000a1",
+    readable_until: "2026-09-25T11:00:00Z",
+    declared_rules: [{ evaluation_id: "e0000000-0000-4000-8000-0000000000e1", variant_id: "v1",
+      price_expression: { kind: "close" }, volume_expression: { kind: "quote_volume" } }],
+    ...overrides,
+  });
+  const recordedDataset = summary({ dataset_id: "d0000000-0000-4000-8000-000000000001" });
+  const actualDataset = summary({ dataset_id: "d0000000-0000-4000-8000-0000000000a1",
+    source_id: "actual-provider-history/1", evidence_class: "PROVIDER_ACTUAL", content_label: "PROVIDER_ACTUAL",
+    profile_evidence_class: "PROVIDER_ACTUAL" });
+  const unknownDataset = summary({ dataset_id: "d0000000-0000-4000-8000-0000000000b1",
+    source_id: "experimental-origin/1", evidence_class: "EXPERIMENTAL_LABEL", content_label: "UNRECOGNIZED",
+    profile_evidence_class: "EXPERIMENTAL_LABEL" });
+
+  // The saved notice matches the saved class, like saved_runs.notice_for. The unknown case is an intentional
+  // unsupported input; its notice names no provenance.
+  const historyNotice = (cls: string) => cls === "PROVIDER_ACTUAL"
+    ? "Hypothetical simulated fills on saved provider history. No gas, spread, additional impact, or capacity model. No statistical support or profitability is claimed. No trading permission."
+    : cls === "EXPERIMENTAL_LABEL"
+    ? "Simulated fills on a saved dataset with an unrecognized evidence class. No gas, spread, additional impact, or capacity model. No trading permission."
+    : "Simulated fills on a saved recorded history. Synthetic recorded responses, not observed market history. No gas, spread, additional impact, or capacity model. No trading permission.";
+
+  // The saved history lineage, shaped like history_inputs.snapshot.
+  const lineage = (dataset: DatasetSummary) => ({
+    schema_version: "edge-os.history-replay-input/1", dataset_id: dataset.dataset_id,
+    dataset_content_sha256: dataset.content_sha256, normalized_sha256: "n".repeat(64),
+    collection_sha256: "o".repeat(64), declaration_id: dataset.declaration_id, job_id: dataset.job_id,
+    source_id: dataset.source_id, source_evidence_class: dataset.evidence_class,
+    content_label: dataset.content_label, profile_evidence_class: dataset.profile_evidence_class,
+    verdict: dataset.verdict, status: dataset.status, binding_state: dataset.binding_state,
+    dataset_market_binding_id: dataset.market_binding_id, strategy_market_binding_id: "s".repeat(64),
+    window_start: dataset.window_start, window_end: dataset.window_end,
+    rule_linkage: { state: "ENTRY_IS_DECLARED_RULE", evaluation_id: dataset.declared_rules[0].evaluation_id,
+      rule_map_sha256: "r".repeat(64) },
+    fill_label: "simulated fills",
+    fill_assumptions: { price: "bucket close of the decision bucket",
+      costs: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" },
+      not_modeled: ["gas", "spread", "extra price impact", "capacity"] },
+    payload_binding: passingBinding,
+  });
+
+  // A complete saved history run shaped like saved_runs._history_run: no fixture-only input, a full lineage and a
+  // notice that matches the saved class.
+  function savedHistoryRun(dataset: DatasetSummary, resultClass: string): any {
+    const saved = JSON.parse(JSON.stringify(replay)) as any;
+    saved.content.inputs = {
+      profile_version: "p12.spot-replay/1", strategy_revision_id: "saved-revision-9", strategy_id: "strategy-1",
+      strategy_sha256: "c".repeat(64), run_configuration_id: "saved-config-9", dataset_fixture_id: null,
+      history_input: lineage(dataset), dataset_revision_id: dataset.dataset_id,
+      dataset_qualification: dataset.verdict.overall, coverage_complete: true,
+      evidence_class: dataset.profile_evidence_class, profile_sha256: "p".repeat(64),
+      market_binding_id: dataset.market_binding_id, window_start: dataset.window_start, window_end: dataset.window_end,
+      initial_cash_quote: "1250", initial_base_amount: "0", initial_basis_quote: "0",
+      strategy: { sizing: { amount: "250", unit: "QUOTE:WMON" }, warmup_buckets: 3,
+        cost_assumptions: { fee_rate: "0.002", slippage_rate: "0.001", source_ref: "saved-cost-source-9" } },
+      essential_evidence: { fields: {
+        entry: { state: "BOUND", essential_dependencies: [{ series: "price", offset_buckets: 0 }] },
+        exit: { state: "BOUND", essential_dependencies: [{ series: "price", offset_buckets: 0 }] } } },
+    };
+    saved.content.result.evidence_class = resultClass;
+    saved.content.notice = historyNotice(resultClass);
+    return saved;
+  }
+
+  function panel() {
+    return render(<SpotReplayPanel strategy={{ strategy_id: "strategy-1", data_inputs: ["price"],
+      sizing: { amount: "50", unit: "QUOTE:0xbb" }, warmup_buckets: 3,
+      cost_assumptions: { source_ref: "saved-cost-profile", fee_rate: "0.001", slippage_rate: "0" } } as never}
+      strategyId="strategy-1" strategyRevisionId="22222222-2222-4222-8222-222222222222" />);
+  }
+
+  it("describes a selected provider-actual dataset as saved provider history, not synthetic", async () => {
+    const user = userEvent.setup();
+    mocks.datasets.mockResolvedValue({ datasets: [{ ...actualDataset, payload_binding: passingBinding }] });
+    panel();
+    await screen.findByRole("option", { name: /actual-provider-history/ });
+    await user.selectOptions(screen.getByLabelText("Price data"), actualDataset.dataset_id);
+
+    const source = screen.getByTestId("spot-replay-history-source");
+    expect(source).toHaveTextContent("saved provider history");
+    expect(source).not.toHaveTextContent(/synthetic recorded responses|not observed market history/i);
+    expect(source).toHaveTextContent(/Simulated fills/i);
+    expect(source).toHaveTextContent(/Data after 2026-09-25T11:00:00Z is protected/);
+  });
+
+  it("keeps a selected recorded-synthetic dataset explicitly synthetic", async () => {
+    const user = userEvent.setup();
+    mocks.datasets.mockResolvedValue({ datasets: [{ ...recordedDataset, payload_binding: passingBinding }] });
+    panel();
+    await screen.findByRole("option", { name: /recorded-syn-qualified/ });
+    await user.selectOptions(screen.getByLabelText("Price data"), recordedDataset.dataset_id);
+
+    const source = screen.getByTestId("spot-replay-history-source");
+    expect(source).toHaveTextContent("synthetic recorded responses");
+    expect(source).not.toHaveTextContent("saved provider history");
+  });
+
+  it("shows an unrecognized dataset evidence class literally without a provenance claim", async () => {
+    const user = userEvent.setup();
+    mocks.datasets.mockResolvedValue({ datasets: [{ ...unknownDataset, payload_binding: passingBinding }] });
+    panel();
+    await screen.findByRole("option", { name: /experimental-origin/ });
+    await user.selectOptions(screen.getByLabelText("Price data"), unknownDataset.dataset_id);
+
+    const source = screen.getByTestId("spot-replay-history-source");
+    expect(source).toHaveTextContent("EXPERIMENTAL_LABEL");
+    expect(source).not.toHaveTextContent(/saved provider history|synthetic recorded responses/);
+  });
+
+  it("shows the fixture window and warm-up copy only while the fixture is selected", async () => {
+    const user = userEvent.setup();
+    mocks.datasets.mockResolvedValue({ datasets: [{ ...actualDataset, payload_binding: passingBinding }] });
+    panel();
+
+    expect(screen.queryByRole("heading", { name: /synthetic/i })).toBeNull();
+    expect(screen.getByText(/example price data/)).toBeInTheDocument();
+    expect(screen.getByText(/Fills are assumptions/)).toBeInTheDocument();
+    await screen.findByRole("option", { name: /actual-provider-history/ });
+    await user.selectOptions(screen.getByLabelText("Price data"), actualDataset.dataset_id);
+
+    expect(screen.queryByText(/example price data/)).toBeNull();
+    expect(screen.getByText(/Fills are assumptions/)).toBeInTheDocument();
+  });
+
+  it("labels a saved provider-actual replay from its own saved evidence", () => {
+    render(<ReplayResult replay={savedHistoryRun(actualDataset, "PROVIDER_ACTUAL") as SpotReplayRecord} />);
+
+    const region = screen.getByTestId("spot-replay-result");
+    expect(region).toHaveTextContent("saved provider history");
+    expect(region).not.toHaveTextContent(/saved recorded history/);
+    // The saved notice and lineage must match the saved class: never the fixture's synthetic-only text or fixture id.
+    expect(region).not.toHaveTextContent(/Synthetic replay only/);
+    expect(region).not.toHaveTextContent(/p13\.wc01\/1/);
+    expect(region).toHaveTextContent(/Simulated fills on saved provider history/);
+    expect(within(region).getByText(/Hypothetical simulated fills on saved provider history/).closest("details")).toBeNull();
+  });
+
+  it("keeps a saved recorded-synthetic replay synthetic when the current catalog claims provider history", async () => {
+    const user = userEvent.setup();
+    const saved = savedHistoryRun(recordedDataset, "SYNTHETIC_FIXTURE");
+    mocks.datasets.mockResolvedValue({ datasets: [{ ...actualDataset, payload_binding: passingBinding }] });
+    mocks.get.mockResolvedValueOnce(saved as SpotReplayRecord);
+    panel();
+
+    await user.type(screen.getByRole("textbox", { name: "Saved replay ID" }), saved.replay_id);
+    await user.click(screen.getByRole("button", { name: "Load saved replay" }));
+
+    const region = await screen.findByTestId("spot-replay-result");
+    await screen.findByText(/Saved history used/);
+    expect(region).toHaveTextContent(/saved recorded history/);
+    expect(region).not.toHaveTextContent(/saved provider history/);
+    expect(region).not.toHaveTextContent(/Synthetic replay only/);
+  });
+
+  it("shows an unrecognized saved evidence class literally without promoting it", () => {
+    render(<ReplayResult replay={savedHistoryRun(unknownDataset, "EXPERIMENTAL_LABEL") as SpotReplayRecord} />);
+
+    const region = screen.getByTestId("spot-replay-result");
+    expect(region).toHaveTextContent("EXPERIMENTAL_LABEL");
+    expect(region).not.toHaveTextContent(/saved provider history/);
+    expect(region).not.toHaveTextContent(/saved recorded history/);
+    expect(within(region).getByTestId("spot-replay-unknown-class").closest("details")).toBeNull();
+    expect(within(region).getByTestId("spot-replay-unknown-class")).toHaveTextContent(
+      "This view claims neither observed history nor synthetic prices.");
   });
 });

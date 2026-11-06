@@ -10,11 +10,13 @@ from __future__ import annotations
 import subprocess
 import sys
 import uuid
+from unittest import mock
 
 from fastapi.testclient import TestClient
 from sqlalchemy.engine import make_url
 
 import harness
+from edge_os_api.core.research import released_runtime_bootstrap
 from edge_os_api.core.settings import load_settings
 from edge_os_api.main import create_app
 from research_flows import declare, start
@@ -27,7 +29,9 @@ def alembic(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]
 
 def test_dump_restore_check_and_rollback_keep_the_saved_state(env, migrated, pg, owner_a):
     research_env = {**env, "EDGE_OS_RESEARCH_HISTORY_MODE": "recorded"}
-    with TestClient(create_app(load_settings(research_env))) as client:
+    with mock.patch.dict(released_runtime_bootstrap.RELEASE_DEFINITIONS, {}, clear=True):
+        app = create_app(load_settings(research_env))
+    with TestClient(app) as client:
         intake_id, declaration_id, _ = declare(client, owner_a)
         job = start(client, owner_a, intake_id, declaration_id).json()
         budget_before = client.get("/v1/research/budget", headers=owner_a).json()
@@ -41,7 +45,9 @@ def test_dump_restore_check_and_rollback_keep_the_saved_state(env, migrated, pg,
         restored_env = {**research_env, "EDGE_OS_DATABASE_URL": url}
         check = alembic(restored_env, "check")
         assert check.returncode == 0, check.stdout + check.stderr
-        with TestClient(create_app(load_settings(restored_env))) as client:
+        with mock.patch.dict(released_runtime_bootstrap.RELEASE_DEFINITIONS, {}, clear=True):
+            app = create_app(load_settings(restored_env))
+        with TestClient(app) as client:
             assert client.get("/readyz").json()["status"] == "ready"
             assert client.get("/v1/research/budget", headers=owner_a).json() == budget_before
             assert client.get(f"/v1/research/investigation-jobs/{job['job_id']}", headers=owner_a).json()["state"] == "RESERVED"

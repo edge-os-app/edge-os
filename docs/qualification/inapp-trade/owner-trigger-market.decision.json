@@ -1,0 +1,32 @@
+{
+  "schema": "edge-os.binding-decision/1",
+  "slot": "market_proof_sha256",
+  "release_id": "actual-inapp-wmon-moe-20261022/1",
+  "consent_terms_version": "connected-one-action/1",
+  "reason_code": "NO_FORWARD_SOURCE_BUILDER_DECISION",
+  "decision_date": "2026-10-30",
+  "builder_decision_ref": {
+    "packet": "ROOT/.scratch/owner-trigger-l3-20261030/COMMON1.md",
+    "packet_sha256": "dcd8afe20ed59c282ea7ffcdc8e2136441c40a1ede7f2474da789442943a4153",
+    "answer": "ROOT/.scratch/owner-trigger-l3-20261030/root/ANSWER1.md",
+    "answer_sha256": "adc23a660796a0a8d72e7c18d27928f378b746d52c676fa8808fe7abba09786d",
+    "source": "origin/cloud/binding-proofs:docs/qualification/inapp-trade/CLOUD_BINDING_PROOFS_STATUS.md",
+    "source_commit": "794057b7bbb603fec4157d23dee29cd7a647a5c1",
+    "source_question": "Q2 option B"
+  },
+  "limits": {
+    "operation": "ENTRY",
+    "actions": 1,
+    "trigger": "OWNER",
+    "market_observation": "NOT_REQUIRED",
+    "other_releases": false,
+    "other_consents": false,
+    "recurring": false,
+    "exit": false
+  },
+  "not_claimed": [
+    "No forward market feed exists for this release.",
+    "No market rule decided this action.",
+    "No exit or recurring coverage."
+  ]
+}

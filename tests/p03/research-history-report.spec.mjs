@@ -5,7 +5,7 @@
  */
 import { test, expect } from "@playwright/test";
 import { tokens } from "./fixture-auth.mjs";
-import { apiGet, apiPost, historySection, jobsFor, noSeriousAxe, noSidewaysScroll, open, openDeclaration, record, sample, saved,
+import { apiGet, apiPost, detailValue, historySection, jobsFor, noSeriousAxe, noSidewaysScroll, open, openDeclaration, record, sample, saved,
   shot } from "./research-flow.mjs";
 
 const THESIS = "Buy when the 15-minute price return is above 1%, and exit when the 5-minute return turns negative. Spot only.";
@@ -24,9 +24,10 @@ test("reports, stopped jobs, retry, market adoption, publication and labelled re
   await expect(cards.nth(3)).toHaveAttribute("data-state", "UNAVAILABLE");
   await expect(cards.nth(3)).toContainText("not collected again");
   const report = cards.nth(0).getByTestId("history-report");
-  await expect(report).toContainText("RECORDED_RESPONSE; SYNTHETIC_FIXTURE; verdict QUALIFIED");
-  await expect(report).toContainText("significance NOT_CLAIMED; capital authority NONE");
-  await expect(report).toContainText("Not read: VALIDATION partition, HOLDOUT partition");
+  await expect(report).toContainText("recorded example responses; verdict Qualified");
+  await expect(report).toContainText("RECORDED_RESPONSE · SYNTHETIC_FIXTURE");
+  await expect(report).toContainText("significance not claimed; trading permission none");
+  await expect(report).toContainText("Not read: Validation period, Holdout period");
   const reportId = (await report.getByTestId("history-report-id").innerText()).trim();
   const datasetId = (await report.getByTestId("history-report-dataset").innerText()).trim();
   await shot(page, project, "05-report");
@@ -42,14 +43,14 @@ test("reports, stopped jobs, retry, market adoption, publication and labelled re
   await openDeclaration(section, `Provider loss case (${project})`);
   const loss = section.getByTestId("history-job").first();
   await expect(loss).toHaveAttribute("data-state", "REPORTED");
-  await expect(loss.getByTestId("history-report")).toContainText("Saved report: SOURCE_LOSS");
-  await expect(loss).toContainText("PARTIAL, LIMITED, UNAVAILABLE_LIMITED_DATA");
+  await expect(loss.getByTestId("history-report")).toContainText("Saved report: Source lost");
+  await expect(loss).toContainText("status PARTIAL · verdict LIMITED · binding UNAVAILABLE_LIMITED_DATA");
   await shot(page, project, "06-source-loss");
   if (project === "mobile-390") await noSidewaysScroll(page);
   await noSeriousAxe(page);
 
   // A strategy request: save the fixture-market revision, then adopt the recorded market as a NEW draft.
-  await page.goto("/");
+  await page.goto("/app");
   await sample(page, "Specific thesis").click();
   await page.getByRole("button", { name: "Prepare request" }).click();
   await page.getByRole("button", { name: "Adopt these settings" }).first().click();
@@ -58,14 +59,15 @@ test("reports, stopped jobs, retry, market adoption, publication and labelled re
   await expect(page.getByTestId("revision")).toContainText("Read back from the database");
   const strategyUrl = page.url();
   const strategyIntake = decodeURIComponent(strategyUrl.split("/").pop() ?? "");
-  const fixtureRevision = (await page.getByTestId("revision-id").innerText()).trim();
+  const fixtureRevision = (await page.getByTestId("revision-id").textContent()).trim();
 
   const adoption = page.getByTestId("market-adoption");
-  await adoption.getByLabel("Saved dataset").selectOption(datasetId);
+  await adoption.getByLabel("Saved data").selectOption(datasetId);
   const reviewBox = adoption.getByTestId("market-adoption-review");
   await expect(reviewBox).toContainText("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   await expect(reviewBox).toContainText("QUOTE:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-  await expect(reviewBox).toContainText("route qualification UNQUALIFIED");
+  await expect(detailValue(reviewBox, "Qualification")).toHaveText("UNQUALIFIED");
+  await expect(adoption).toContainText("Trading stays unapproved and no trading permission is granted.");
   await expect(adoption.getByLabel("Trade size in the new quote unit")).toHaveValue("");
   await expect(adoption.getByRole("button", { name: "Adopt this market for a new draft" })).toBeDisabled();
   await adoption.getByLabel("Trade size in the new quote unit").fill("50");
@@ -73,8 +75,8 @@ test("reports, stopped jobs, retry, market adoption, publication and labelled re
   await expect(adoption.getByRole("checkbox")).toBeDisabled(); // a declared entry rule and an own exit rule are required
   const declaredRule = (await apiGet(page, tokens.a, "/v1/research/history-datasets")).body.datasets
     .find((item) => item.dataset_id === datasetId).declared_rules[0];
-  await adoption.getByLabel("Entry rule (one you declared for this dataset)").selectOption(declaredRule.evaluation_id);
-  await adoption.getByLabel("Exit lookback (buckets)").fill("2");
+  await adoption.getByLabel("Entry rule (one you saved for this data)").selectOption(declaredRule.evaluation_id);
+  await adoption.getByLabel("Exit lookback (five-minute periods)").fill("2");
   await adoption.getByLabel("Exit threshold (fraction, for example -0.001)").fill("-0.001");
   await adoption.getByRole("checkbox").check();
   await shot(page, project, "07-adopt-market");
@@ -83,7 +85,7 @@ test("reports, stopped jobs, retry, market adoption, publication and labelled re
   await expect(page.getByTestId("outcome")).toHaveAttribute("data-outcome", "COMPILED");
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toContainText("Read back from the database");
-  const historyRevision = (await page.getByTestId("revision-id").innerText()).trim();
+  const historyRevision = (await page.getByTestId("revision-id").textContent()).trim();
   expect(historyRevision).not.toBe(fixtureRevision);
 
   // Simulated fills on the saved dataset, through the unchanged replay runtime.
@@ -91,22 +93,22 @@ test("reports, stopped jobs, retry, market adoption, publication and labelled re
   await replay.getByLabel("Price data").selectOption(datasetId);
   await expect(replay.getByTestId("spot-replay-history-source")).toContainText("Simulated fills");
   // The entry is the declared rule (1-bucket return and quote volume); the exit is the restated 2-bucket return.
-  for (let step = 0; step < 3; step += 1) await replay.getByRole("button", { name: "Add entry dependency" }).click();
+  for (let step = 0; step < 3; step += 1) await replay.getByRole("button", { name: "Add an input for entry" }).click();
   await replay.getByLabel("entry dependency offset 2").fill("-1");
   await replay.getByLabel("entry dependency series 3").selectOption("quote_volume");
-  await replay.getByRole("button", { name: "Add exit dependency" }).click();
-  await replay.getByRole("button", { name: "Add exit dependency" }).click();
+  await replay.getByRole("button", { name: "Add an input for exit" }).click();
+  await replay.getByRole("button", { name: "Add an input for exit" }).click();
   await replay.getByLabel("exit dependency offset 2").fill("-2");
-  await replay.getByLabel("I reviewed the entry dependency set").check();
-  await replay.getByLabel("I reviewed the exit dependency set").check();
-  await replay.getByRole("button", { name: "Save replay on recorded history" }).click();
+  await replay.getByLabel("I reviewed the entry inputs").check();
+  await replay.getByLabel("I reviewed the exit inputs").check();
+  await replay.getByRole("button", { name: "Replay on saved history" }).click();
   const result = replay.getByTestId("spot-replay-result");
   await expect(result).toContainText("Saved replay: complete");
   await expect(result).toContainText("BUY_FILLED");
-  await expect(result).toContainText("Simulated fills on saved recorded-history dataset");
+  await expect(result).toContainText("Simulated fills on saved recorded history");
   await expect(replay.getByTestId("spot-replay-history-lineage")).toContainText(run.main);
   await expect(replay.getByTestId("spot-replay-history-lineage")).toContainText(`The declared rule ${declaredRule.evaluation_id}`);
-  const replayId = (await replay.getByTestId("spot-replay-id").innerText()).trim();
+  const replayId = (await replay.getByTestId("spot-replay-id").textContent()).trim();
   await shot(page, project, "08-history-replay");
   if (project === "mobile-390") await noSidewaysScroll(page);
   await noSeriousAxe(page);

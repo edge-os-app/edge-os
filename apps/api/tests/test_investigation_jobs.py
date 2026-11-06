@@ -11,11 +11,13 @@ import math
 import datetime as dt
 import uuid
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from conftest import run_threads
+from edge_os_api.core.research import released_runtime_bootstrap
 from edge_os_api.core.settings import load_settings
 from edge_os_api.main import create_app
 from edge_os_api.research import investigation_tools
@@ -30,7 +32,10 @@ class Killed(BaseException):
 def _app(env, **overrides):
     values = {**env, "EDGE_OS_RESEARCH_HISTORY_MODE": "recorded", "EDGE_OS_RESEARCH_BUDGET_PROVIDER_REQUESTS": "64",
               "EDGE_OS_RESEARCH_BUDGET_COMPUTE_SECONDS": "3600", **overrides}
-    return TestClient(create_app(load_settings(values)))
+    # These checks prove recorded-source jobs. An approved ACTUAL release replaces the offered catalog, so this
+    # module composes no release and keeps the recorded source behavior under test.
+    with mock.patch.dict(released_runtime_bootstrap.RELEASE_DEFINITIONS, {}, clear=True):
+        return TestClient(create_app(load_settings(values)))
 
 
 @pytest.fixture(scope="module")
@@ -306,7 +311,8 @@ class _restarted:
         self._settings = client.app.state.settings
 
     def __enter__(self):
-        self._client = TestClient(create_app(self._settings))
+        with mock.patch.dict(released_runtime_bootstrap.RELEASE_DEFINITIONS, {}, clear=True):
+            self._client = TestClient(create_app(self._settings))
         return self._client.__enter__()
 
     def __exit__(self, *exc):

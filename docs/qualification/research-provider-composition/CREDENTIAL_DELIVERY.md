@@ -1,7 +1,9 @@
 # Research credential delivery
 
-Status: LOCAL composition (#58 RESEARCH-CREDENTIAL-BOOTSTRAP-L4-20261016). It approves no release, delivers no
-variable to any host process and makes no provider claim.
+Status: LOCAL composition (#58 RESEARCH-CREDENTIAL-BOOTSTRAP-L4-20261016). That milestone approved no release, delivered
+no variable to any host process and made no provider claim. Current state: exactly one Nansen-only ACTUAL release is
+registered in the code-owned default and the credential source reads a slot lazily at job preparation; no actual
+operation, credential read or public right is proved. See [NANSEN_ACTUAL_RELEASE.md](NANSEN_ACTUAL_RELEASE.md).
 
 ## Decision
 
@@ -28,11 +30,16 @@ delivery `REQUIRED_DECISION` in `CONTRACT.md` section 12 and replaces step 2 of 
 
 No dotenv or file loading, bulk environment read, export, cache, store or new setting was added.
 
-## Still empty, still separate
+## Current state
 
-- `RELEASE_DEFINITIONS` and `operating_release.APPROVED_RELEASES` stay empty. The default server composes nothing.
-- An actual release needs its reviewed definition and approved SHA-256 in a later change.
-- Giving the API and worker processes only the three selected variables under an actual operator is a later operation.
+- `RELEASE_DEFINITIONS` and `operating_release.APPROVED_RELEASES` now carry exactly one approved Nansen-only ACTUAL
+  release. The default server composes that one release and still reads no credential and opens no socket at
+  composition; a slot is read only at `prepare_history` / `prepare_nansen`. See
+  [NANSEN_ACTUAL_RELEASE.md](NANSEN_ACTUAL_RELEASE.md).
+- An actual release needed its reviewed definition and approved SHA-256 in a later change. That registration now
+  exists; no actual operation, credential read or public right follows from it.
+- Giving the API and worker processes only the three selected variables under an actual operator remains a later
+  operation.
 
 ## Proof
 
@@ -40,4 +47,6 @@ Pure, `--noconftest`, run in an empty process environment with synthetic definit
 `apps/api/tests/test_environment_runtime_bootstrap.py` (registry refusals, default and explicit sources, allowed,
 missing, blank and unknown slots, no import or composition read, no socket), the accepted reader tests in
 `apps/api/tests/test_environment_credentials.py`, and the bootstrap tests in
-`apps/api/tests/test_nansen_runtime_mount.py`.
+`apps/api/tests/test_nansen_runtime_mount.py`. The registered production default is pinned by
+`apps/api/tests/test_approved_nansen_bootstrap.py` (the exact definition, SHA-256 and request, the API and worker
+composition, lazy credential reading and the empty-registry no-effects branch).

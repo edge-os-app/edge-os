@@ -24,7 +24,7 @@ describe("the saved-requests tag follows the latest attempt's stored facts", () 
     ["attempt started, no result", { reading: facts({ last_attempt: attempt("STARTED", null) }) }, "Attempt not finished"],
     ["accepted, not saved", { reading: facts({ last_attempt: attempt("COMPLETED", "ACCEPTED") }) }, "Read, not saved yet"],
     ["provider failed, outcome saved", { outcome: "INVALID_INPUT", outcome_code: "interpreter_unavailable",
-      reading: facts({ outcome_present: true, last_covered: true, last_attempt: attempt("PROVIDER_FAILED", "NOT_PARSED") }) }, "Interpreter did not answer"],
+      reading: facts({ outcome_present: true, last_covered: true, last_attempt: attempt("PROVIDER_FAILED", "NOT_PARSED") }) }, "Research agent did not answer"],
     ["rejected, outcome saved", { outcome: "INVALID_INPUT", outcome_code: "malformed_model_output",
       reading: facts({ outcome_present: true, last_covered: true, last_attempt: attempt("COMPLETED", "REJECTED:multiple_objects") }) }, "Answer not usable"],
     ["unknown, outcome saved", { outcome: "INVALID_INPUT", outcome_code: "interpreter_outcome_unknown",
@@ -68,7 +68,7 @@ describe("the saved-requests list on the page", () => {
     render(<ResearchHome userId="u" go={vi.fn()} consumeReturn={() => null} />);
     expect(await screen.findByText("Saved, not read yet")).toBeInTheDocument();
     expect(screen.getByText("Read, not saved yet")).toBeInTheDocument();
-    expect(screen.getByText("Interpreter did not answer")).toBeInTheDocument();
+    expect(screen.getByText("Research agent did not answer")).toBeInTheDocument();
     expect(screen.queryByText("Could not be interpreted")).toBeNull();
   });
 });

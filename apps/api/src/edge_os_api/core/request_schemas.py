@@ -110,6 +110,8 @@ class SpotReplayBody(StrictModel):
     initial_base_amount: Annotated[str, StringConstraints(min_length=1, max_length=100)] = "0"
     initial_basis_quote: Annotated[str, StringConstraints(min_length=1, max_length=100)] = "0"
     essential_fields: SpotReplayEssentialFields
+    # The service resolves the exact profile strings, so a wrong type is refused at /timing_profile.
+    timing_profile: Any = None
 
     @model_validator(mode="after")
     def one_dataset(self) -> "SpotReplayBody":

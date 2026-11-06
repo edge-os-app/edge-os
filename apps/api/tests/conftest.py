@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import uuid
 from pathlib import Path
@@ -12,6 +13,11 @@ from fastapi.testclient import TestClient
 
 import harness
 from tokens import OWNER_A, OWNER_B, TestSigner
+
+# Shared history-binding helpers live in the repository-root `tests/` package and are imported as
+# `tests.<module>`. The documented `apps/api` test command must put the repository root on the path.
+if str(harness.REPO) not in sys.path:
+    sys.path.insert(0, str(harness.REPO))
 
 from edge_os_api.main import create_app
 from edge_os_api.core.settings import load_settings

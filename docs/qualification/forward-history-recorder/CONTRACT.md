@@ -6,6 +6,11 @@ Status: LOCAL implementation contract for task `FORWARD-HISTORY-RECORDER-L4-2026
 authorizes no provider, credential, chain, account, wallet or recording operation. All tests use synthetic transports,
 fake clocks and sentinel credentials.
 
+The versioned ACTUAL successor is defined in
+[ACTUAL_HISTORY_PAYLOAD_BINDING.md](../../implementation/ACTUAL_HISTORY_PAYLOAD_BINDING.md). It adds an internally owned
+`run_actual_attempt`, `/2` handoff/report and saved-data admission. The `/1` behavior described below remains unchanged;
+its artifacts stay synthetic and cannot be promoted. The successor grants no provider operation or release activation.
+
 ## Versions and predecessor
 
 | Identity | Value |
@@ -50,7 +55,7 @@ The input is one JSON object with exactly these keys. Unknown or missing keys ar
 | `expected_decimals` | `{"token0": int, "token1": int}`. |
 | `creation` | `decoder`, `transaction_hash`, `block_number`, `block_hash`, `transaction_index`, `log_index`, `factory`, `topic0`. |
 | `t0_utc` | `YYYY-MM-DDTHH:MM:SSZ` on the 300-second grid. |
-| `window_seconds`, `bucket_seconds` | `1200` and `300`. |
+| `window_seconds`, `bucket_seconds` | `1200` or `7200`, and `300`. |
 | `destinations` | `quicknode_host` (host only) and `hypersync_url` (`https://<host>/query`). |
 | `credential_slots` | Slot names for `quicknode` and `hypersync`. Values are never in the input. |
 | `output_dir` | Absolute, existing, non-symlink directory. |
@@ -79,7 +84,8 @@ event that fixed this layout is not published here.
 
 ## Schedule and calls
 
-`WE = T0 + 1200`. Bucket `i` is `[T0 + 300i, T0 + 300(i+1))`.
+`WE = T0 + window_seconds`. Bucket `i` is `[T0 + 300i, T0 + 300(i+1))`; the shape has 4 buckets for
+1200 s and 24 for 7200 s.
 
 | Phase | Calls (maximum) | Time rule |
 |---|---|---|
@@ -93,6 +99,9 @@ event that fixed this layout is not published here.
 The slot bound is enforced again at the durable admission boundary, after pacing and every clock observation. A
 call whose admission time is at or after `due+1s` is refused before its journal record. It adds no liability and no
 send, and the read is recorded `MISSED`. The reply deadline stays separate.
+
+Before each scheduled read the recorder waits until the observed UTC time reaches the due time. A timer return before
+that target does not admit the read; the recorder observes UTC again and sleeps only the positive remainder.
 
 A second P3 read is made only after a valid first reply proves insufficient coverage. A failed, rejected, missed or
 expired first read never allows it. The first read's deadline is the second event. A wake outside a slot records
@@ -142,7 +151,9 @@ closes `INCOMPLETE` with a reason, and later replies do not backfill it.
 
 `B_PRE` is the last header `< T0`; `B_START` the first `>= T0`; `B_END` the last `< WE`; `B_POST` the first `>= WE`.
 They must be adjacent. The final scan is `[B_PRE, B_POST+1)`. Every Swap log in the scan counts, including boundary-block
-logs outside the window. More than 61 adds `SCAN_LOG_COUNT_EXCEEDS_61` as weaker evidence.
+logs outside the window. More than 61 adds `SCAN_LOG_COUNT_EXCEEDS_61` as weaker evidence for 1200 s. For the 7200 s
+shape the bound is 366 (the accepted 61 scaled by six windows, about 4.0x the recorded 36-46 swaps per hour), and the
+label names that limit: `SCAN_LOG_COUNT_EXCEEDS_366`.
 
 ## Bytes, journal and private files
 
@@ -191,7 +202,7 @@ the versions, predecessor, input and recorder-code hashes, attempt and source id
 reason, network, market and pool token order, window, exact query and field selection, boundaries, scan, scan log count,
 retained header facts (in-scan log blocks and boundaries), phase outcomes, P3 reply summaries, facts (bytecode hashes
 and lengths of decoded bytes, decimals, finality, archive height, `fee_transfer_semantics=EXTERNAL_EVIDENCE_REQUIRED`),
-clock trust, call accounting, a `calls` list and exactly four buckets. Each `calls` entry has the admitted call id,
+clock trust, call accounting, a `calls` list and the shape's bucket count (4 for 1200 s, 24 for 7200 s). Each `calls` entry has the admitted call id,
 phase, slot, provider, request SHA-256 and byte count, outcome (`REPLY_RECEIVED`, `OVERSIZED_REFUSED`,
 `CREDENTIAL_INCIDENT` or `UNKNOWN`), HTTP status, and the retained reply body SHA-256 and byte count. A credential
 incident or an oversized reply keeps no body hash in the handoff.

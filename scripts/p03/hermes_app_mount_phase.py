@@ -246,7 +246,8 @@ def run_hermes_app_mount_phase(rec: Any, pg: harness.Postgres, env: dict[str, st
             current_api.stop()  # already stopped when the phase got that far; stopping again is harmless
         except Exception as error:  # noqa: BLE001
             ok &= rec.step("HERMES-MOUNT: stop the earlier API", False, f"{type(error).__name__}: {error}")
-        standard = harness.start_api(env, api_port, evidence / "logs", name="api-after-hermes-app-mount")
+        standard = harness.start_api(env, api_port, evidence / "logs", name="api-after-hermes-app-mount",
+                                     factory="harness:create_app_fixture", app_dir=harness.P03_DIR)
         processes.append(standard)  # registered before any wait, so a failed wait cannot lose the handle
         harness.wait_http(f"{api_url}/readyz")
     return bool(ok)

@@ -15,6 +15,7 @@
 !scripts/hermes_interpretation/*.py
 !scripts/hermes_job_support/
 !scripts/history_payload_binding.py
+!scripts/history_payload_binding_v2.py
 !deploy/local/public_entry.py
 !deploy/local/http_probe.py
 

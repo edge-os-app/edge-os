@@ -2,11 +2,11 @@
 
 **Ask a trading question in plain English. Find out if the idea holds before you risk money. Then let an agent trade it only inside limits you sign.**
 
-Edge OS is a research and trading app for meme-token traders on Monad. A research agent checks your idea against on-chain history and saves what it found. Rules that hold up can be replayed on past prices. When you go live, an agent with its own wallet trades on Kuru, and the wallet permission you approved decides what it may do.
+Edge OS is an operating system for trading edges. It starts with meme-token traders on Monad. A research agent checks your idea against on-chain history and saves what it found. Rules that hold up can be replayed on past prices. When you go live, an agent with its own wallet trades on Kuru, and the wallet permission you approved decides what it may do.
 
 [Pitch video](https://vimeo.com/1235649955) · [Technical demo](https://vimeo.com/1235648532) · [Live app](https://edgeos.fun)
 
-Built for the Monad hackathon, Onchain Finance & Trading track.
+First built for the Monad hackathon, Onchain Finance & Trading track.
 
 ## The problem
 
@@ -27,6 +27,8 @@ The cost is a trade on a false edge, a round trip, or a wallet emptied by a rule
 1. **It checks the idea before you trade it.** You describe a hunch, a thesis or a question about a market. A Hermes research agent asks what it needs to know, proposes a study with a fixed scope and budget, collects the data, and saves a report. The report shows supporting evidence, contrary evidence and what is missing. It is allowed to say no.
 2. **It turns an idea that holds into exact rules.** Supported rules compile into a strategy revision that cannot change after you save it. You can replay it on past prices and see trades, costs, gains, losses and drawdown, with every assumed fill labelled.
 3. **It trades only inside the limits you approve.** Each agent gets its own Privy wallet, linked to yours. You approve one strategy revision with its tokens, size, spending limit, expiry and stop rules. The agent trades on Kuru inside that permission, and you can stop it at any time. A good report or a good backtest never grants trading permission by itself.
+
+Edge OS is built on the first principles of quantitative trading. Signals stay separate from position sizing and account results. Every variant tried is kept, so a lucky result cannot hide the failed ones. Strategies compile to a typed language with exact units and rules, so the agent runs what was tested. Formal checks for overfitting and multiple testing are next on the plan.
 
 ## A walkthrough
 
@@ -124,9 +126,10 @@ Edge OS starts with one job done well: short-term momentum and reversal ideas on
 | --- | --- |
 | Hackathon release | Research agent with Envio, QuickNode and Nansen data. Saved reports that can say no. Exact strategy rules with a plain-English summary. Replay on past prices. One Privy wallet per agent. Signed trading permissions with limits, expiry and stops. Agents that trade on Kuru while you are offline. Agents, Positions and Funds views, with chat over the same records. |
 | Next | A small catalog of research add-ons you can switch on per agent. Wider data coverage and more strategy templates, guided by trader sessions. |
-| After that | Liquidity providers. The same research, rules and replay for questions about pool fees, inventory and rebalancing. Live LP management once the spot path is stable. |
+| After that | Liquidity providers. The same research, rules and replay for questions about pool fees, inventory and rebalancing. This starts as research, with no live path. |
+| Later, no dates yet | Perp traders and prediction market traders, after legal review. Strategy creators who publish or license proved strategies, and users who inspect, copy or fund them. Other chains and venues. |
 
-Edge OS will not offer copy trading, a strategy marketplace, perpetuals, cross-chain trading or any promise of profit.
+Edge OS makes no promise of profit.
 
 ## Run it locally
 

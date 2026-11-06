@@ -20,6 +20,9 @@ from provider_transport import HostRequest, TransportLost, TransportReply, Trans
 __all__ = ["ChannelTransport", "RelayRefused", "RelayReplyRefused"]
 
 POLL_SECONDS = 0.02
+# The relay runs with the shared group and writes `reply.json` into this folder. The job's default umask would make it
+# `0755`, which denies that write, so the folder is created group-writable.
+CHANNEL_FOLDER_MODE = 0o770
 
 
 class RelayRefused(RuntimeError):
@@ -44,6 +47,7 @@ class ChannelTransport:
             raise RuntimeError("one send per attempt, on this route only")
         self._sent = True
         self.folder.mkdir(exist_ok=True)
+        os.chmod(self.folder, CHANNEL_FOLDER_MODE)  # the relay's shared group writes reply.json here
         message = {"attempt_id": request.attempt_id, "route_id": request.route_id, "release_id": self.release_id,
                    "body_b64": base64.b64encode(request.body).decode()}
         temporary = self.folder / ".request.json.tmp"

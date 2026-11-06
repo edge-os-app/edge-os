@@ -21,7 +21,7 @@ ADOPT_QUESTION_ID = "adopt-suggested-settings"
 MARKET = record_contract.FIXTURE_STRATEGY["market"]
 DECLARED_MARKET = {"network": MARKET["network"], "base_asset": MARKET["research_binding"]["base_asset"],
                    "quote_asset": MARKET["research_binding"]["quote_asset"]}
-MARKET_LABEL = "Synthetic fixture market (not a real pool)"
+MARKET_LABEL = "Example market (not a real pool)"
 
 
 @dataclass(frozen=True)

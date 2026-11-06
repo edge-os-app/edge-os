@@ -29,7 +29,7 @@ async function shot(page, project, name) {
 
 async function open(page, token) {
   await injectAuth(page, token);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByTestId("fixture-banner")).toContainText("TEST AUTH FIXTURE");
 }
 
@@ -63,33 +63,34 @@ async function readyAgent(page, thesisUrl, agentId, project) {
   await setup.getByRole("link", { name: "Fund this agent" }).click();
   const funding = page.getByRole("region", { name: "Agent funding" });
   await expect(funding.getByTestId("funding-mode")).toContainText("not a wallet, a transfer or chain evidence");
-  await funding.getByRole("button", { name: "Declare trading and gas assets" }).click();
+  await funding.getByRole("button", { name: "Choose trading and gas assets" }).click();
   for (const [label, raw] of [["Trading capital", TRADING], ["Native MON gas", GAS]]) {
     await funding.getByLabel("Asset").selectOption({ label });
     await funding.getByLabel(/Amount in base units/).fill(raw);
-    await funding.getByRole("button", { name: "Save reviewed deposit" }).click();
-    await expect(funding.getByTestId("funding-flows")).toContainText(`PENDING`);
+    await funding.getByRole("button", { name: "Save deposit plan" }).click();
+    await expect(funding.getByTestId("funding-flows")).toContainText("Pending");
   }
   await funding.getByRole("button", { name: "Check deposits" }).click();
   await expect(funding.getByTestId("funding-credited")).toContainText("1000 credited");
   await expect(funding.getByTestId("funding-holdings")).toContainText("SYNTHETIC_FIXTURE");
   await noSidewaysScroll(page);
 
-  await page.goto(`/#/agents?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/agents?agent=${encodeURIComponent(agentId)}`);
   const authority = page.getByRole("region", { name: "Agent authority" });
   await authority.getByRole("button", { name: "Review exact terms" }).click();
-  await expect(authority.getByTestId("consent-review")).toContainText("Review hash");
+  await expect(authority.getByTestId("consent-review")).toContainText("review hash");
   await authority.getByRole("button", { name: "Adopt these exact terms (inactive)" }).click();
-  await expect(authority.getByTestId("consent-adopted")).toContainText("status INACTIVE");
-  await expect(authority.getByTestId("activation-state")).toContainText("SYNTHETIC_FIXTURE_QUALIFICATION");
+  await expect(authority.getByTestId("consent-adopted")).toContainText("status inactive");
+  await expect(authority.getByTestId("activation-state")).toContainText("Example qualification (example data (not real)). Example actions can run under these exact terms; this is not live authority.");
+  await expect(authority.getByTestId("activation-state").locator("xpath=following-sibling::details[1]")).toContainText("SYNTHETIC_FIXTURE_QUALIFICATION");
   await shot(page, project, `${agentId}-authority`);
   await noSidewaysScroll(page);
 }
 
 async function runOnce(page, agentId) {
-  await page.goto(`/#/positions?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/positions?agent=${encodeURIComponent(agentId)}`);
   const actions = page.getByRole("region", { name: "Agent actions" });
-  await actions.getByRole("button", { name: "Run one bounded evaluation" }).click();
+  await actions.getByRole("button", { name: "Run one check" }).click();
   await expect(actions.getByRole("status").filter({ hasText: "Evaluation saved" })).toBeVisible();
   return actions;
 }
@@ -116,7 +117,7 @@ test("bounded fixture action: wallet, funding, exact terms, decision, receipt an
   await waitForJob(actions, "SUBMITTED_CONFIRMED");
   await actions.getByRole("button", { name: /Open action/ }).first().click();
   const lineage = actions.getByTestId("action-lineage");
-  await expect(lineage.getByTestId("action-receipts")).toHaveText("CONFIRMED");
+  await expect(lineage.getByTestId("action-receipts")).toHaveText("Confirmed");
   await expect(lineage).toContainText("FIXTURE_TRANSPORT_SIGNS_NOTHING");
   await expect(actions.getByTestId("actions-positions")).toContainText("50 base units held");
   const actionId = (await lineage.getByRole("heading", { level: 3 }).innerText()).replace("Action ", "").trim();
@@ -126,9 +127,9 @@ test("bounded fixture action: wallet, funding, exact terms, decision, receipt an
 
   // Removal: requested denies at once; the residual position and owner access stay.
   await actions.getByRole("button", { name: "Request removal" }).click();
-  await expect(actions.getByTestId("actions-removal")).toContainText("Removal REQUESTED");
+  await expect(actions.getByTestId("actions-removal")).toContainText("Removal Requested");
   await actions.getByRole("button", { name: "Check removal status" }).click();
-  await expect(actions.getByTestId("actions-removal")).toContainText("Removal CONFIRMED");
+  await expect(actions.getByTestId("actions-removal")).toContainText("Removal Confirmed");
   await expect(actions.getByTestId("actions-positions")).toContainText("50 base units held");
   await shot(page, project, "removal-confirmed");
   await noSidewaysScroll(page);
@@ -137,7 +138,7 @@ test("bounded fixture action: wallet, funding, exact terms, decision, receipt an
   await page.reload();
   const reopened = page.getByRole("region", { name: "Agent actions" });
   await expect(reopened.getByTestId("actions-jobs")).toContainText("SUBMITTED_CONFIRMED");
-  await expect(reopened.getByTestId("actions-removal")).toContainText("Removal CONFIRMED");
+  await expect(reopened.getByTestId("actions-removal")).toContainText("Removal Confirmed");
   record(`main-${project}`, { agentId, actionId });
 });
 
@@ -148,17 +149,18 @@ test("interrupted acknowledgement reconciles the original action, never a replac
   await open(page, tokens.a);
   await readyAgent(page, thesis.url, agentId, project);
   const actions = await runOnce(page, agentId);
-  await waitForJob(actions, "SUBMITTED_UNKNOWN");
-  await expect(actions.getByTestId("actions-blocking")).toContainText("SUBMISSION_UNKNOWN");
+  await waitForJob(actions, "submitted, outcome unknown");
+  await expect(actions.getByTestId("actions-blocking")).toContainText("Blocked. The reason is in Details.");
+  await expect(actions.getByTestId("actions-blocking").locator("xpath=following-sibling::details[1]")).toContainText("SUBMISSION_UNKNOWN");
   await actions.getByRole("button", { name: /Open action/ }).first().click();
   const lineage = actions.getByTestId("action-lineage");
-  await expect(lineage.getByTestId("action-receipts")).toHaveText("SUBMISSION_UNKNOWN");
+  await expect(lineage.getByTestId("action-receipts")).toHaveText("Outcome unknown");
   await expect(lineage).not.toContainText("CONFIRMED");
   await shot(page, project, "action-unknown");
   await noSidewaysScroll(page);
   await lineage.getByRole("button", { name: "Reconcile original action" }).click();
-  await expect(lineage.getByTestId("action-receipts")).toHaveText("SUBMISSION_UNKNOWN → CONFIRMED");
-  await expect(lineage.getByTestId("action-queue-state")).toHaveText("SUBMITTED_CONFIRMED");
+  await expect(lineage.getByTestId("action-receipts")).toHaveText("Outcome unknown → Confirmed");
+  await expect(lineage.getByTestId("action-queue-state")).toHaveText("Sent and confirmed");
   const actionId = (await lineage.getByRole("heading", { level: 3 }).innerText()).replace("Action ", "").trim();
   record(`lost-ack-${project}`, { agentId, actionId });
 });
@@ -169,21 +171,21 @@ test("a stop denies new work before admission and a lost reply pauses new reques
   const agentId = `fin-${project}-stop`;
   await open(page, tokens.a);
   await readyAgent(page, thesis.url, agentId, project);
-  await page.goto(`/#/positions?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/positions?agent=${encodeURIComponent(agentId)}`);
   const actions = page.getByRole("region", { name: "Agent actions" });
   await actions.getByRole("button", { name: "Halt all swaps" }).click();
   await expect(actions.getByTestId("actions-stops")).toContainText("HALT_ALL_SWAPS");
 
   // A network failure on the write leaves the outcome unconfirmed: further writes pause until a read succeeds.
   await page.route("**/v1/agents/*/actions", (route) => route.request().method() === "POST" ? route.abort() : route.continue());
-  await actions.getByRole("button", { name: "Run one bounded evaluation" }).click();
+  await actions.getByRole("button", { name: "Run one check" }).click();
   await expect(actions.getByRole("alert")).toContainText("not confirmed");
-  await expect(actions.getByRole("button", { name: "Run one bounded evaluation" })).toBeDisabled();
+  await expect(actions.getByRole("button", { name: "Run one check" })).toBeDisabled();
   await page.unroute("**/v1/agents/*/actions");
   await actions.getByRole("button", { name: "Check saved actions" }).click();
-  await actions.getByRole("button", { name: "Run one bounded evaluation" }).click();
+  await actions.getByRole("button", { name: "Run one check" }).click();
   await waitForJob(actions, "STOPPED_HALT_ALL_SWAPS");
-  await expect(actions.getByTestId("actions-jobs")).toContainText("ADMISSION_DENIED");
+  await expect(actions.getByTestId("actions-jobs")).toContainText("Refused by admission");
   await shot(page, project, "stop-denied");
   await noSidewaysScroll(page);
   record(`stop-${project}`, { agentId });
@@ -195,13 +197,13 @@ test("a requested removal denies the next evaluation before any reservation or e
   const agentId = `fin-${project}-removed`;
   await open(page, tokens.a);
   await readyAgent(page, thesis.url, agentId, project);
-  await page.goto(`/#/positions?agent=${encodeURIComponent(agentId)}`);
+  await page.goto(`/app#/positions?agent=${encodeURIComponent(agentId)}`);
   const actions = page.getByRole("region", { name: "Agent actions" });
   await actions.getByRole("button", { name: "Request removal" }).click();
-  await expect(actions.getByTestId("actions-removal")).toContainText("Removal REQUESTED");
-  await actions.getByRole("button", { name: "Run one bounded evaluation" }).click();
+  await expect(actions.getByTestId("actions-removal")).toContainText("Removal Requested");
+  await actions.getByRole("button", { name: "Run one check" }).click();
   await waitForJob(actions, "REMOVAL_REQUESTED");
-  await expect(actions.getByTestId("actions-jobs")).toContainText("ADMISSION_DENIED");
+  await expect(actions.getByTestId("actions-jobs")).toContainText("Refused by admission");
   await shot(page, project, "removal-denied");
   await noSidewaysScroll(page);
   record(`removed-${project}`, { agentId });
@@ -212,7 +214,7 @@ test("another owner sees none of these agents or actions", async ({ page }, info
   const saved = JSON.parse(fs.readFileSync(financialFile, "utf8"))[`main-${project}`];
   await open(page, tokens.b);
   for (const area of ["funds", "agents", "positions"]) {
-    await page.goto(`/#/${area}?agent=${encodeURIComponent(saved.agentId)}`);
+    await page.goto(`/app#/${area}?agent=${encodeURIComponent(saved.agentId)}`);
     await expect(page.getByText(/No confirmed wallet|no confirmed wallet|AGENT_NOT_READY|confirmed wallet bound/).first()).toBeVisible();
   }
   await expect(page.getByText(saved.actionId)).toHaveCount(0);

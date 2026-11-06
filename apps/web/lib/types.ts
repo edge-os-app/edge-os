@@ -81,6 +81,26 @@ export interface Question {
 }
 
 export type AttemptStatus = "STARTED" | "COMPLETED" | "TRUNCATED" | "PROVIDER_FAILED" | "TIMED_OUT" | "INTERRUPTED" | "UNKNOWN";
+/** One attempt's spend as the ledger recorded it. Only a SETTLED charge is a cost; any other charge is a held reservation. */
+export interface AttemptSpend { state: string | null; charge_usd: string | null }
+/**
+ * The request's model cost from the API: the exact sum of settled charges, and how many attempts have no known cost.
+ * CREDIT is Orbio's unit, exactly USD 1 of usage: `settled_credit` is the same amount as `settled_usd`. `held_credit` is
+ * a lower bound of what RESERVED and UNKNOWN calls hold; it is liability, not a cost.
+ */
+export interface ModelCost {
+  settled_usd: string | null; settled_calls: number; unknown_calls: number;
+  unit: "CREDIT"; settled_credit: string | null; held_credit: string | null;
+}
+/**
+ * The owner's model budget from the spend ledger, in CREDIT. Shared by all the owner's studies and limited by the global
+ * ceiling; held calls count as used. `over_credit` is how far past its limit the budget is, "0" when it is not.
+ * UNKNOWN: the ledger could not be read, which is neither "not set" nor zero.
+ */
+export type ModelBudget =
+  | { unit: "CREDIT"; state: "SET"; owner_cap_credit: string; global_cap_credit: string; settled_credit: string;
+      held_credit: string; held_calls: number; available_credit: string; over_credit: string }
+  | { unit: "CREDIT"; state: "UNKNOWN" };
 export interface AttemptUsage { source: "PROVIDER_REPORTED" | "UNKNOWN"; input_tokens: number | null; output_tokens: number | null; total_tokens: number | null }
 
 /** One recorded interpreter attempt. It holds structured values and hashes, never the generated text. */
@@ -100,6 +120,7 @@ export interface Attempt {
   parse_result: string | null;
   error_class: string | null;
   revision_id: string | null;
+  spend: AttemptSpend;
   identity: {
     prompt_version: string; system_prompt_sha256: string; task_sha256: string; response_shape_sha256: string;
     manifest_sha256: string; config_sha256: string; runtime_label: string; model: string | null; route: string | null;
@@ -139,6 +160,9 @@ export interface Bundle {
   clarifications: Envelope<Clarification>[];
   outcomes: { interpretation_revision_id: string | null; record: Envelope<Outcome> }[];
   attempts: Attempt[];
+  model_cost: ModelCost | null;
+  /** Null when no spend ledger serves this interpreter: the budget is not set, which is not 0. */
+  model_budget?: ModelBudget | null;
   late_results: LateResult[];
   drafts: Envelope<{ draft_id: string; strategy_id: string; source_syntax: Strategy; interpretation_revision_id: string }>[];
   publications: Envelope<Record<string, unknown>>[];
@@ -371,6 +395,15 @@ export interface SpotReplayDependency {
   offset_buckets: number;
 }
 
+export type SpotReplayTimingProfile = "p12.spot-replay/1" | "edge-os.delayed-history-replay/1";
+
+export interface SpotReplayTimingPolicy {
+  schema_version: string;
+  decision_delay_seconds: number;
+  fill_rule: string;
+  fill_label: string;
+}
+
 export interface SpotReplayBody {
   idempotency_key: string;
   strategy_id: string;
@@ -382,6 +415,7 @@ export interface SpotReplayBody {
   initial_cash_quote: string;
   initial_base_amount: string;
   initial_basis_quote: string;
+  timing_profile?: SpotReplayTimingProfile;
   essential_fields: {
     entry: { state: "BOUND" | "UNBOUND"; essential_dependencies?: SpotReplayDependency[] };
     exit: { state: "BOUND" | "UNBOUND"; essential_dependencies?: SpotReplayDependency[] };
@@ -425,6 +459,8 @@ export function payloadBindingText(state: (PayloadBindingLineage & { reason?: st
 export interface SpotReplayInputSnapshot {
   profile_version: string;
   profile_sha256?: string;
+  timing_profile?: SpotReplayTimingProfile;
+  timing_policy?: SpotReplayTimingPolicy;
   strategy_revision_id: string;
   strategy_id: string;
   strategy_sha256: string;

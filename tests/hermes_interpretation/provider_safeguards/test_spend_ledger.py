@@ -318,3 +318,113 @@ def test_an_interrupted_settlement_keeps_the_liability(tmp_path: Path) -> None:
     assert reopened.state("attempt-1") == "RESERVED"
     assert reopened.committed_usd() == Decimal("0.04532")
     assert os.access(path, os.W_OK)
+
+
+# --- The per-call output limit (ORBIO_CREDIT_DESIGN 2b) ----------------------------------------------------------------
+# The release's worked example: prices 2 and 10 USD per million, a worst-case input of 65,536 + 64 = 65,600 tokens
+# (131,200,000 nano-USD) and 10,000 nano-USD per output token. The test sets its own `min_output_tokens`; no release does.
+RELEASE_PRICE = TokenPrice(Decimal("2"), Decimal("10"))
+INPUT_MAX = 65_600
+
+
+def rows_and_events(tmp_path: Path) -> tuple[list[tuple], list[tuple]]:
+    with sqlite3.connect(tmp_path / "spend.sqlite") as connection:
+        return (connection.execute("select attempt_id, max_output_tokens, reserved_nano_usd from reservation").fetchall(),
+                connection.execute("select attempt_id, kind from event").fetchall())
+
+
+def test_a_smaller_output_limit_is_reserved_when_the_full_one_does_not_fit(tmp_path: Path) -> None:
+    spend = ledger(tmp_path, cap=Decimal("0.15"), price=RELEASE_PRICE)  # headroom 150,000,000 nano-USD
+
+    reservation = spend.reserve("attempt-1", scope="case-a", max_input_tokens=INPUT_MAX, max_output_tokens=4_096,
+                                min_output_tokens=1)
+
+    # (150,000,000 - 131,200,000) / 10,000 = 1,880 output tokens, which costs exactly the headroom
+    assert reservation.max_output_tokens == 1_880 and reservation.amount_usd == Decimal("0.15")
+    assert spend.reserved_output_tokens("attempt-1") == 1_880
+    assert rows_and_events(tmp_path)[0] == [("attempt-1", 1_880, 150_000_000)]
+    assert spend.committed_usd() <= Decimal("0.15")
+
+
+def test_a_call_whose_smallest_useful_limit_does_not_fit_is_refused_and_nothing_is_written(tmp_path: Path) -> None:
+    spend = ledger(tmp_path, cap=Decimal("0.15"), price=RELEASE_PRICE)
+
+    with pytest.raises(CapExceeded) as refused:
+        spend.reserve("attempt-1", scope="case-a", max_input_tokens=INPUT_MAX, max_output_tokens=4_096,
+                      min_output_tokens=1_881)
+
+    # the smallest call it would make: 131,200,000 + 1,881 x 10,000 = 150,010,000 nano-USD
+    assert (refused.value.committed_usd, refused.value.requested_usd, refused.value.cap_usd) == (
+        Decimal(0), Decimal("0.15001"), Decimal("0.15"))
+    assert rows_and_events(tmp_path) == ([], [])
+    assert spend.state("attempt-1") is None and spend.reserved_output_tokens("attempt-1") is None
+    spend.reserve("attempt-1", scope="case-a", max_input_tokens=INPUT_MAX, max_output_tokens=4_096,
+                  min_output_tokens=1_880)  # exactly the smallest useful limit still fits
+    assert spend.reserved_output_tokens("attempt-1") == 1_880
+
+
+def test_headroom_below_the_input_alone_refuses_the_call(tmp_path: Path) -> None:
+    spend = ledger(tmp_path, cap=Decimal("0.1311"), price=RELEASE_PRICE)  # below the 0.1312 the input alone costs
+    with pytest.raises(CapExceeded):
+        spend.reserve("attempt-1", scope="case-a", max_input_tokens=INPUT_MAX, max_output_tokens=4_096,
+                      min_output_tokens=1)
+    assert rows_and_events(tmp_path) == ([], [])
+
+
+def test_the_full_limit_is_kept_when_it_fits(tmp_path: Path) -> None:
+    spend = ledger(tmp_path, cap=Decimal("2.00"), price=RELEASE_PRICE)
+    reservation = spend.reserve("attempt-1", scope="case-a", max_input_tokens=INPUT_MAX, max_output_tokens=4_096,
+                                min_output_tokens=1)
+    assert (reservation.max_output_tokens, reservation.amount_usd) == (4_096, Decimal("0.17216"))
+    assert spend.reserved_output_tokens("attempt-1") == 4_096
+
+
+def test_without_a_smallest_limit_the_reservation_is_exact_as_before(tmp_path: Path) -> None:
+    spend = ledger(tmp_path, cap=Decimal("0.15"), price=RELEASE_PRICE)
+    with pytest.raises(CapExceeded) as refused:  # the full 0.17216 does not fit and nothing is lowered
+        spend.reserve("attempt-1", scope="case-a", max_input_tokens=INPUT_MAX, max_output_tokens=4_096)
+    assert refused.value.requested_usd == Decimal("0.17216") and rows_and_events(tmp_path) == ([], [])
+    (tmp_path / "roomy").mkdir()
+    roomy = ledger(tmp_path / "roomy", cap=Decimal("2.00"), price=RELEASE_PRICE)
+    reservation = roomy.reserve("attempt-2", scope="case-b", max_input_tokens=INPUT_MAX, max_output_tokens=4_096)
+    assert (reservation.max_output_tokens, reservation.amount_usd) == (4_096, Decimal("0.17216"))
+
+
+@pytest.mark.parametrize("smallest", [0, -1, True, 4_097, "1", 1.0])
+def test_a_smallest_limit_outside_one_to_the_full_limit_is_refused_and_nothing_is_written(tmp_path: Path,
+                                                                                          smallest: object) -> None:
+    spend = ledger(tmp_path, cap=Decimal("2.00"), price=RELEASE_PRICE)
+    with pytest.raises(ValueError):
+        spend.reserve("attempt-1", scope="case-a", max_input_tokens=INPUT_MAX, max_output_tokens=4_096,
+                      min_output_tokens=smallest)  # type: ignore[arg-type]
+    assert rows_and_events(tmp_path) == ([], [])
+
+
+def test_racing_reservations_for_the_last_headroom_never_commit_more_than_the_cap(tmp_path: Path) -> None:
+    cap = Decimal("0.50")  # two full calls (0.34432) fit, a third is lowered, the rest are refused
+    spend = ledger(tmp_path, cap=cap, price=RELEASE_PRICE)
+    outcomes: list[str] = []
+    lock, start = threading.Lock(), threading.Barrier(8)
+
+    def reserve(n: int) -> None:
+        start.wait()
+        try:
+            got = ledger(tmp_path, cap=cap, price=RELEASE_PRICE).reserve(
+                f"attempt-{n}", scope=f"case-{n}", max_input_tokens=INPUT_MAX, max_output_tokens=4_096,
+                min_output_tokens=1)
+            outcome = f"limit-{got.max_output_tokens}"
+        except CapExceeded:
+            outcome = "refused"
+        with lock:
+            outcomes.append(outcome)
+
+    threads = [threading.Thread(target=reserve, args=(n,)) for n in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    # 0.50 - 2 x 0.17216 = 0.15568 left: (155,680,000 - 131,200,000) / 10,000 = 2,448 output tokens for the third
+    # call, which uses the headroom exactly; nothing is left for the other five
+    assert sorted(outcomes) == ["limit-2448", "limit-4096", "limit-4096"] + ["refused"] * 5
+    assert spend.committed_usd() == cap

@@ -53,7 +53,7 @@ async function open(page, token) {
     window.__EDGE_OS_TEST_AUTH__ = { label: "TEST AUTH FIXTURE · not Privy · LOCAL Docker rehearsal",
       getAccessToken: async () => value, signOut() {} };
   }, token);
-  await page.goto("/");
+  await page.goto("/app");
   await expect(page.getByTestId("fixture-banner")).toContainText("TEST AUTH FIXTURE");
 }
 
@@ -99,7 +99,7 @@ test("saved report, jobs, held unknown and usage reopen without recomputation", 
   const section = page.getByTestId("history-investigation");
   await expect(section).toBeVisible();
   await expect(section.getByTestId("research-budget")).toContainText("provider requests");
-  await section.locator(".card").filter({ hasText: run.hypothesis }).getByRole("button", { name: "Open this declaration" }).click();
+  await section.locator(".card").filter({ hasText: run.hypothesis }).getByRole("button", { name: "Open this rule" }).click();
   await expect(section.getByTestId("history-declaration")).toBeVisible();
   const cards = section.getByTestId("history-job");
   await expect(cards).toHaveCount(5);
@@ -152,7 +152,7 @@ test("recurring deployment reopens with its saved state and consent", async ({ p
   expect(deployment, "the seeded snapshot holds this owner's deployment").toBeTruthy();
   const { writes, problems } = watchWrites(page);
   await open(page, owner);
-  await page.goto(`/#/positions?agent=${encodeURIComponent(saved.agentId)}`);
+  await page.goto(`/app#/positions?agent=${encodeURIComponent(saved.agentId)}`);
   const panel = page.getByRole("region", { name: "Recurring operation" });
   const shown = panel.getByTestId("recurring-deployment");
   await expect(shown).toHaveAttribute("data-state", deployment[2]);

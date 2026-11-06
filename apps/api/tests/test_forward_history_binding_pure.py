@@ -329,6 +329,6 @@ def test_the_loopback_provider_serves_the_four_bucket_page_and_restores_the_look
     page = bound.recording()["envio_pages"][0]
     assert status == 200 and reply == json.loads(json.dumps(page))
     assert reply["next_block"] == hex(bound.SCAN["to_block_exclusive"])
-    assert [block["number"] for block in reply["data"]["blocks"]][-1] == bound.B_POST
-    assert len(reply["data"]["logs"]) == 5
+    assert [block["number"] for block in reply["data"][0]["blocks"]][-1] == bound.B_POST
+    assert len(reply["data"][0]["logs"]) == 5
     assert [(entry["kind"], entry["authorized"], entry["status"]) for entry in server.entries()] == [("envio", True, 200)]

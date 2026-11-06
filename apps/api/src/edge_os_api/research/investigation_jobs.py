@@ -240,6 +240,16 @@ def release_refusal(runtime: Any, frozen_sha256: str, part: str = "history") -> 
     if runtime is None or getattr(runtime.release, part) is None:
         return ("operating_release_unavailable",
                 "This server does not compose the operating release this job names. Nothing was started or sent.")
+    if part == "history" and runtime.release.kind == "ACTUAL":
+        from edge_os_api.core.research.operating_release import release_sha256
+
+        try:
+            history_payload_binding.check_definition(runtime.release.kind, runtime.release.history)
+        except ReleaseRefused as error:
+            return error.code, error.detail
+        if release_sha256(runtime.release) != runtime.release_sha256:
+            return ("operating_release_changed",
+                    "The operating release changed after composition. Nothing was started or sent.")
     if runtime.release_sha256 != frozen_sha256:
         return ("operating_release_changed",
                 "The operating release changed after this was saved. Declare again on the current release. "
