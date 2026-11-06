@@ -15,3 +15,7 @@ export const tokens = {
   c: process.env.P03_TOKEN_C,
   bad: process.env.P03_TOKEN_BAD,
 };
+
+/** P05 owners, keyed `<width>-first` and `<width>-second`. The API starts at most ten attempts per owner in an hour
+ * (`turn_limits.py`). The drive needs fifteen per width, so one owner cannot run it. */
+export const p05Tokens = JSON.parse(process.env.P03_P05_TOKENS ?? "{}");

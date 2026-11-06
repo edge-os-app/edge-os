@@ -41,13 +41,10 @@ def http(method: str, url: str, token: str | None = None, body: object = None) -
         return error.code, json.loads(error.read() or b"{}")
 
 
-def request_ids(results: dict[str, Any]) -> list[str]:
-    ids: list[str] = []
-    for value in results.values():
-        for key in ("id", "malformed", "unknown", "conflictId", "rejectedId"):
-            if isinstance(value, dict) and key in value:
-                ids.append(value[key])
-    return list(dict.fromkeys(ids))
+def request_tokens(results: dict[str, Any], tokens: dict[str, str]) -> dict[str, str]:
+    """Each saved request id, with the token of the owner who made it."""
+    return {value[key]: tokens[value["owner"]] for value in results.values()
+            for key in ("id", "malformed", "unknown", "conflictId", "rejectedId") if key in value}
 
 
 def start_hermes_api(env: dict[str, str], port: int, image_tag: str, run_id: str, workdir: Path, script_file: Path,
@@ -83,7 +80,8 @@ def attempt_snapshot(pg: harness.Postgres, intake_id: str) -> list[dict[str, Any
         where a.intake_record_id = '{intake_id}' order by a.sequence""")
 
 
-def inspect_attempts(pg: harness.Postgres, api_url: str, token: str, ids: list[str]) -> dict[str, Any]:
+def inspect_attempts(pg: harness.Postgres, api_url: str, requests: dict[str, str]) -> dict[str, Any]:
+    """`requests` maps each request id to its owner's token."""
     checks: dict[str, Any] = {"requests": {}}
     bad_hash = sql_rows(pg, """
         select (select count(*) from interpretation_attempts where task_sha256 <> encode(sha256(convert_to(task_text, 'UTF8')), 'hex')) tasks,
@@ -96,7 +94,7 @@ def inspect_attempts(pg: harness.Postgres, api_url: str, token: str, ids: list[s
                (select count(*) from interpretation_attempt_links l join records r on r.record_id = l.revision_record_id
                   where r.owner_id <> l.owner_id or r.intake_record_id <> l.intake_record_id) foreign_links""")[0]
     checks["global"] = bad_hash
-    for intake_id in ids:
+    for intake_id, token in requests.items():
         rows = attempt_snapshot(pg, intake_id)
         status, bundle = http("GET", f"{api_url}/v1/research/requests/{intake_id}", token)
         public = bundle.get("attempts", []) if status == 200 else []
@@ -189,15 +187,16 @@ def run_p05_phase(rec: Any, pg: harness.Postgres, env: dict[str, str], api_port:
                        code == 0, {"exit": code})
         results_path = evidence / "ui" / "p05-results.json"
         results = json.loads(results_path.read_text()) if results_path.exists() else {}
-        ids = request_ids(results)
-        inspection = inspect_attempts(pg, api_url, token_a, ids)
+        requests = request_tokens(results, json.loads(ui_env["P03_P05_TOKENS"]))
+        ids = list(requests)
+        inspection = inspect_attempts(pg, api_url, requests)
         rec.write("p05-sql-inspection.json", inspection)
         ok &= rec.step("P05: saved attempts match what the API returns, hashes recompute, usage stays unknown, no generated text is public",
                        bool(ids) and inspection["all_checks_pass"], inspection["global"])
         snapshots = {intake_id: attempt_snapshot(pg, intake_id) for intake_id in ids}
         rec.write("p05-attempt-rows-before-restart.json", snapshots)
 
-        denial = deny_other_owner(pg, api_url, token_a, token_b, ids[0]) if ids else {"all_denied": False}
+        denial = deny_other_owner(pg, api_url, requests[ids[0]], token_b, ids[0]) if ids else {"all_denied": False}
         rec.write("p05-ownership-drive.json", denial)
         ok &= rec.step("P05: another owner is denied read, answer and retry, and no row changes", denial["all_denied"], denial)
 

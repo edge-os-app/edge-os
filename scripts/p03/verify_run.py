@@ -408,6 +408,9 @@ def main() -> int:
         # each 27-request job fits that owner's research budget.
         native_tokens.update({f"release-{name}": signer.token(f"did:privy:test-release-{name}")
                               for name in ("desktop", "mobile-390", "kill", "stale", "missing")})
+        # P05 drive: fifteen attempts per width and a limit of ten per owner in an hour, so two owners per width.
+        p05_tokens = {f"{width}-{group}": signer.token(f"did:privy:test-p05-{width}-{group}")
+                      for width in ("desktop", "mobile-390") for group in ("first", "second")}
         token_bad = TestSigner().token(OWNER_A)
         p19_fixtures = seed_account_fixtures(pg, api_url, token_a)
         rec.write("p19-fixtures.json", {k: v for k, v in p19_fixtures.items() if k != "financial_fixture"})
@@ -429,6 +432,7 @@ def main() -> int:
                       "P03_TOKEN_PORTS_MOBILE_390": native_tokens["ports-mobile-390"],
                       "P03_TOKEN_RELEASE_DESKTOP": native_tokens["release-desktop"],
                       "P03_TOKEN_RELEASE_MOBILE_390": native_tokens["release-mobile-390"],
+                      "P03_P05_TOKENS": json.dumps(p05_tokens),
                       "P03_RELEASE_FAULT_TOKENS": json.dumps({name: native_tokens[f"release-{name}"]
                                                               for name in ("kill", "stale", "missing")}),
                       "P19_AGENT_RECORD_ID": p19_fixtures["record_ids"][0],
@@ -542,7 +546,7 @@ def main() -> int:
             time.sleep(args.hold_seconds)
 
         logs = [p for p in (evidence / "logs").glob("*.log")]
-        secrets_seen = [str(p.name) for p in logs if any(t in p.read_text(errors="ignore") for t in (token_a, token_b, token_c, token_bad, *native_tokens.values(), signer.private_pem))]
+        secrets_seen = [str(p.name) for p in logs if any(t in p.read_text(errors="ignore") for t in (token_a, token_b, token_c, token_bad, *native_tokens.values(), *p05_tokens.values(), signer.private_pem))]
         ok &= rec.step("logs contain no token or private key", not secrets_seen, secrets_seen)
         signed = financial_phase.authored_signed_bytes(evidence)
         texts = [*logs, *(evidence / "ui").glob("*.json"), *evidence.glob("ui-*.log")]

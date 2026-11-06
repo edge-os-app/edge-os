@@ -121,7 +121,7 @@ def inspect_mount(pg: harness.Postgres, api_url: str, token: str, workdir: Path,
                 ("COMPLETED", "ACCEPTED") if completed else ("UNKNOWN", "NOT_PARSED")),
             "saved_revision": saved_revision(pg, item) if completed else None,
         }
-    sql_http = inspect_attempts(pg, api_url, token, [item["id"] for item in results.values()])
+    sql_http = inspect_attempts(pg, api_url, {item["id"]: token for item in results.values()})
     total = pg.psql("select coalesce(sum(case when state = 'SETTLED' then charged_nano_usd when state in "
                     "('RESERVED', 'UNKNOWN') then reserved_nano_usd else 0 end), 0) from usage_local.provider_spend_reservations")
     completed_count = sum(1 for key in results if key.startswith("mount-completed-"))

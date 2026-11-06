@@ -9,7 +9,7 @@ import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import fs from "node:fs";
 import path from "node:path";
-import { injectAuth, tokens } from "./fixture-auth.mjs";
+import { injectAuth, p05Tokens, tokens } from "./fixture-auth.mjs";
 
 const evidence = process.env.P03_EVIDENCE_DIR ?? ".evidence";
 const shots = path.join(evidence, "screenshots");
@@ -79,7 +79,7 @@ async function inspect(page, project, name) {
   const small = await smallControls(page);
   const overflow = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth }));
   const axe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
-  const blocking = axe.violations.filter((v) => ["serious", "critical"].includes(v.impact)).map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.length }));
+  const blocking = axe.violations.filter((v) => ["serious", "critical"].includes(v.impact)).map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.length, targets: v.nodes.map((node) => node.target) }));
   const result = { small, overflow, axe_blocking: blocking, axe_all: axe.violations.map((v) => v.id) };
   fs.writeFileSync(path.join(quality, `p05-${project}-${name}.json`), JSON.stringify(result, null, 2));
   expect(small, `controls under ${MIN}px in ${name}`).toEqual([]);
@@ -96,6 +96,7 @@ async function openAttempts(page) {
 }
 
 test.describe.configure({ mode: "serial" });
+// Each width has two owners, because one owner may start ten attempts in an hour. The first three tests start six, the rest nine.
 // A failed test must not leave scripted turns behind for the next one.
 test.beforeEach(() => { fs.writeFileSync(queueFile, "[]"); });
 
@@ -104,7 +105,8 @@ const asked = (page) => page.getByRole("region", { name: "What we need from you"
 
 test("a provider failure is a system failure, keeps its attempt, and retries only when asked", async ({ page }, info) => {
   const project = info.project.name;
-  await open(page, tokens.a);
+  const owner = `${project}-first`;
+  await open(page, p05Tokens[owner]);
   script({ case: "provider-503" }, { case: "concrete-thesis" });
   const id = await submit(page, THESIS);
 
@@ -132,12 +134,13 @@ test("a provider failure is a system failure, keeps its attempt, and retries onl
   await expect(attemptRows(page).first()).toContainText("Provider failed"); // the failed attempt stays listed
   await expect(attemptRows(page).nth(1)).toContainText("retry of #1");
   await shot(page, project, "retried");
-  record(`p05-failure-retry-${project}`, { id, attempts: 2, remaining: remaining() });
+  record(`p05-failure-retry-${project}`, { owner, id, attempts: 2, remaining: remaining() });
 });
 
 test("unusable model output and an unknown outcome are named apart, and an unknown outcome is not retried", async ({ page }, info) => {
   const project = info.project.name;
-  await open(page, tokens.a);
+  const owner = `${project}-first`;
+  await open(page, p05Tokens[owner]);
   script({ case: "multiple-objects" });
   const malformed = await submit(page, THESIS);
   await expect(page.getByRole("heading", { name: "The research agent's answer was not usable" })).toBeVisible();
@@ -155,12 +158,13 @@ test("unusable model output and an unknown outcome are named apart, and an unkno
   await expect(attemptRows(page).first()).toContainText(/outcome unknown/);
   await shot(page, project, "unknown");
   await inspect(page, project, "unknown");
-  record(`p05-malformed-unknown-${project}`, { malformed, unknown, remaining: remaining() });
+  record(`p05-malformed-unknown-${project}`, { owner, malformed, unknown, remaining: remaining() });
 });
 
 test("a rough hunch is answered in the user's own words by keyboard, then adopted and saved", async ({ page }, info) => {
   const project = info.project.name;
-  await open(page, tokens.a);
+  const owner = `${project}-first`;
+  await open(page, p05Tokens[owner]);
   script({ case: "rough-hunch" }, { follow_up: "hunch-reply-fills-both-rules" });
   const id = await submit(page, HUNCH, /Rough hunch/);
   await expect(outcome(page)).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
@@ -190,12 +194,13 @@ test("a rough hunch is answered in the user's own words by keyboard, then adopte
   await page.getByRole("button", { name: "Save this revision" }).click();
   await expect(page.getByTestId("revision")).toBeVisible();
   await inspect(page, project, "saved-after-words");
-  record(`p05-words-${project}`, { id, revision: await page.getByTestId("revision-id").textContent(), attempts: 2 });
+  record(`p05-words-${project}`, { owner, id, revision: await page.getByTestId("revision-id").textContent(), attempts: 2 });
 });
 
 test("a reply with two values is a conflict, and a reply that would change a chosen rule is rejected whole", async ({ page }, info) => {
   const project = info.project.name;
-  await open(page, tokens.a);
+  const owner = `${project}-second`;
+  await open(page, p05Tokens[owner]);
   script({ case: "rough-hunch" }, { follow_up: "hunch-reply-states-two-values" });
   const conflictId = await submit(page, HUNCH, /Rough hunch/);
   await asked(page).getByRole("textbox", { name: /own words.*entry rule/ }).fill(REPLY_TWO);
@@ -222,12 +227,13 @@ test("a reply with two values is a conflict, and a reply that would change a cho
   await expect(page.getByRole("row", { name: /Entry rule/ })).toContainText("You chose");
   await shot(page, project, "reply-rejected");
   await inspect(page, project, "reply-rejected");
-  record(`p05-conflict-overwrite-${project}`, { conflictId, rejectedId });
+  record(`p05-conflict-overwrite-${project}`, { owner, conflictId, rejectedId });
 });
 
 test("an unsupported capability is not a failure, and another owner cannot open or change the request", async ({ page, browser }, info) => {
   const project = info.project.name;
-  await open(page, tokens.a);
+  const owner = `${project}-second`;
+  await open(page, p05Tokens[owner]);
   script({ case: "unsupported-extension" });
   const id = await submit(page, LAUNCH_AGE, /Rough hunch/);
   await expect(outcome(page)).toHaveAttribute("data-outcome", "UNSUPPORTED");
@@ -244,7 +250,7 @@ test("an unsupported capability is not a failure, and another owner cannot open 
   await expect(foreign.getByText("This request was not found.")).toBeVisible();
   await expect(foreign.getByTestId("attempts")).toHaveCount(0);
   await other.close();
-  record(`p05-unsupported-${project}`, { id, queue_left: remaining() });
+  record(`p05-unsupported-${project}`, { owner, id, queue_left: remaining() });
 });
 
 /** Show a saved request as the API would return it if its outcome step had not finished. Only the GET response is changed. */
@@ -262,7 +268,8 @@ async function withoutOutcome(page, id, change) {
 
 test("a request whose outcome was not saved is worded from its attempt, offers the right action and makes no false claim", async ({ page }, info) => {
   const project = info.project.name;
-  await open(page, tokens.a);
+  const owner = `${project}-second`;
+  await open(page, p05Tokens[owner]);
   script({ case: "provider-503" });
   const id = await submit(page, THESIS);
   const requests = [];
@@ -327,12 +334,13 @@ test("a request whose outcome was not saved is worded from its attempt, offers t
   expect(requests, "no write and no interpreter attempt came from looking").toEqual([]);
   expect(remaining()).toBe(0);
   await page.unrouteAll({ behavior: "wait" }); // let any stubbed response finish before the test ends
-  record(`p05-no-outcome-${project}`, { id });
+  record(`p05-no-outcome-${project}`, { owner, id });
 });
 
 test("after a retry, the page describes the latest attempt and not an older failure that has its own outcome", async ({ page }, info) => {
   const project = info.project.name;
-  await open(page, tokens.a);
+  const owner = `${project}-second`;
+  await open(page, p05Tokens[owner]);
   script({ case: "provider-503" });
   const id = await submit(page, THESIS);
   await expect(page.getByRole("heading", { name: "The research agent did not answer" })).toBeVisible();
@@ -362,7 +370,8 @@ test("after a retry, the page describes the latest attempt and not an older fail
 
 test("the saved-requests list tags each request from its latest attempt and never says 'Could not be interpreted' for a system state", async ({ page }, info) => {
   const project = info.project.name;
-  await open(page, tokens.a);
+  const owner = `${project}-second`;
+  await open(page, p05Tokens[owner]);
   script({ case: "provider-503" });
   const id = await submit(page, THESIS);
   await page.goto("/app");
@@ -392,7 +401,8 @@ test("the saved-requests list tags each request from its latest attempt and neve
 
 test("a no-thesis question with no declared market offers the labelled synthetic market for adoption and ends unresolved", async ({ page }, info) => {
   const project = info.project.name;
-  await open(page, tokens.a);
+  const owner = `${project}-second`;
+  await open(page, p05Tokens[owner]);
   script({ case: "bounded-no-thesis" });
   const id = await submit(page, "I have no view. Look at this market over the last two days and tell me whether anything is worth testing.", /No thesis/);
   await expect(outcome(page)).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
@@ -405,5 +415,5 @@ test("a no-thesis question with no declared market offers the labelled synthetic
   await expect(outcome(page)).toHaveAttribute("data-outcome", "UNRESOLVED");
   await shot(page, project, "no-thesis-adopted");
   await inspect(page, project, "no-thesis-adopted");
-  record(`p05-undeclared-market-${project}`, { id });
+  record(`p05-undeclared-market-${project}`, { owner, id });
 });
