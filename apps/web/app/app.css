@@ -169,7 +169,7 @@ table.records th { font-size: 11px; letter-spacing: 0.08em; text-transform: uppe
   .side-nav button, .side-nav a { padding: 0 var(--space-3); white-space: nowrap; }
   .side-foot { margin-top: 0; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; }
   .side-foot .notice { display: none; }
-  .side-identity { flex: 1 1 0; min-width: 0; margin: 0; }
+  .side-identity { flex: 1 0 100%; margin: 0; }
   .main { padding: var(--space-6) var(--space-4); }
   .main h1 { font-size: 32px; }
   .panel { padding: var(--space-4); border-radius: var(--radius-md); }
