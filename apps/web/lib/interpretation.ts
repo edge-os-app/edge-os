@@ -49,11 +49,15 @@ export function describeRoute(route: string | null): string | null {
   return route !== null && Object.hasOwn(ROUTE_WORDS, route) ? ROUTE_WORDS[route] : null;
 }
 
-/** How many listed attempts saved the Orbio route, in plain words. A missing route never counts as Orbio. None gives null. */
+/**
+ * How many model calls ran through Orbio, in plain words, from each attempt's saved route and request count. A refused
+ * attempt (count 0) is not a call. A missing count may be a call, but it never counts as Orbio. No Orbio call gives null.
+ */
 export function describeRouteSummary(attempts: Attempt[]): string | null {
-  const orbioCalls = attempts.filter((a) => a.identity.route === ORBIO_ROUTE).length;
+  const calls = attempts.filter((a) => a.request_count !== 0);
+  const orbioCalls = calls.filter((a) => a.identity.route === ORBIO_ROUTE && a.request_count !== null).length;
   if (orbioCalls === 0) return null;
-  return orbioCalls === attempts.length ? "Model calls ran through Orbio" : `${orbioCalls} of ${plural(attempts.length, "model call")} ran through Orbio`;
+  return orbioCalls === calls.length ? "Model calls ran through Orbio" : `${orbioCalls} of ${plural(calls.length, "model call")} ran through Orbio`;
 }
 
 export const ATTEMPT_STATUS_LABEL: Record<AttemptStatus, string> = {

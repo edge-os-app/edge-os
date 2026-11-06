@@ -235,6 +235,8 @@ const attemptsOn = (...routes: (string | null)[]): Attempt[] => routes.map((rout
   return { ...base, identity: { ...base.identity, route } };
 });
 const routeSummary = () => screen.queryByTestId("model-route-summary");
+const counted = (attempts: Attempt[], ...counts: (number | null)[]): Attempt[] =>
+  attempts.map((a, index) => ({ ...a, request_count: counts[index] }));
 
 describe("the route summary near the study total", () => {
   it("says the model calls ran through Orbio when every attempt saved that route", () => {
@@ -252,7 +254,7 @@ describe("the route summary near the study total", () => {
     expect(describeRouteSummary(attemptsOn(null, ORBIO, OPENROUTER, null))).toBe("1 of 4 model calls ran through Orbio");
   });
 
-  it("counts failed and unknown attempts, because they were sent on that route", () => {
+  it("counts failed and unknown attempts that sent a request", () => {
     const [sent, failed, unknownOutcome] = attemptsOn(ORBIO, ORBIO, OPENROUTER);
     const attempts: Attempt[] = [sent, { ...failed, status: "PROVIDER_FAILED" }, { ...unknownOutcome, status: "UNKNOWN" }];
     expect(describeRouteSummary(attempts)).toBe("2 of 3 model calls ran through Orbio");
@@ -262,6 +264,28 @@ describe("the route summary near the study total", () => {
     "gives nothing when no attempt saved the Orbio route: %j", (routes) => {
       expect(describeRouteSummary(attemptsOn(...routes))).toBeNull();
     });
+
+  it("gives nothing when the host refused every Orbio attempt before sending", () => {
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO), 0))).toBeNull();
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO, ORBIO), 0, 0))).toBeNull();
+  });
+
+  it("leaves a refused attempt out of both numbers", () => {
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO, ORBIO), 1, 0))).toBe("Model calls ran through Orbio");
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO, OPENROUTER), 1, 0))).toBe("Model calls ran through Orbio");
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO, OPENROUTER, ORBIO), 2, 1, 0))).toBe("1 of 2 model calls ran through Orbio");
+  });
+
+  it("keeps an attempt with no saved count as a possible call, but never as an Orbio call", () => {
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO, ORBIO), 1, null))).toBe("1 of 2 model calls ran through Orbio");
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO, OPENROUTER), 1, null))).toBe("1 of 2 model calls ran through Orbio");
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO), null))).toBeNull();
+  });
+
+  it("shows no line on the page when every Orbio attempt was refused", () => {
+    render(<InterpretationAttempts attempts={counted(attemptsOn(ORBIO, ORBIO), 0, 0)} lateResults={[]} open={false} />);
+    expect(routeSummary()).toBeNull();
+  });
 
   it("sits directly after the cost lines, outside the closed attempts section", () => {
     render(<InterpretationAttempts attempts={attemptsOn(ORBIO, ORBIO)} modelCost={cost("0.014857", 2, 0)} modelBudget={budget}
