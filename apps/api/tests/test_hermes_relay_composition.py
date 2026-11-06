@@ -668,6 +668,23 @@ def test_a_rejected_reply_with_an_unconfirmed_cost_stays_unknown_with_no_text_an
     assert len(bundle["attempts"]) == 1 and len(job.turns) == 1 and app.spend.committed_usd() == RESERVATION
 
 
+def test_a_rejected_follow_up_with_an_unconfirmed_cost_is_uncertain_and_is_not_retried(mounted, owner_a) -> None:
+    hunch = turn_result(case("rough-hunch")["provider"])
+    unusable = replace(RETURNED, text="not an interpretation")
+    job = StandInJob(mounted.relay, (reply_record(), hunch), (reply_record(cost=0.05), unusable))
+    app, app_client = mounted("reply-cost", job)
+    bundle = create(app_client, owner_a, "rough-hunch").json()
+
+    replied = answer(app_client, owner_a, bundle, "choose-entry", answer_text="Enter at two percent.").json()
+
+    last = replied["attempts"][-1]
+    assert (last["status"], last["parse_result"], last["error_class"]) == ("UNKNOWN", "NOT_PARSED", "RelayCostUnverified")
+    assert replied["head"]["reply"]["state"] == "UNCERTAIN"
+    assert replied["head"]["retry"] == {"allowed": False, "retry_of": None, "reason": "outcome_uncertain"}
+    assert retry(app_client, owner_a, replied, last["attempt_id"]).status_code == 409
+    assert saved(app_client, last["attempt_id"])["state"] == "UNKNOWN" and len(job.turns) == 2
+
+
 def test_a_reply_withheld_for_a_count_mismatch_stays_unknown_with_no_text(mounted, owner_a) -> None:
     wrong = reply_record(usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
     job = StandInJob(mounted.relay, (wrong, RETURNED))

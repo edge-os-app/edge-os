@@ -197,7 +197,7 @@ The relay also requires these for a counted reply (`ActualRelease.reply_check`):
 
 What happens when a check fails:
 
-- Only the cost check fails. The answer is kept and handled as a normal finished reply, and `request_count` stays 1. The ledger does not settle: the row goes to UNKNOWN and keeps the whole USD 0.17216. Cost lines stay unknown, and unknown is never shown as zero. The page says "Answer ready. Cost not confirmed yet." and the Orbio route line shows. The raw class `RelayCostUnverified` is in the attempt's Details line.
+- Only the cost check fails, and the answer is accepted. The answer is kept and handled as a normal finished reply, and `request_count` stays 1. The ledger does not settle: the row goes to UNKNOWN and keeps the whole USD 0.17216. Cost lines stay unknown, and unknown is never shown as zero. The page says "Answer ready. Cost not confirmed yet." and the Orbio route line shows. The raw class `RelayCostUnverified` is in the attempt's Details line.
 - Only the cost fails, and the reply is rejected or cut short. The attempt is UNKNOWN, the text is not kept, a retry stays refused, and the full USD 0.17216 stays as liability.
 - Counts or state fail (`RelayCountMismatch`, `RelayStateUnknown`). The attempt is UNKNOWN, the text is withheld, nothing is resent, and the full USD 0.17216 stays as liability.
 

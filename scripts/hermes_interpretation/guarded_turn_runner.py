@@ -7,7 +7,7 @@ default) the turn and the reservation are exactly the policy's.
 The wrapped runner is never called when the check or the reservation fails. After the run, only provable facts free
 or fix a reservation: a counted single request with usable usage is charged exactly, and a run that admitted no
 request is released. Anything else keeps the full reservation as liability and blocks the next attempt in its scope.
-A counted result named `COST_UNVERIFIED` is one of those: its answer stands, and its reservation stays.
+A counted result named `COST_UNVERIFIED` is one of those: its reservation stays, whatever becomes of its text.
 A failure to record a result never hides the result, and it never frees liability.
 
 It implements the same `HermesTurnRunner` interface as the runner it wraps, so it fits where the application already
@@ -20,7 +20,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import replace
 
-from edge_os_api.research.hermes_interpreter import HermesTurn, HermesTurnResult, HermesTurnRunner
+from edge_os_api.research.hermes_interpreter import COST_UNVERIFIED, HermesTurn, HermesTurnResult, HermesTurnRunner
 from edge_os_api.research.interpretation_attempts import Usage
 from provider_guard import GuardPolicy
 from spend_ledger import CapExceeded, ReservationExists, ScopeBlocked, SpendLedger, check_smallest_limit
@@ -32,7 +32,6 @@ log = logging.getLogger(__name__)
 # special tokens that a provider's chat template adds. This is an assumption about tokenizers, not a proven ceiling.
 INPUT_TOKEN_MARGIN = 64
 COUNTED = ("RETURNED", "TRUNCATED")
-COST_UNVERIFIED = "RelayCostUnverified"
 
 
 def _refused(turn: HermesTurn, error_class: str) -> HermesTurnResult:
