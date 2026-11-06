@@ -33,6 +33,7 @@ ACTUAL is accepted only through `relay_admission.load_actual_release` with its d
 adopted release records: every other ACTUAL configuration is refused, and the configured image id must equal the release
 definition's pinned id for this host platform. The operator never reads the provider key; it only
 checks the file is outside the repository and readable by its owner only. No key, key path or environment value is written to the handoff or printed.
+The relay alone checks the key's shape: when it refuses the file, `start` and `restart` end at once and report that.
 `read_handoff` is the operator's strict reader of its own handoff (format `edge-os.relay-operator-handoff/1`).
 """
 
@@ -698,7 +699,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             restart(config)
             print(f"restarted {config.operation_id}")
-    except OperatorRefused as refused:
+    except (OperatorRefused, relay_supervisor.ProviderKeyRefused) as refused:
         print(f"refused: {refused}", file=sys.stderr)
         return 2
     except Exception as error:  # noqa: BLE001 - report the class only: Docker errors carry mount paths and arguments
