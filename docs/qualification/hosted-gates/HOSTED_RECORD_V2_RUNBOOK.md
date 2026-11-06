@@ -737,11 +737,12 @@ unit's stop command reads that file.
 ```sh
 systemctl stop edge-os-hermes-app.service edge-os-research-worker.service
 systemctl stop edge-os-hermes-relay.service
-docker ps --filter name=relay- --format '{{.Names}}'   # must print nothing
+docker ps --filter name=^/relay- --format '{{.Names}}'   # must print nothing
 ```
 
-If a `relay-*` container remains, the operation did not start from the unit. Run the unit's `ExecStop` command as
-`edge-os-relay`, with the unit's environment, before you continue.
+Keep the `^/` anchor: Docker's name filter matches any part of a name. `edge-os-rpc-relay-*` is the separate RPC relay
+service. It stays running and is no part of this switch. If a container whose name starts with `relay-` remains, run the
+unit's `ExecStop` command as `edge-os-relay`, with the unit's environment, before you continue.
 
 **3. Move the code.** Use §6.2 of `deploy/coolify/RUNBOOK.md` with the approved commit. Then confirm the registry:
 
@@ -795,6 +796,7 @@ try. A used run root or channel folder cannot start again, so raise `RUN` on eac
 
 ```sh
 RUN=1
+SINCE=$(date '+%Y-%m-%d %H:%M:%S')
 [ -e /etc/edge-os/relay.json.bak-before-orbio ] || cp -p /etc/edge-os/relay.json /etc/edge-os/relay.json.bak-before-orbio
 RUN=$RUN python3 - <<'PY'
 import json, os
@@ -815,8 +817,10 @@ config.update({
 with open(path, "w") as out:
     json.dump(config, out, indent=2)
 PY
-systemctl start edge-os-hermes-relay.service
-journalctl -u edge-os-hermes-relay.service -n 20 --no-pager | grep 'handoff '
+CONFIG_RC=$?
+[ "$CONFIG_RC" -eq 0 ] && systemctl start edge-os-hermes-relay.service \
+  && journalctl -u edge-os-hermes-relay.service --since "$SINCE" --no-pager | grep 'handoff ' \
+  || echo "STOP: no handoff from this start; see §9.5"
 ```
 
 `format`, `kind`, `release`, `image` and `shutdown_owner` stay as they were, because both releases use the same pinned
@@ -832,6 +836,7 @@ systemctl start edge-os-hermes-app.service edge-os-research-worker.service
 **8. Run the checks.** Save the output in a new file outside the record.
 
 ```sh
+RUN=1                                                                      # the value from step 6
 journalctl -u edge-os-hermes-app.service -n 50 --no-pager | grep serving   # must name orbio-first-call-1
 GW=$(sed -n 's/^EDGE_OS_APP_BIND_HOST=//p' /etc/edge-os/hermes-app.env)    # one IPv4 address
 curl -sS "http://$GW:8011/healthz"; curl -sS "http://$GW:8011/readyz"      # the second must report ready
@@ -847,6 +852,8 @@ $A test -r "$R/provider-config.json"; echo "provider_read=$?"              # mus
 $A test -w "$R/state"; echo "state_write=$?"                               # must print state_write=1
 $A test -r "$R/secrets/admission-key"; echo "admission_read=$?"            # must print admission_read=0
 $A test -w "$R/grants"; echo "grants_write=$?"                             # must print grants_write=0
+$A test -r /etc/edge-os/relay.json; echo "operator_config_read=$?"         # must print operator_config_read=1
+$A test -r "${R%/relay}/handoff.json"; echo "handoff_read=$?"              # must print handoff_read=0
 sudo -u nobody test -r "$R/secrets/admission-key"; echo "third_read=$?"    # must print third_read=1
 sudo -u nobody test -w "$R/grants"; echo "third_write=$?"                  # must print third_write=1
 grep -h '^EDGE_OS_USAGE_GLOBAL_\(PROVIDER_REQUESTS\|NANSEN_CREDITS\)=' \
@@ -893,7 +900,7 @@ keeps its liability.
 | `hosted_deployment_hash_mismatch` | The installed record differs | Install it again in step 4. Never edit it by hand. |
 | `hosted_deployment_outside_window` | The window ended on 2026-11-27 | Stop. A new record needs a new reviewed change. |
 | Step 5 stops at `test ! -e`, or prints `different` | A key file is already there, or the copy is not the builder's file | Stop. Nothing was overwritten. Ask the builder before you replace the file: remove it with `shred -u`, then repeat step 5. |
-| `refused: the relay refused the provider key file` | The key is wrong for this release. There is no handoff, and nothing can be sent. | Read `<run root>/relay/state/provider-key-refused.json`, which holds a fixed reason and no key. Stop the failed operation with the unit. The builder corrects the source file. Replace the host file as in the step 5 row, then repeat step 6 with the next `RUN`. |
+| `refused: the relay refused the provider key file` | The key is wrong for this release. There is no handoff, and nothing can be sent. | Read `<run root>/relay/state/provider-key-refused.json`, which holds a fixed reason and no key. A failed `start` cleans up after itself, and the unit's stop does nothing after a failed start. Run the `docker ps` check of step 2, and run `ExecStop` by hand only if a container remains. The builder corrects the source file. Replace the host file as in the step 5 row, then repeat step 6 with the next `RUN`. |
 | `start` refuses an existing run root or channel | That operation already ran | Repeat step 6 with the next `RUN`. |
 | A refused `restart` | The old handoff stays and no relay runs (`ORBIO_RELEASE_DRAFT.md` §8) | Keep the public route closed. Correct the cause and run `restart` again. |
 | A check in step 8 fails | The host is not READY | Keep `EDGE_OS_HERMES_APP_URL` empty. Stop the application and the relay. The public paths keep returning 503. |

@@ -124,6 +124,14 @@ def test_the_hosted_record_v2_runbook_covers_every_host_step():
     assert "-ge 125" not in text
 
 
+def test_the_orbio_switch_selects_relay_containers_by_an_anchored_name():
+    # Docker's name filter matches any part of a name. Unanchored, it also lists the live edge-os-rpc-relay service.
+    switch = HOSTED_RECORD_V2.read_text(encoding="utf-8").split("## 9. Replace the record", 1)[1]
+    assert "docker ps --filter name=^/relay- " in switch
+    assert "--filter name=relay-" not in switch
+    assert "edge-os-rpc-relay" in switch
+
+
 def test_the_coolify_runbook_uses_the_unique_database_alias():
     text = RUNBOOK.read_text(encoding="utf-8")
     assert "@edge-os-postgres:5432/edge_os?sslmode=require" in text
