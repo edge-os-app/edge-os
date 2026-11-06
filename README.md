@@ -13,7 +13,7 @@ First built for the Monad hackathon, Onchain Finance & Trading track.
 Edge OS is a working prototype, not a launched product.
 
 - **Works on an operator-run local setup.** Research on real Envio, QuickNode and Nansen data, rules saved with a hash, and replay on past prices.
-- **Sign-in works on the live site.** Research is not available on [edgeos.fun](https://edgeos.fun) yet, and the site cannot connect a wallet or trade.
+- **One study runs on the live site.** A signed-in visitor can run one fixed MOE study on [edgeos.fun](https://edgeos.fun), with model calls through Orbio. The study finished with limited data. The site cannot connect a wallet or trade.
 - **One real trade, outside the app.** A real Kuru swap ran on Monad mainnet on 22 October 2026 from an agent wallet, under an operator script. The transaction is `0xec980ee5a8dbb87d47be7682d3700d97f898a38f3d034d486266736fee3a1118`.
 - **Not working yet.** Signed permissions do not work yet, so limits are held in code. No real in-app trade has run.
 
@@ -120,7 +120,7 @@ The [architecture guide](docs/architecture/README.md) covers services, jobs, rec
 
 ## Orbio
 
-Orbio is an AI gateway. Its usage unit is CREDIT, and 1 CREDIT is USD 1 of usage. No real call has run through Orbio yet.
+Orbio is an AI gateway. Its usage unit is CREDIT, and 1 CREDIT is USD 1 of usage. The study on [edgeos.fun](https://edgeos.fun) sends its model calls through Orbio.
 
 Built:
 
@@ -130,7 +130,9 @@ Built:
 
 Not built yet: X tools, Sign in with Orbio and recurring edge checks.
 
-Next, I run one real study through Orbio and compare its saved cost with Orbio's account page. The three missing parts follow that study.
+Three real calls matched the drop in the Orbio balance exactly: USD 0.009016 on a local call, USD 0.006766 on a host job, and USD 0.007164 on the live study, where the balance went from 4.9683 to 4.961136.
+
+The live study used 12 of 14 provider requests and checked 8 of 90 receipts, with 0 mismatches. Its result was limited data.
 
 ## Bugs that shaped the design
 
@@ -148,7 +150,7 @@ Edge OS starts with one job done well: short-term momentum and reversal ideas on
 | Stage | What ships |
 | --- | --- |
 | Built | Research agent with Envio, QuickNode and Nansen data. Saved reports that can say no. Exact strategy rules with a plain-English summary. Replay on past prices. Agents, Positions and Funds views. The Orbio route and CREDIT limits. |
-| Next | Research on the live site. Signed permissions with limits, expiry and stops. Real in-app trades. Agents that run signed rules on Kuru while you are offline. A small catalog of research add-ons you can switch on per agent. Wider data coverage and more strategy templates, guided by trader sessions. |
+| Next | Signed permissions with limits, expiry and stops. Real in-app trades. Agents that run signed rules on Kuru while you are offline. A small catalog of research add-ons you can switch on per agent. Wider data coverage and more strategy templates, guided by trader sessions. |
 | Next six months, no launch date set | A second venue and chain after Monad, with Arbitrum, Robinhood Chain and Solana as the targets. Liquidity providers, with the same research, rules and replay for questions about pool fees, inventory and rebalancing. Perp traders on venues such as Hyperliquid, and prediction market traders. These groups get research, simulation and live trades inside signed limits. |
 | Later | Strategy creators who publish or license tested strategies, and users who inspect, copy or fund them. |
 

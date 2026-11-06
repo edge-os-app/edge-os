@@ -36,6 +36,7 @@ from edge_os_api.core.errors import AppError, finding
 from edge_os_api.core.research.operating_release import BINDING_FACT, HistoryRelease, ReleaseRefused
 from edge_os_api.records import contract_adapter as record_contract
 from edge_os_api.research.history_dataset import HistoryDatasetRow
+from edge_os_api.research.investigation_tables import InvestigationEventRow
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 CHECKER_RELATIVE_PATH = "scripts/history_payload_binding.py"
@@ -248,8 +249,6 @@ def _stored_row(session: Session, owner_id: uuid.UUID, dataset_id: uuid.UUID) ->
 
 def _started(session: Session, owner_id: uuid.UUID, job_id: str, attempt_id: str) -> Any:
     """The collection attempt's own started event: the persisted identity the job froze before any effect."""
-    from edge_os_api.research.investigation_jobs import InvestigationEventRow
-
     return session.execute(select(InvestigationEventRow).where(
         InvestigationEventRow.owner_id == owner_id, InvestigationEventRow.job_id == uuid.UUID(job_id),
         InvestigationEventRow.attempt_id == uuid.UUID(attempt_id),
@@ -335,8 +334,6 @@ def record_binding(session: Session, *, owner_id: uuid.UUID, job_id: uuid.UUID, 
 
     Flushes the pending dataset first, then reads the stored owner-scoped row back. Every outcome is saved, including
     MISMATCH and INCOMPLETE; the dataset, its P07 verdict, raw records and bucket times are never changed."""
-    from edge_os_api.research.investigation_jobs import InvestigationEventRow
-
     session.flush()
     row = _stored_row(session, owner_id, dataset_id)
     started = _started(session, owner_id, str(job_id), str(attempt_id))
@@ -387,8 +384,6 @@ def binding_state(session: Session, row: HistoryDatasetRow, owner_id: uuid.UUID)
 
     `owner_id` is the authenticated owner. Every identity comes from saved application state; nothing from a request.
     The records are selected here; `evaluate` decides."""
-    from edge_os_api.research.investigation_jobs import InvestigationEventRow
-
     content = row.content
     started = event = stored = None
     if "operating_release" in content and isinstance(content.get("job_id"), str):

@@ -56,6 +56,11 @@ def test_every_host_unit_uses_the_shared_group_and_keeps_its_own_group_for_the_p
         assert settings["RestrictSUIDSGID"] == "yes", path.name
 
 
+def test_both_research_units_keep_temporary_files_in_the_research_folder() -> None:
+    for path in (RESEARCH_UNIT, APP_UNIT):
+        assert _env(_unit(path))["TMPDIR"] == "/var/lib/edge-os/research/tmp", path.name
+
+
 def test_every_host_unit_names_its_own_docker_config() -> None:
     for path, role in ((RESEARCH_UNIT, "research"), (RELAY_UNIT, "relay"), (APP_UNIT, "research")):
         assert f"Environment=DOCKER_CONFIG=/var/lib/edge-os/{role}/docker-config" in _unit(path), path.name

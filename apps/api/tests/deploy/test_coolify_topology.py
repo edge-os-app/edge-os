@@ -47,12 +47,15 @@ WORKER_SETTINGS = {
 }
 WORKER_KEY_DIR = "/etc/edge-os/execution"
 WORKER_KEY_PATH = f"{WORKER_KEY_DIR}/agent-authorization.pem"
+API_RECORD_ID = "edgeos-fun-vps1-orbio-list-price"
+API_RECORD_PATH = f"/etc/edge-os/hosted/{API_RECORD_ID}.json"
+API_RECORD_SETTINGS = {"EDGE_OS_HOSTED_DEPLOYMENT_ID", "EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH"}
 POSTGRES_ALIAS = "edge-os-postgres"
 EGRESS_BRIDGE = "edgeos-egress"
 ENV_ALLOW = {
     "postgres": {"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"} | POSTGRES_MASKS,
     "migrate": {"EDGE_OS_DATABASE_URL"} | MIGRATE_MASKS,
-    "api": API_SETTINGS | API_MASKS,
+    "api": API_SETTINGS | API_MASKS | API_RECORD_SETTINGS,
     "web": WEB_MASKS,
     "execution-worker": WORKER_SETTINGS | API_MASKS,
     "recurring-producer": API_SETTINGS | API_MASKS,
@@ -319,6 +322,21 @@ def test_no_service_mounts_the_key_file_so_a_deploy_without_it_starts(compose):
             assert mount["source"] != WORKER_KEY_PATH, name
             assert mount["target"] != WORKER_KEY_PATH, name
     assert WORKER_KEY_PATH.startswith(WORKER_KEY_DIR + "/")
+
+
+def test_only_the_api_names_the_hosted_record_and_reads_it_through_a_read_only_bind(compose):
+    api = compose["services"]["api"]
+    values = support.environment_values(api)
+    assert values["EDGE_OS_HOSTED_DEPLOYMENT_ID"] == API_RECORD_ID
+    assert values["EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH"] == API_RECORD_PATH
+    assert api["group_add"] == ["987"]
+    assert support.mounts(api) == [{"source": API_RECORD_PATH, "target": API_RECORD_PATH, "type": "bind",
+                                    "read_only": True}]
+    for name, service in compose["services"].items():
+        if name != "api":
+            assert not (API_RECORD_SETTINGS & support.environment_names(service)), name
+            assert "group_add" not in service, name
+            assert not any(API_RECORD_ID in str(mount) for mount in support.mounts(service)), name
 
 
 def test_the_workers_use_a_heartbeat_command(compose):

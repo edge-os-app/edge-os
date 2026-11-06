@@ -710,8 +710,11 @@ Every other field is the same, which includes `research_release`, `image_digests
 `2026-11-27T00:00:00Z`, before the snapshot's auto-deletion on 2026-11-29 (H10). The `hermes-relay-job` id is the amd64 id
 in `_PINNED_IMAGES`, which both releases use. The `postgres` id is the one in the compose file deployed on 2026-11-06.
 
-The Coolify services name no record, because `compose.coolify.yml` does not pass the two record settings. Only the host
-application and the host research worker read this record. The switch therefore needs no new API image.
+`compose.coolify.yml` passes the two record settings to the `api` service only, with `group_add: ["987"]` and a read-only
+bind of the record file (§9.6). The research release composes only when the API names the record (`CONTRACT.md` §5.3). No
+other Coolify service names a record. The host application and the host research worker read the record through their env
+files. The live API image composed the release from this record in a dry run on 2026-11-06, so the switch needs no new
+API image.
 
 ### 9.2 Host gates against Orbio
 
@@ -920,3 +923,47 @@ To return the host to its earlier state:
 
 The old relay operation has ended, and the builder chose no OpenRouter on the server, so do not start the relay or the
 application. The public paths keep returning 503. The key file stays in place, mode `0600`, until the builder decides.
+
+### 9.6 Three live changes made on 2026-11-06
+
+The builder opened the study on edgeos.fun on 2026-11-06. That needed three changes on the server. The repository now
+holds all three, so a rebuild keeps them. Coolify and the host hold their own copies, so a merge changes neither.
+
+| Change | Live place | Repository place |
+|---|---|---|
+| `api` names the record, joins group 987 and binds the record file read-only | The Coolify compose | `compose.coolify.yml` |
+| The worker starts through `python -c`, not `python -m` | `/etc/systemd/system/edge-os-research-worker.service.d/10-import-main.conf` | Not needed: `investigation_tables.py` holds the job tables |
+| The Hermes application has `TMPDIR=/var/lib/edge-os/research/tmp` | `/etc/edge-os/hermes-app.env` | `deploy/host/edge-os-hermes-app.service` |
+
+**Compose.** The record file must exist at its path before a deploy. A named record that cannot be read refuses startup,
+and so does a record outside its validity window (`CONTRACT.md` §5.3). This record ends on 2026-11-27. After that date
+the API cannot start until a new reviewed record replaces this one or the lines below go.
+
+To undo it, delete these lines from the `api` service in Coolify, then use Force Restart:
+the two `EDGE_OS_HOSTED_DEPLOYMENT_*` settings, `group_add` and `volumes`. The API then starts with no record. Sign-in and
+saved results keep working, and the API refuses new research jobs.
+
+**Worker start.** `python -m` ran `investigation_jobs.py` as `__main__`. `record_binding` then imported the same file by
+its real name, which defined the tables twice. That import ran after collection and outside the `try`, so a job lost its
+result. The tables now live in `investigation_tables.py`, and `history_payload_binding.py` imports them from there. Both
+start lines are safe with this code, so the unit keeps `python -m`.
+
+Keep the drop-in until the host checkout holds this code. Then wait until no job runs, because a worker that stops during
+collection never collects again. Remove the drop-in:
+
+```sh
+rm /etc/systemd/system/edge-os-research-worker.service.d/10-import-main.conf
+systemctl daemon-reload
+systemctl restart edge-os-research-worker.service
+```
+
+To undo that, put the drop-in back with this `ExecStart`, then repeat the last two commands:
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/opt/edge-os/apps/api/.venv/bin/python -c "from edge_os_api.research.investigation_jobs import main; main()" --interval 2
+```
+
+**TMPDIR.** The env file and the unit now give the same value. Keep them equal. To undo the unit line, remove it, run
+`systemctl daemon-reload` and restart `edge-os-hermes-app.service`. The env file still sets the value.

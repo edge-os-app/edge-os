@@ -297,7 +297,7 @@ def test_research_tools_hold_no_financial_or_network_authority():
                  "edge_os_api.wallet_setup", "edge_os_api.revocation", "edge_os_api.kuru_flow", "httpx", "socket",
                  "requests", "urllib", "edge_os_api.research.hermes_interpreter")
     root = Path(__file__).resolve().parents[1] / "src" / "edge_os_api" / "research"
-    for name in ("investigation_jobs.py", "investigation_tools.py", "history_dataset.py"):
+    for name in ("investigation_jobs.py", "investigation_tables.py", "investigation_tools.py", "history_dataset.py"):
         tree = ast.parse((root / name).read_text(encoding="utf-8"))
         imported = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
         imported |= {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}

@@ -178,7 +178,17 @@ services:
   api:
     image: ${EDGE_OS_API_IMAGE:?set EDGE_OS_API_IMAGE to the API digest}
     <<: *hardening
-    environment: *api-environment
+    environment:
+      <<: *api-environment
+      # Live study: only the API names the record. Group 987 reads the root-owned record file.
+      EDGE_OS_HOSTED_DEPLOYMENT_ID: edgeos-fun-vps1-orbio-list-price
+      EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH: /etc/edge-os/hosted/edgeos-fun-vps1-orbio-list-price.json
+    group_add: ["987"]
+    volumes:
+      - type: bind
+        source: /etc/edge-os/hosted/edgeos-fun-vps1-orbio-list-price.json
+        target: /etc/edge-os/hosted/edgeos-fun-vps1-orbio-list-price.json
+        read_only: true
     tmpfs: ["/tmp"]
     mem_limit: 1280m
     mem_reservation: 256m
