@@ -36,14 +36,23 @@ export const RETRY_BLOCKED: Record<string, string> = {
   stale_reply: "Your saved meaning changed after that reply, so the reply cannot be tried again.",
 };
 
+const ORBIO_ROUTE = "orbio-openrouter-managed";
+
 const ROUTE_WORDS: Record<string, string> = {
-  "orbio-openrouter-managed": "via Orbio",
+  [ORBIO_ROUTE]: "via Orbio",
   "openrouter-openai-standard": "via OpenRouter",
 };
 
 /** A saved route in plain words. A missing route, or one with no plain name, gives null: the page shows nothing. */
 export function describeRoute(route: string | null): string | null {
   return route !== null && Object.hasOwn(ROUTE_WORDS, route) ? ROUTE_WORDS[route] : null;
+}
+
+/** How many listed attempts saved the Orbio route, in plain words. A missing route is never counted. None gives null. */
+export function describeRouteSummary(attempts: Attempt[]): string | null {
+  const orbio = attempts.filter((a) => a.identity.route === ORBIO_ROUTE).length;
+  if (orbio === 0) return null;
+  return orbio === attempts.length ? "Model calls ran through Orbio" : `${orbio} of ${attempts.length} model calls ran through Orbio`;
 }
 
 export const ATTEMPT_STATUS_LABEL: Record<AttemptStatus, string> = {

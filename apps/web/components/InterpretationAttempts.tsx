@@ -2,7 +2,7 @@
 
 import { Fragment } from "react";
 import { formatTime } from "../lib/describe";
-import { ATTEMPT_STATUS_LABEL, describeAttemptCost, describeCreditSpend, describeLatency, describeModelBudget, describeModelCost, describeParse, describeRoute, describePurpose, describeUsage } from "../lib/interpretation";
+import { ATTEMPT_STATUS_LABEL, describeAttemptCost, describeCreditSpend, describeLatency, describeModelBudget, describeModelCost, describeParse, describeRoute, describeRouteSummary, describePurpose, describeUsage } from "../lib/interpretation";
 import type { Attempt, LateResult, ModelBudget, ModelCost } from "../lib/types";
 import { Details } from "./Details";
 
@@ -12,10 +12,12 @@ export function InterpretationAttempts({ attempts, modelCost = null, modelBudget
   if (attempts.length === 0) return budgetLine;
   const byId = new Map(attempts.map((a) => [a.attempt_id, a]));
   const number = (id: string) => byId.get(id)?.sequence;
+  const routeSummary = describeRouteSummary(attempts);
   return (
     <>
       {modelCost && <p data-testid="model-cost-total">Total model cost: {describeModelCost(modelCost)}</p>}
       {modelCost && <p data-testid="model-credit">Model spend: {describeCreditSpend(modelCost)}</p>}
+      {routeSummary && <p data-testid="model-route-summary">{routeSummary}</p>}
       {budgetLine}
       <details open={open} data-testid="attempts">
         <summary>Research agent reads ({attempts.length})</summary>
