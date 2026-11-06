@@ -5,7 +5,7 @@
 import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { injectAuth, tokens } from "./fixture-auth.mjs";
+import { injectAuth, p05Tokens } from "./fixture-auth.mjs";
 
 const evidence = process.env.P03_EVIDENCE_DIR ?? ".evidence";
 const results = JSON.parse(fs.readFileSync(path.join(evidence, "p05-results.json"), "utf8"));
@@ -21,13 +21,20 @@ test.describe.configure({ mode: "serial" });
 test("saved attempts and states reopen unchanged in a fresh context", async ({ browser }, info) => {
   const project = info.project.name;
   const posts = [];
-  const context = await browser.newContext({ viewport: info.project.use.viewport, hasTouch: info.project.use.hasTouch });
-  const page = await context.newPage();
-  page.on("request", (request) => { if (request.method() !== "GET") posts.push(`${request.method()} ${request.url()}`); });
-  await injectAuth(page, tokens.a);
-  const open = async (id) => { await page.goto(`/app#/research/${id}`); await expect(outcome(page)).toBeVisible({ timeout: 30_000 }); };
+  /** A new browser context for one owner. The address changes only after `#`, so one page cannot change its owner. */
+  const signIn = async (owner) => {
+    const context = await browser.newContext({ viewport: info.project.use.viewport, hasTouch: info.project.use.hasTouch });
+    const page = await context.newPage();
+    page.on("request", (request) => { if (request.method() !== "GET") posts.push(`${request.method()} ${request.url()}`); });
+    await injectAuth(page, p05Tokens[owner]);
+    return { context, page };
+  };
+  const reopen = async (page, id) => { await page.goto(`/app#/research/${id}`); await expect(outcome(page)).toBeVisible({ timeout: 30_000 }); };
 
   const failure = results[`p05-failure-retry-${project}`];
+  const first = await signIn(failure.owner);
+  let page = first.page;
+  const open = (id) => reopen(page, id);
   await open(failure.id);
   await expect(outcome(page)).toHaveAttribute("data-outcome", "NEEDS_CLARIFICATION");
   await openAttempts(page);
@@ -49,6 +56,9 @@ test("saved attempts and states reopen unchanged in a fresh context", async ({ b
   await expect(rows(page)).toHaveCount(2);
 
   const rejected = results[`p05-conflict-overwrite-${project}`];
+  await first.context.close();
+  const second = await signIn(rejected.owner);
+  page = second.page;
   await open(rejected.rejectedId);
   await expect(page.getByRole("heading", { name: "Your last reply could not be used" })).toBeVisible();
   await open(rejected.conflictId);
@@ -56,5 +66,5 @@ test("saved attempts and states reopen unchanged in a fresh context", async ({ b
   await expect(page.getByRole("row", { name: /Entry rule/ })).toContainText("Two statements that disagree");
 
   expect(posts, "reopening makes no write and starts no interpreter turn").toEqual([]);
-  await context.close();
+  await second.context.close();
 });

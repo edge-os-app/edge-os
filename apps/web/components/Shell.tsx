@@ -120,7 +120,7 @@ export function Shell() {
         {route.name === "account" && <AccountViews key={`${route.area}:${route.recordId ?? ""}:${route.agentId ?? ""}`}
           initialView={route.area} sourceRecordId={route.recordId} agentId={route.agentId} />}
       </main>
-      <div className="convo convo-desktop" role="complementary" aria-label="Conversation" data-focus-surface="side">
+      <div className="convo convo-desktop" role="complementary" aria-label="Conversation" data-focus-surface="side" tabIndex={0}>
         <Conversation context={context} idPrefix="side" agentId={conversationAgent} />
       </div>
       <dialog ref={sheet} className="sheet" aria-label="Conversation" data-focus-surface="sheet" onKeyDown={trapTab} onClose={() => sheetTrigger.current?.focus()}>

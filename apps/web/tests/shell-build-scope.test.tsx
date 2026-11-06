@@ -87,3 +87,10 @@ describe("build-scope notice", () => {
     expect(screen.queryByTestId(CONTROLLED_NOTICE)).toBeNull();
   });
 });
+
+describe("conversation panel keyboard access", () => {
+  it("is one tab stop, so the keyboard can reach and scroll it when it holds no control", async () => {
+    await renderAt("#/agents");
+    expect(screen.getByRole("complementary", { name: "Conversation" }).tabIndex).toBe(0);
+  });
+});
