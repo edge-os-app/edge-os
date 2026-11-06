@@ -124,7 +124,8 @@ def test_a_saved_request_goes_through_the_relay_once_is_charged_exactly_reopens_
     again = reopened.client.get(path, headers=owner_a).json()
     assert again["attempts"] == created.json()["attempts"] and again["head"] == created.json()["head"]
     assert reopened.client.get(path, headers=owner_b).status_code == 404
-    assert pg.psql("select count(*) from interpretation_attempts") == "1"
+    # This request's rows only: the session database also holds the attempts of earlier Docker modules.
+    assert pg.psql(f"select count(*) from interpretation_attempts where intake_record_id = '{intake_id}'") == "1"
     assert pg.psql("select count(*) from usage_local.provider_spend_reservations") == "1"
     assert find_leaks(evidence_root / "app-jobs", SENTINEL) == [] and find_leaks(app_relay.root, SENTINEL) == []
 
