@@ -38,10 +38,12 @@ from pathlib import Path
 from typing import Any
 
 from egress_gateway import AllowedTarget
-from relay_admission import ActualRelease, ProviderDestination, RelayRelease, load_actual_release
+from relay_admission import (
+    PROVIDER_KEY_REFUSED_RECORD, ActualRelease, ProviderDestination, RelayRelease, load_actual_release,
+)
 from relay_turn_runner import RelayEndpoint
 
-__all__ = ["RelaySupervisor", "make_provider_tls"]
+__all__ = ["ProviderKeyRefused", "RelaySupervisor", "make_provider_tls"]
 
 HERE = Path(__file__).resolve().parent
 SUPPORT = (HERE.parent / "hermes_job_support", HERE.parent / "hermes_interpretation")
@@ -73,6 +75,10 @@ CHANNEL_ROOT_MODE = 0o770
 SHARED_FOLDER_MODES = {"grants": 0o770, "revocations": 0o770, "state": 0o750, "secrets": 0o750}
 PRIVATE_FOLDER_MODE = 0o700
 ADMISSION_KEY_MODE = 0o440
+
+
+class ProviderKeyRefused(RuntimeError):
+    """The relay refused the key file and ended before serving. It alone read the file; the reason is in its state folder."""
 
 
 def docker(*args: str, timeout: float = DOCKER_SECONDS, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -270,10 +276,18 @@ class RelaySupervisor:
         else:
             network = f"container:{self.provider_id}"
         before = self._heartbeat_started()
+        refused = self.path("state", PROVIDER_KEY_REFUSED_RECORD)
+        refused.unlink(missing_ok=True)  # an earlier start's answer; this start reads the key file again
+
+        def relay_ready() -> bool:
+            if refused.exists():
+                raise ProviderKeyRefused(f"the relay refused the provider key file; see state/{refused.name}")
+            return (self._heartbeat_started() or 0) > (before or 0)
+
         docker(*self._common(self.names["relay"], network),
                "--env", "RELAY_SUPPORT_PATH=/relay/support/job:/relay/support/interpretation",
                *mounts, self.image, "-B", "/relay/code/relay_service.py", "/relay/config.json")
-        self._wait(lambda: (self._heartbeat_started() or 0) > (before or 0), "relay")
+        self._wait(relay_ready, "relay")
 
     def _heartbeat_started(self) -> float | None:
         try:

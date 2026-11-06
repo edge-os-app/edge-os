@@ -12,6 +12,7 @@ import os
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
@@ -81,6 +82,7 @@ plain or in the daemon's JSON body, or the generic "No such object" of other ver
         self.ids = itertools.count(1)
         self.beats = itertools.count(1)
         self.fail_run: str | None = None  # a container name prefix whose launch fails
+        self.relay_refuses_key = False  # the relay container writes its refusal record, not a heartbeat
         self.before_create: Callable[[str, str], None] | None = None
         self.raise_on_rm: BaseException | None = None
         self.on_inspect: Callable[[str], None] | None = None
@@ -189,6 +191,8 @@ plain or in the daemon's JSON body, or the generic "No such object" of other ver
             Path(mounts["/provider/receipts"], "ready").write_text("{}")
         elif "/gateway/receipts" in mounts:
             Path(mounts["/gateway/receipts"], "ready").write_text("{}")
+        elif self.relay_refuses_key:
+            Path(mounts["/relay/state"], relay_admission.PROVIDER_KEY_REFUSED_RECORD).write_text("{}")
         else:
             Path(mounts["/relay/state"], "heartbeat.json").write_text(json.dumps({"started_at": 1e12 + next(self.beats)}))
         return done(identity)
@@ -1060,6 +1064,33 @@ def test_a_volume_swapped_after_the_claim_is_found_before_any_handoff_and_kept(
     assert not (tmp_path / "run" / "handoff.json").exists()
     assert egress in fake.objects["volume"] and fake.objects["container"] == {} and fake.objects["network"] == {}
     assert json.loads((tmp_path / "run" / "start-failed.json").read_text())["cleanup"]["foreign"] == [egress]
+
+
+def test_a_key_the_relay_refuses_ends_the_start_at_once_with_nothing_left_and_no_handoff(
+        tmp_path: Path, key: Path, fake: FakeDocker, capsys: pytest.CaptureFixture[str]) -> None:
+    fake.relay_refuses_key = True
+    began = time.monotonic()
+
+    assert main([str(write(tmp_path, config(tmp_path, key))), "start"]) == 2
+
+    assert time.monotonic() - began < relay_supervisor.START_SECONDS / 2  # it does not wait for a heartbeat
+    assert capsys.readouterr().err == ("refused: the relay refused the provider key file; "
+                                       "see state/provider-key-refused.json\n")
+    assert not (tmp_path / "run" / "handoff.json").exists()
+    failed = json.loads((tmp_path / "run" / "start-failed.json").read_text())
+    assert failed["error"] == "ProviderKeyRefused"
+    assert fake.objects == {"container": {}, "network": {}, "volume": {}}
+
+
+def test_a_restart_with_the_right_key_is_not_stopped_by_an_earlier_refusal(tmp_path: Path, key: Path,
+                                                                           fake: FakeDocker) -> None:
+    loaded, _, _ = started(tmp_path, key)
+    supervisor = loaded.supervisor()
+    supervisor.path("state", relay_admission.PROVIDER_KEY_REFUSED_RECORD).write_text("{}")
+
+    relay_operator.restart(loaded)
+
+    assert not supervisor.path("state", relay_admission.PROVIDER_KEY_REFUSED_RECORD).exists()
 
 
 def test_failed_start_cleanup_uses_the_recorded_network_id(tmp_path: Path, key: Path, fake: FakeDocker,

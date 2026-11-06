@@ -10,7 +10,8 @@ Docker tests (one pinned Hermes image built from this candidate, the API session
 genuine relay job in a no-network container and the file channel. The relay code runs in this process so that only its
 provider send is replaced by a counted SYNTHETIC reply; the synthetic record and definition are approved only inside
 the test. Everything here is SYNTHETIC: no provider, key, price or release is proved, whatever the record's ACTUAL kind
-or the configuration's LIVE label says.
+or the configuration's LIVE label says. The one exception to the record is the Orbio shape test, which runs the real
+approved Orbio definition and CA bundle; its key and reply are still synthetic and nothing is sent to any host.
 """
 
 from __future__ import annotations
@@ -43,6 +44,9 @@ CACHED_FIELDS = ["model", "messages", "stream", "response_format", "provider", "
                  "prompt_cache_options"]
 EXTRA = {"stream": False, "provider": ROUTING, "reasoning": {"effort": "low"}, "response_format": SCHEMA}
 OTHER_PLATFORM_IMAGE = "sha256:" + "0" * 64
+ORBIO_KEY = "sk-orbio-SYNTHETIC-shape-sentinel-7a1c"
+ORBIO_CA = Path(__file__).resolve().parents[2] / "docs/qualification/orbio-release/orbio_ca_isrg_root_x1.pem"
+ORBIO_CHARGE = Decimal("0.0094038")  # concrete-thesis: 1,423 prompt and 611 completion tokens at USD 2.1 and 10.5 per million
 
 
 def pinned_images_for_host(host: str, image_id: str) -> tuple[tuple[str, str], tuple[str, str]]:
@@ -216,7 +220,7 @@ class InProcessRelay:
     """The accepted relay code with its own records and the file channel, run here so only `send_once` is replaced."""
 
     def __init__(self, root: Path, record_raw: bytes, record_sha: str, ca: bytes, channel: Path, key: str,
-                 monkeypatch: pytest.MonkeyPatch) -> None:
+                 channel_root: str, monkeypatch: pytest.MonkeyPatch) -> None:
         import relay_service
         from relay_transport import SentReply
 
@@ -239,7 +243,7 @@ class InProcessRelay:
         monkeypatch.setattr(relay_service, "send_once", counted_send)
         self.relay = relay_service.Relay({
             "release_record": {"path": str(root / "release.json"), "sha256": record_sha},
-            "channel_roots": {"app": str(channel)}, "gateway_socket": "/relay/egress/gateway.sock",
+            "channel_roots": {channel_root: str(channel)}, "gateway_socket": "/relay/egress/gateway.sock",
             "paths": {"provider_key": str(root / "provider-key"), "admission_key": str(root / "admission.key"),
                       "provider_ca": str(root / "ca.pem"), "grants": str(root / "grants"),
                       "revocations": str(root / "revocations"), "state": str(root / "state")}})
@@ -313,7 +317,8 @@ def shaped(image_id: str, env, migrated, pg, run_id: str, evidence_root: Path, r
            monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     """One application over the composition with a test-approved SYNTHETIC record that asks for no prompt caching.
 
-    An indirect parameter gives `definition` keyword changes, merged over these (its `record_fields` likewise)."""
+    An indirect parameter gives `definition` keyword changes, merged over these (its `record_fields` likewise), or
+    `{"orbio": True}` for the real approved Orbio definition and CA bundle with a synthetic key."""
     from edge_os_api.core.settings import load_settings
     from edge_os_api.main import create_app
     from edge_os_api.research import hermes_relay_composition as composition
@@ -328,18 +333,24 @@ def shaped(image_id: str, env, migrated, pg, run_id: str, evidence_root: Path, r
     ca = b"SYNTHETIC CA bundle"
     changes = dict(getattr(request, "param", {}))
     record_changes = changes.pop("record_fields", {})
-    given = definition(images=pinned_images_for_host(composition._host_platform(), image_id), **changes,
-                       record_fields={
-        "release_id": RELEASE_ID, "ca_bundle_sha256": hashlib.sha256(ca).hexdigest(),
-        "prompt_cache_options": dict(CACHE), "allowed_fields": list(CACHED_FIELDS), **record_changes})
+    key = SENTINEL
+    if changes.pop("orbio", False):
+        [given] = [item for item in composition.RELEASE_DEFINITIONS if item.seller == "orbio"]
+        ca, key = ORBIO_CA.read_bytes(), ORBIO_KEY
+    else:
+        given = definition(images=pinned_images_for_host(composition._host_platform(), image_id), **changes,
+                           record_fields={
+            "release_id": RELEASE_ID, "ca_bundle_sha256": hashlib.sha256(ca).hexdigest(),
+            "prompt_cache_options": dict(CACHE), "allowed_fields": list(CACHED_FIELDS), **record_changes})
     monkeypatch.setattr(composition, "RELEASE_DEFINITIONS", (given,))
     monkeypatch.setattr(relay_admission, "APPROVED_ACTUAL_RELEASES", frozenset({given.record_sha256}))
     pg.psql(f"truncate {SPEND_TABLES}")
     before = {"containers": docker_names("ps", "-aq"), "networks": docker_names("network", "ls", "-q"),
               "volumes": docker_names("volume", "ls", "-q"), "bridge": docker_names("network", "inspect", "bridge",
                                                                                    "--format", "{{.Id}}")}
-    relay = InProcessRelay(root / "relay", given.record, given.record_sha256, ca, channel, SENTINEL, monkeypatch)
-    content = handoff(root, given, image={"reference": image_id[:19], "id": image_id})
+    relay = InProcessRelay(root / "relay", given.record, given.record_sha256, ca, channel, key, given.channel_root,
+                           monkeypatch)
+    content = handoff(root, given, channel=given.channel_root, image={"reference": image_id[:19], "id": image_id})
     content["evidence_dir"] = str(channel)
     located = write_handoff(root / "operator", content)
     settings = load_settings({**env, "EDGE_OS_INTERPRETER": "hermes_local"})
@@ -518,6 +529,53 @@ def test_docker_the_application_schema_and_preferred_model_go_on_the_wire_with_n
         "label": "SYNTHETIC", "attempt_id": attempt_id, "body_sha256": wire_sha, "body_bytes": len(send["body"]),
         "response_format_sha256": hashlib.sha256(canonical(expected["response_format"])).hexdigest(),
         "message_roles": ["system", "user"], "cache_markers": []}, indent=1, sort_keys=True) + "\n")
+    assert len(relay.sends) == 1 and pg.psql("select count(*) from usage_local.provider_spend_reservations") == "1"
+
+
+@pytest.mark.parametrize("shaped", [{"orbio": True}], indirect=True, ids=["orbio-record"])
+def test_docker_the_orbio_record_goes_through_pinned_hermes_with_no_routing_and_is_started_sent_once_and_settled(
+        shaped, owner_a, pg) -> None:
+    from edge_os_api.research.interpreter_output_schema import interpretation_response_format
+    from leak_scan import find_leaks
+
+    relay = shaped.relay
+    relay.answers.append(relay.reply(200, "application/json", provider_reply(float(ORBIO_CHARGE), PREFERRED_MODEL), "",
+                                     {"X-Orbio-Balance": "4.99"}))
+    client = shaped("orbio")
+
+    created = client.post("/v1/research/requests", json=intake(), headers=owner_a)
+
+    assert created.status_code == 201, created.text
+    [attempt] = created.json()["attempts"]
+    attempt_id = attempt["attempt_id"]
+    assert (attempt["status"], attempt["parse_result"], attempt["request_count"]) == ("COMPLETED", "ACCEPTED", 1)
+    assert attempt["spend"] == {"state": "SETTLED", "charge_usd": str(ORBIO_CHARGE)}
+
+    grant = json.loads((relay.root / "grants" / f"{attempt_id}.json").read_text())
+    options = hermes_turn_job.request_options({"guard": {"policy": grant["policy"]}})  # the job's own mapping, this grant
+    assert "provider" not in grant["policy"]["required_extra"]
+    assert "provider" not in options["request_overrides"] and "provider" not in options["request_overrides"]["extra_body"]
+
+    [send] = relay.sends
+    body = json.loads(send["body"])
+    expected = {"stream": False, "reasoning": {"effort": "low"}, "response_format": interpretation_response_format(),
+                "prompt_cache_options": CACHE, "model": PREFERRED_MODEL, "max_tokens": 4096,
+                "session_id": f"p05-{attempt_id}"}
+    assert {name: body[name] for name in expected} == expected and set(body) == set(expected) | {"messages"}
+    assert (send["destination"].host, send["destination"].path, send["key"]) == (
+        "api.orbio.so", "/api/v1/chat/completions", ORBIO_KEY)
+    wire_sha = hashlib.sha256(send["body"]).hexdigest()
+    [admitted] = [e for e in container_result(shaped.channel, attempt_id)["guard"]["evidence"] if e["admitted"]]
+    assert admitted["request_sha256"] == wire_sha
+
+    started, finished = relay.record_of(attempt_id, "started"), relay.record_of(attempt_id, "finished")
+    assert started["body_sha256"] == wire_sha and finished["outcome"] == "reply"
+    assert finished["reply_headers"] == {"X-Orbio-Balance": "4.99"} and finished["reply_headers_refused"] == {}
+    assert find_leaks(shaped.channel, ORBIO_KEY) == [] and find_leaks(shaped.root / "operator", ORBIO_KEY) == []
+    (shaped.root / "wire.json").write_text(json.dumps({
+        "label": "SYNTHETIC key and reply, real Orbio record", "attempt_id": attempt_id, "body_sha256": wire_sha,
+        "body_bytes": len(send["body"]), "body_fields": sorted(body), "request_options": options,
+        "started": started}, indent=1, sort_keys=True) + "\n")
     assert len(relay.sends) == 1 and pg.psql("select count(*) from usage_local.provider_spend_reservations") == "1"
 
 

@@ -25,9 +25,9 @@ from typing import Any
 
 from egress_gateway import MAX_TUNNEL_SECONDS, host_name_refusal
 
-__all__ = ["APPROVED_ACTUAL_RELEASES", "CHANNEL_FIELDS", "ActualRelease", "ActualReleaseUnapproved", "ProviderDestination",
-           "RelayRelease", "RelaySubject", "channel_refusal", "grant_refusal", "issue_grant", "load_actual_release",
-           "parse_channel_message", "saved_reply_headers"]
+__all__ = ["APPROVED_ACTUAL_RELEASES", "CHANNEL_FIELDS", "PROVIDER_KEY_REFUSED_RECORD", "ActualRelease",
+           "ActualReleaseUnapproved", "ProviderDestination", "RelayRelease", "RelaySubject", "channel_refusal",
+           "grant_refusal", "issue_grant", "load_actual_release", "parse_channel_message", "saved_reply_headers"]
 
 RELEASE_KINDS = ("AUTHORED", "ACTUAL")  # an ACTUAL release exists only through an approved record (CONTRACT A6)
 # SHA256 of approved release records. Every other ACTUAL record fails closed. The operator handoff selects one of them:
@@ -52,6 +52,9 @@ PROMPT_CACHE_OPTIONS = {"mode": "explicit"}
 RECORDABLE_REPLY_HEADERS = ("X-Orbio-Balance", "X-Orbio-Ignored-Parameters")
 MAX_REPLY_HEADER_CHARS = 256
 PROVIDER_KEY_PREFIX = "sk-orbio-"
+ORBIO_HOST = "api.orbio.so"  # a release sending here takes only an Orbio key; every other ACTUAL release refuses one
+PROVIDER_KEY_TEXT = re.compile(r"[!-~]+")  # what an Authorization header can carry unchanged
+PROVIDER_KEY_REFUSED_RECORD = "provider-key-refused.json"  # the relay's state folder: why it did not start
 OPTIONAL_RECORD_FIELDS = frozenset({"prompt_cache_options", "recorded_reply_headers"})
 # Every routing field this code can check. A record names its routing fields; one outside this set is refused, never
 # ignored, and none of these may be left out. A provider with other routing fields needs a reviewed change here.
@@ -278,6 +281,15 @@ class ActualRelease:
     @property
     def endpoint_url(self) -> str:
         return f"https://{self.destination.host}{self.destination.path}"
+
+    def key_refusal(self, key: str) -> str | None:
+        """Why this key may not go to this release's host, or None. The reason is fixed text: it holds nothing of the key."""
+        if not PROVIDER_KEY_TEXT.fullmatch(key):
+            return "provider_key_malformed"
+        if self.destination.host == ORBIO_HOST:
+            orbio = key.startswith(PROVIDER_KEY_PREFIX) and key != PROVIDER_KEY_PREFIX
+            return None if orbio else "provider_key_not_orbio"
+        return "provider_key_is_orbio" if key.lower().startswith(PROVIDER_KEY_PREFIX) else None
 
     def body_refusal(self, body: bytes, attempt_id: str, *, granted_max_tokens: int | None = None) -> str | None:
         """Why this admitted body is not exactly the release's request shape, or None. Checked before any start.

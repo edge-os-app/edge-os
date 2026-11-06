@@ -129,6 +129,7 @@ Checked by `tests/hermes_provider_relay/test_orbio_first_call_release.py`, `test
 5. The operator handoff selects the release. An unknown hash, an unapproved hash, a definition in one registry only, or handoff bytes that do not match the given SHA256 are refused before any launch. An existing OpenRouter configuration selects the same OpenRouter release.
 6. One ledger database serves every route. Caps stay in the one settings row, so the cap check sees OpenRouter and Orbio spend together. Each reservation saves its `route_id`. Each route's token price is frozen at that route's first use, and a later different price gets the same refusal. Settlement uses the price of the reservation's own route.
 7. The adopted record, approval packet and price bytes keep their SHA256 values. The CLOUD-02 golden test (`test_release_destination_golden.py`) still passes unchanged.
+8. The relay checks the key file at start, before it serves anything. A release that sends to `api.orbio.so` takes only a key that starts with `sk-orbio-`, and every other ACTUAL release refuses such a key. A key that an HTTP header cannot carry unchanged is refused too. A refusal ends the relay, so no handoff, grant, `started.json`, byte or spend can follow. The record holds a fixed reason and no part of the key. The operator still never opens the file.
 
 ## 4. Price table rule
 
@@ -214,30 +215,33 @@ Before the call:
 
 - [ ] Steps 1 to 7 are done and recorded, and the builder authorized step 8.
 - [ ] The builder records the balance B0, the usage and the rate limits, from Orbio's account page or from `GET /api/v1/key` in the builder's own terminal. The controller does not do this read, because the relay alone reads the key.
+- [ ] Rerun the handshake-only TLS check before the leaf certificate expires on 2026-12-06, from the pinned image's own Python. That image has Python 3.14.8 and OpenSSL 3.5.7; the check of 2026-11-06 used Python 3.14.4 and OpenSSL 3.6.4. The image has the same strict settings, but the handshake has not run on its OpenSSL.
 - [ ] Record the call's UTC time, and confirm the catalogue list rates for that model at that time are still USD 2 / 10 with no reachable override, no cache, reasoning, request or other fee is listed, the platform fee is still 5%, and no tier costs more than the list price (section 4 rules 3 and 4).
 
 Operator steps. The controller runs these. The key stays in one file that only the relay reads. The operator only checks that file's mode and place, and never opens it.
 
-1. The builder writes the key to a file outside the repository, with mode 0600, and gives the controller its path only.
+Use the API's Python in every command, as the commands show. A plain `python` is not on the path. Set `PYTHONPATH` to this checkout's `apps/api/src` in steps 3 to 7 and 11: the virtual environment's editable install can name another checkout, and steps 5 to 7 would then run that checkout's code.
+
+1. The builder writes the key to a file outside the repository, with mode 0600, and gives the controller its path only. The file holds one line. The relay checks the key at start: this release takes only a key that starts with `sk-orbio-`.
 2. Write the operator configuration (`docs/qualification/hermes-actual-operation/README.md` section 3) with these values:
    - `kind` `ACTUAL`, `release` null, `shutdown_owner` `relay_operator`;
    - `release_record`: the absolute path of `orbio_first_call_record.json`, with the SHA256 in section 2;
    - `ca_bundle`: the absolute path of `orbio_ca_isrg_root_x1.pem`, with the SHA256 in section 2;
-   - `image`: `id` is the pinned image id for this host from `RELEASE_DEFINITIONS`, and `reference` is the local tag of that image. The operator launches by the id and refuses a tag with another id;
-   - `channel` name `edge-os-research`; a new `run_root` and channel folder;
+   - `image`: `id` is the pinned image id for this host from `RELEASE_DEFINITIONS`, and `reference` is the local tag of that image (`docker images --no-trunc` shows it). The operator launches by the id and refuses a tag with another id;
+   - `channel` name `edge-os-research`; a new `run_root` and channel folder, each in a folder that exists;
    - `provider_key_file`: the path from step 1.
-3. Run `python scripts/hermes_provider_relay/relay_operator.py CONFIG check`, then `start`. Keep the printed handoff path and SHA256.
+3. From the repository root, run `apps/api/.venv/bin/python scripts/hermes_provider_relay/relay_operator.py CONFIG check`, then the same command with `start`. Keep the printed handoff path and SHA256. If `start` prints `refused: the relay refused the provider key file`, the key is the wrong one for this release. The reason is in `<run root>/relay/state/provider-key-refused.json`, and no handoff exists, so nothing can be sent. The builder corrects the file; use a new `run_root` and channel folder.
 4. Set the application's environment. `EDGE_OS_ENV` is `local`, `EDGE_OS_INTERPRETER` is `hermes_local`, and `EDGE_OS_CORS_ALLOWED_ORIGINS` names the web page's origin. `EDGE_OS_DATABASE_URL`, `EDGE_OS_PRIVY_APP_ID` and `EDGE_OS_PRIVY_VERIFICATION_KEY` come from the recorded local env files. The Privy values are the same ones the web page signs in with.
-5. From `apps/api`, run `python -m alembic upgrade head`, then `python -m alembic check`. The application refuses a database below migration 0015.
-6. From `apps/api`, run `python ../../scripts/hermes_app_mount/serve_relay_application.py --handoff-path PATH --handoff-sha256 SHA --run-id ID --port PORT`. Confirm that its `serving` line names `orbio-first-call-1`.
-7. Start the ordinary API, because the step 6 application serves the six Hermes paths only and the web page also needs `/v1/me`. From `apps/api`, use the step 4 environment with two changes: `EDGE_OS_INTERPRETER` is `fixture`, and `EDGE_OS_HERMES_APP_URL` is `http://127.0.0.1:PORT`, with the step 6 port. Run `python -m edge_os_api --host 127.0.0.1 --port API_PORT`. This API forwards the six paths to the step 6 application and keeps every other path.
-8. Start the web page with `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:API_PORT` and `NEXT_PUBLIC_PRIVY_APP_ID` set to the same value as `EDGE_OS_PRIVY_APP_ID`, and run `npm run dev` from `apps/web`. A `next build` needs these two values at build time. The web origin must be on the Privy app's allowed origins; if it is not, sign-in fails before any request. Open `/app`. The research rows belong to a signed-in owner, and the only sign-in is Privy, so the builder signs in. The controller holds no sign-in token.
+5. From `apps/api`, run `.venv/bin/python -m alembic upgrade head`, then `.venv/bin/python -m alembic check`. The application refuses a database below migration 0015.
+6. From `apps/api`, run `.venv/bin/python ../../scripts/hermes_app_mount/serve_relay_application.py --handoff-path PATH --handoff-sha256 SHA --run-id ID --port PORT`. Confirm that its `serving` line names `orbio-first-call-1`.
+7. Start the ordinary API, because the step 6 application serves the six Hermes paths only and the web page also needs `/v1/me`. From `apps/api`, use the step 4 environment with two changes: `EDGE_OS_INTERPRETER` is `fixture`, and `EDGE_OS_HERMES_APP_URL` is `http://127.0.0.1:PORT`, with the step 6 port. Run `.venv/bin/python -m edge_os_api --host 127.0.0.1 --port API_PORT`. This API forwards the six paths to the step 6 application and keeps every other path.
+8. Start the web page with `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:API_PORT` and `NEXT_PUBLIC_PRIVY_APP_ID` set to the same value as `EDGE_OS_PRIVY_APP_ID`, and run `npm run dev -- --port WEB_PORT --hostname 127.0.0.1` from `apps/web`. A checkout without `apps/web/node_modules` needs `npm ci` first; a link to another checkout's folder does not work, because the dev server refuses it. A `next build` needs these two values at build time. `http://127.0.0.1:WEB_PORT` must be exactly the origin in `EDGE_OS_CORS_ALLOWED_ORIGINS`. The web origin must be on the Privy app's allowed origins; if it is not, sign-in fails before any request. Open `/app`. The research rows belong to a signed-in owner, and the only sign-in is Privy, so the builder signs in. The controller holds no sign-in token.
 9. The builder submits one research request on that page. That request calls `POST /v1/research/requests`, which makes the one provider request. Do not submit a second request, and do not press retry.
 10. Read the evidence:
    - the attempt's `finished.json` in `<run root>/relay/state/<attempt>/` (`usage`, `cost`, `generation_id`, `reply_headers`, `reply_headers_refused`);
    - the reply body, `<channel>/turn-NN-<attempt>/output/relay-channel/reply.json`, for `finish_reason`, the reply `model`, provider fields and `prompt_tokens_details`. The file holds the body in `body_b64`, so decode it first;
-   - the gateway `opening` receipt and the ledger rows.
-11. Stop the web page, the ordinary API and the application. Run `python scripts/hermes_provider_relay/relay_operator.py CONFIG stop`, whatever the result. Keep the run root. Scan it for the key before any publication.
+   - the gateway `opening` line in `<run root>/relay/gateway/receipts/tunnels.jsonl`, and the ledger row in `usage_local.provider_spend_reservations` for the attempt.
+11. Stop the web page, the ordinary API and the application. From the repository root, run `apps/api/.venv/bin/python scripts/hermes_provider_relay/relay_operator.py CONFIG stop`, whatever the result. Keep the run root. Before any publication, the builder scans for the key, because only the builder and the relay read that file: `grep -rlF -f KEY_FILE RUN_ROOT CHANNEL_FOLDER` must print nothing.
 
 The caps need no hand check: the one ledger counts both routes (section 3 item 6).
 

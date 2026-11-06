@@ -3,7 +3,9 @@
 It runs in its own container inside the AUTHORED provider's network namespace, which has loopback only (see
 `relay_supervisor.py`). In the E1 topology (CONTRACT A6, `gateway_socket` set) it has no network at all and sends only
 through the keyless egress gateway's Unix socket; an ACTUAL relay starts only from its approved release record, with
-that record's CA bundle and the gateway, and checks the body and the reply against the record.
+that record's CA bundle and the gateway, and checks the body and the reply against the record. An ACTUAL relay also
+checks the key file's shape against the record's host: a refused key ends the process before it serves anything, with
+only a fixed reason in `state/provider-key-refused.json`, so no grant, start record or byte can follow.
 It reads its fixed configuration, the synthetic provider key and the admission key once, at start. Then, in a loop:
 
 - it writes a heartbeat (release, start time, egress self-probe);
@@ -42,8 +44,8 @@ sys.path[:0] = [str(Path(__file__).resolve().parent)] + [p for p in os.environ.g
 from provider_guard import GuardPolicy, LogicalRequest, ProviderRequestGuard  # noqa: E402
 from provider_transport import TransportReply, TransportRoute, reply_refusal  # noqa: E402
 from relay_admission import (  # noqa: E402
-    IDENTIFIER, ActualReleaseUnapproved, ProviderDestination, RelayRelease, channel_refusal, grant_refusal,
-    load_actual_release, parse_channel_message, saved_reply_headers,
+    IDENTIFIER, PROVIDER_KEY_REFUSED_RECORD, ActualReleaseUnapproved, ProviderDestination, RelayRelease, channel_refusal,
+    grant_refusal, load_actual_release, parse_channel_message, saved_reply_headers,
 )
 from relay_transport import ReplyLost, send_once  # noqa: E402
 
@@ -173,10 +175,13 @@ class Relay:
             self.destination = ProviderDestination(**config["destination"])
         self.route = TransportRoute(self.release.route_id, self.release.kind,
                                     f"https://{self.destination.host}{self.destination.path}", self.release.max_reply_bytes)
-        self.key = Path(paths["provider_key"]).read_text(encoding="utf-8").strip()
+        self.grants, self.revocations, self.state = Path(paths["grants"]), Path(paths["revocations"]), Path(paths["state"])
+        # `replace`: a decode error would print a key byte; the replacement character is then refused as malformed.
+        self.key = Path(paths["provider_key"]).read_bytes().decode("utf-8", "replace").strip()
+        if self.actual is not None and (refusal := self.actual.key_refusal(self.key)) is not None:
+            self._refuse_key(refusal)
         self.admission_key = Path(paths["admission_key"]).read_bytes()
         self.ca_file = paths["provider_ca"]
-        self.grants, self.revocations, self.state = Path(paths["grants"]), Path(paths["revocations"]), Path(paths["state"])
         self.channel_roots: dict[str, str] = dict(config["channel_roots"])
         self.poll_seconds = float(config.get("poll_seconds", 0.02))
         self.probes = list(config.get("egress_probes", []))
@@ -189,6 +194,14 @@ class Relay:
         self.events = 0
         self.started_at = time.time()
         self.egress: list[dict[str, Any]] = []
+
+    def _refuse_key(self, reason: str) -> None:
+        folder = os.open(self.state, DIR_FLAGS)
+        try:
+            _write_new(folder, PROVIDER_KEY_REFUSED_RECORD, {"refusal": reason, "at": time.time()})
+        finally:
+            os.close(folder)
+        raise SystemExit(f"the provider key file is refused: {reason}")
 
     # --- records ----------------------------------------------------------------------------------------------------
 
