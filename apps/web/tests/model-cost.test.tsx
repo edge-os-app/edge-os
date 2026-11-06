@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { InterpretationAttempts } from "../components/InterpretationAttempts";
 import { RequestPage } from "../components/RequestPage";
-import { describeAttemptCost, describeCredit, describeCreditSpend, describeModelBudget, describeModelCost, describeRoute } from "../lib/interpretation";
+import { describeAttemptCost, describeCredit, describeCreditSpend, describeModelBudget, describeModelCost, describeRoute, describeRouteSummary } from "../lib/interpretation";
 import type { Attempt, AttemptSpend, ModelBudget, ModelCost } from "../lib/types";
 
 const mocks = vi.hoisted(() => ({ get: vi.fn() }));
@@ -225,5 +225,99 @@ describe("the route on a saved attempt line", () => {
   it.each([[null], ["relay"]])("shows no route line for %s", (route) => {
     render(<InterpretationAttempts attempts={[routed(route)]} lateResults={[]} open />);
     expect(screen.queryByText("Route")).toBeNull();
+  });
+});
+
+const ORBIO = "orbio-openrouter-managed";
+const OPENROUTER = "openrouter-openai-standard";
+const attemptsOn = (...routes: (string | null)[]): Attempt[] => routes.map((route, index) => {
+  const base = attempt(`a${index + 1}`, index + 1, settled);
+  return { ...base, identity: { ...base.identity, route } };
+});
+const routeSummary = () => screen.queryByTestId("model-route-summary");
+const counted = (attempts: Attempt[], ...counts: (number | null)[]): Attempt[] =>
+  attempts.map((a, index) => ({ ...a, request_count: counts[index] }));
+
+describe("the route summary near the study total", () => {
+  it("says the model calls ran through Orbio when every attempt saved that route", () => {
+    expect(describeRouteSummary(attemptsOn(ORBIO))).toBe("Model calls ran through Orbio");
+    expect(describeRouteSummary(attemptsOn(ORBIO, ORBIO, ORBIO))).toBe("Model calls ran through Orbio");
+  });
+
+  it("counts the Orbio attempts when other attempts used another route", () => {
+    expect(describeRouteSummary(attemptsOn(ORBIO, OPENROUTER))).toBe("1 of 2 model calls ran through Orbio");
+    expect(describeRouteSummary(attemptsOn(ORBIO, ORBIO, "relay"))).toBe("2 of 3 model calls ran through Orbio");
+  });
+
+  it("never treats a missing route as Orbio", () => {
+    expect(describeRouteSummary(attemptsOn(ORBIO, null))).toBe("1 of 2 model calls ran through Orbio");
+    expect(describeRouteSummary(attemptsOn(null, ORBIO, OPENROUTER, null))).toBe("1 of 4 model calls ran through Orbio");
+  });
+
+  it("counts failed and unknown attempts that sent a request", () => {
+    const [sent, failed, unknownOutcome] = attemptsOn(ORBIO, ORBIO, OPENROUTER);
+    const attempts: Attempt[] = [sent, { ...failed, status: "PROVIDER_FAILED" }, { ...unknownOutcome, status: "UNKNOWN" }];
+    expect(describeRouteSummary(attempts)).toBe("2 of 3 model calls ran through Orbio");
+  });
+
+  it.each([[[OPENROUTER]], [[OPENROUTER, OPENROUTER]], [[null]], [["relay", null]], [[]]])(
+    "gives nothing when no attempt saved the Orbio route: %j", (routes) => {
+      expect(describeRouteSummary(attemptsOn(...routes))).toBeNull();
+    });
+
+  it("gives nothing when the host refused every Orbio attempt before sending", () => {
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO), 0))).toBeNull();
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO, ORBIO), 0, 0))).toBeNull();
+  });
+
+  it("leaves a refused attempt out of both numbers", () => {
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO, ORBIO), 1, 0))).toBe("Model calls ran through Orbio");
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO, OPENROUTER), 1, 0))).toBe("Model calls ran through Orbio");
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO, OPENROUTER, ORBIO), 2, 1, 0))).toBe("1 of 2 model calls ran through Orbio");
+  });
+
+  it("keeps an attempt with no saved count as a possible call, but never as an Orbio call", () => {
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO, ORBIO), 1, null))).toBe("1 of 2 model calls ran through Orbio");
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO, OPENROUTER), 1, null))).toBe("1 of 2 model calls ran through Orbio");
+    expect(describeRouteSummary(counted(attemptsOn(ORBIO), null))).toBeNull();
+  });
+
+  it("shows no line on the page when every Orbio attempt was refused", () => {
+    render(<InterpretationAttempts attempts={counted(attemptsOn(ORBIO, ORBIO), 0, 0)} lateResults={[]} open={false} />);
+    expect(routeSummary()).toBeNull();
+  });
+
+  it("sits directly after the cost lines, outside the closed attempts section", () => {
+    render(<InterpretationAttempts attempts={attemptsOn(ORBIO, ORBIO)} modelCost={cost("0.014857", 2, 0)} modelBudget={budget}
+      lateResults={[]} open={false} />);
+    const line = screen.getByTestId("model-route-summary");
+    expect(line).toHaveTextContent(/^Model calls ran through Orbio$/);
+    expect(screen.getByTestId("attempts")).not.toHaveAttribute("open");
+    expect(line.closest("details")).toBeNull();
+    expect(screen.getByTestId("model-credit").nextElementSibling).toBe(line);
+    expect(line.nextElementSibling).toBe(screen.getByTestId("model-budget"));
+  });
+
+  it("shows the count from a mixed list with a missing route", () => {
+    render(<InterpretationAttempts attempts={attemptsOn(ORBIO, OPENROUTER, null)} modelCost={cost("0.02", 3, 0)} lateResults={[]} open={false} />);
+    expect(routeSummary()).toHaveTextContent(/^1 of 3 model calls ran through Orbio$/);
+  });
+
+  it("does not need a model cost, because the saved route is enough", () => {
+    render(<InterpretationAttempts attempts={attemptsOn(ORBIO)} lateResults={[]} open={false} />);
+    expect(screen.queryByTestId("model-cost-total")).toBeNull();
+    expect(routeSummary()).toHaveTextContent(/^Model calls ran through Orbio$/);
+  });
+
+  it("shows no line and no provider name for an OpenRouter study", () => {
+    render(<InterpretationAttempts attempts={attemptsOn(OPENROUTER, OPENROUTER)} modelCost={cost("0.02", 2, 0)} lateResults={[]} open={false} />);
+    expect(routeSummary()).toBeNull();
+    expect(document.body.textContent).not.toMatch(/Orbio/);
+    expect(screen.getByTestId("model-credit").nextElementSibling).toBe(screen.getByTestId("model-budget"));
+  });
+
+  it("shows no line for a study with no attempts", () => {
+    render(<InterpretationAttempts attempts={[]} modelCost={cost(null, 0, 0)} modelBudget={budget} lateResults={[]} open={false} />);
+    expect(routeSummary()).toBeNull();
   });
 });

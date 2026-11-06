@@ -1,4 +1,5 @@
 import { OUTCOME_COPY } from "./describe";
+import { plural } from "./plural";
 import type { Attempt, AttemptSpend, AttemptStatus, AttemptUsage, Bundle, Finding, ModelBudget, ModelCost, ReplyState, RequestSummary } from "./types";
 
 /** The three ways the interpreter can fail to give a usable answer. None is a verdict on the user's idea. */
@@ -36,14 +37,27 @@ export const RETRY_BLOCKED: Record<string, string> = {
   stale_reply: "Your saved meaning changed after that reply, so the reply cannot be tried again.",
 };
 
+const ORBIO_ROUTE = "orbio-openrouter-managed";
+
 const ROUTE_WORDS: Record<string, string> = {
-  "orbio-openrouter-managed": "via Orbio",
+  [ORBIO_ROUTE]: "via Orbio",
   "openrouter-openai-standard": "via OpenRouter",
 };
 
 /** A saved route in plain words. A missing route, or one with no plain name, gives null: the page shows nothing. */
 export function describeRoute(route: string | null): string | null {
   return route !== null && Object.hasOwn(ROUTE_WORDS, route) ? ROUTE_WORDS[route] : null;
+}
+
+/**
+ * How many model calls ran through Orbio, in plain words, from each attempt's saved route and request count. A refused
+ * attempt (count 0) is not a call. A missing count may be a call, but it never counts as Orbio. No Orbio call gives null.
+ */
+export function describeRouteSummary(attempts: Attempt[]): string | null {
+  const calls = attempts.filter((a) => a.request_count !== 0);
+  const orbioCalls = calls.filter((a) => a.identity.route === ORBIO_ROUTE && a.request_count !== null).length;
+  if (orbioCalls === 0) return null;
+  return orbioCalls === calls.length ? "Model calls ran through Orbio" : `${orbioCalls} of ${plural(calls.length, "model call")} ran through Orbio`;
 }
 
 export const ATTEMPT_STATUS_LABEL: Record<AttemptStatus, string> = {
