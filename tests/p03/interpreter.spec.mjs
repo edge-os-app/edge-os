@@ -98,8 +98,9 @@ async function rightBarByKeyboard(page) {
   await expect.poll(() => bar.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
-  expect(await bar.evaluate((el) => el.getBoundingClientRect().top)).toBe(0);
-  expect(await page.locator(".sidebar").evaluate((el) => el.getBoundingClientRect().top)).toBe(0);
+  // Sticky layout at a fractional scroll position can leave a sub-pixel offset (-0.15625 in the first run).
+  expect(Math.abs(await bar.evaluate((el) => el.getBoundingClientRect().top))).toBeLessThan(1);
+  expect(Math.abs(await page.locator(".sidebar").evaluate((el) => el.getBoundingClientRect().top))).toBeLessThan(1);
 }
 
 const outcome = (page) => page.getByTestId("outcome");
