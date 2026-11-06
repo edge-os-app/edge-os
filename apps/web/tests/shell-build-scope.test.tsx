@@ -21,7 +21,7 @@ import { Shell } from "../components/Shell";
 const NOTICE = "build-scope-notice";
 const CONTROLLED_NOTICE = "controlled-scope-notice";
 const OLD_NOTICE = "Build scope. Account views show example records only, not live wallet data. "
-  + "Saving a Research rule grants no trading permission. This build does not connect a wallet or move funds.";
+  + "Saving a Research rule grants no trading permission. This build cannot trade from your wallet or move funds.";
 
 function text(node: HTMLElement | null): string {
   return (node?.textContent ?? "").replace(/\s+/g, " ").trim();

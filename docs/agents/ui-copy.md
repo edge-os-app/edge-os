@@ -94,7 +94,7 @@ Keep these in the main text of the named screen. The words may change; the meani
 - Agent funding: a saved deposit plan is not a sent or credited transfer; current holdings may be unavailable; no balance is assumed.
 - Agent actions: a stop does not sell, withdraw or cancel a sent action; removal keeps the person's access to the wallet and holdings; reconciliation never sends a replacement.
 - Recurring operation: ending stops new slots and releases unsent work; it does not sell, cancel a sent action or release unknown liability; example data only.
-- Account views: example records, not live wallet data; the build does not connect a wallet or move funds; account value, percent return and drawdown are unavailable.
+- Account views: example records, not live wallet data; the build cannot trade from your wallet or move funds; account value, percent return and drawdown are unavailable.
 - Agent health: answers come only from saved records; asking changes nothing, calls no provider and grants no permission.
 
 ## 7. Review checklist

@@ -101,7 +101,7 @@ export function Shell() {
             <strong>Trading mode.</strong> Trades run from your agent wallet within the limits you signed. Every trade must match its locked setup.
           </div> : showsBuildScope ? <div className="notice" data-testid="build-scope-notice">
             <strong>Build scope.</strong> Account views show example records only, not live wallet data.
-            Saving a Research rule grants no trading permission. This build does not connect a wallet or move funds.
+            Saving a Research rule grants no trading permission. This build cannot trade from your wallet or move funds.
           </div> : null}
           {auth.identity ? <p className="side-identity muted" title={auth.identity.full}>{auth.identity.shown}</p> : null}
           <button className="btn btn-ghost" type="button" onClick={auth.logout}>Sign out</button>
