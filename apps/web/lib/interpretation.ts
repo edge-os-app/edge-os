@@ -1,4 +1,5 @@
 import { OUTCOME_COPY } from "./describe";
+import { plural } from "./plural";
 import type { Attempt, AttemptSpend, AttemptStatus, AttemptUsage, Bundle, Finding, ModelBudget, ModelCost, ReplyState, RequestSummary } from "./types";
 
 /** The three ways the interpreter can fail to give a usable answer. None is a verdict on the user's idea. */
@@ -48,11 +49,11 @@ export function describeRoute(route: string | null): string | null {
   return route !== null && Object.hasOwn(ROUTE_WORDS, route) ? ROUTE_WORDS[route] : null;
 }
 
-/** How many listed attempts saved the Orbio route, in plain words. A missing route is never counted. None gives null. */
+/** How many listed attempts saved the Orbio route, in plain words. A missing route never counts as Orbio. None gives null. */
 export function describeRouteSummary(attempts: Attempt[]): string | null {
-  const orbio = attempts.filter((a) => a.identity.route === ORBIO_ROUTE).length;
-  if (orbio === 0) return null;
-  return orbio === attempts.length ? "Model calls ran through Orbio" : `${orbio} of ${attempts.length} model calls ran through Orbio`;
+  const orbioCalls = attempts.filter((a) => a.identity.route === ORBIO_ROUTE).length;
+  if (orbioCalls === 0) return null;
+  return orbioCalls === attempts.length ? "Model calls ran through Orbio" : `${orbioCalls} of ${plural(attempts.length, "model call")} ran through Orbio`;
 }
 
 export const ATTEMPT_STATUS_LABEL: Record<AttemptStatus, string> = {
