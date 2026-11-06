@@ -86,4 +86,4 @@ def test_the_approval_registry_pins_the_approved_record():
     from edge_os_api.core import hosted_deployment
 
     assert dict(hosted_deployment.APPROVED_HOSTED_DEPLOYMENTS) == {
-        "edgeos-fun-vps1-orbio": "75aa306039ce54b8817b4ebb5f17fcd2f81fcb137a2f410a4f967a2a9cc2a201"}
+        "edgeos-fun-vps1-orbio": "c0c0f07c9787c7487a823951954afdf5979e71d13e9cfde09a340502b65062dd"}

@@ -19,7 +19,8 @@ Sources: the USD 5 purchase is in the controller handoff, 2026-11-06. The `GET /
 documentation (`ORBIO_RELEASE_DRAFT.md` §1.2). The Nansen, QuickNode and Envio rows are copied from
 `h8_provider_spend_cap.md`. Their amounts stay in each provider account.
 
-No card-backed cap exists. The builder set no provider-side limit other than the size of the purchase.
+No card-backed cap is recorded. No source in this repository shows the Orbio account's limit settings. The size of the
+purchase is the only provider-side limit on record.
 
 ## Application-side caps
 
@@ -30,8 +31,9 @@ These caps are not provider caps. They limit what the application asks for.
 | Provider spend ledger, all owners | USD 2.00 | `RELEASE_DEFINITIONS`, `global_cap_usd` (code) | fixed in code |
 | Provider spend ledger, each owner | USD 2.00 | `RELEASE_DEFINITIONS`, `owner_cap_usd` (code) | fixed in code |
 | Reservation for each request | USD 0.180768 | the Orbio price snapshot (`ORBIO_RELEASE_DRAFT.md` §4) | fixed by the release record |
-| `EDGE_OS_USAGE_GLOBAL_PROVIDER_REQUESTS` | 60 | Coolify | saved on 2026-11-06; the host environment files need a separate check |
-| `EDGE_OS_USAGE_GLOBAL_NANSEN_CREDITS` | 50 | Coolify | saved on 2026-11-06; the host environment files need a separate check |
+| `EDGE_OS_USAGE_GLOBAL_PROVIDER_REQUESTS` | 60 | Coolify | saved on 2026-11-06, not applied at the last handoff entry; the host environment files need a separate check |
+| `EDGE_OS_USAGE_GLOBAL_NANSEN_CREDITS` | 50 | Coolify | saved on 2026-11-06, not applied at the last handoff entry; the host environment files need a separate check |
+| `EDGE_OS_RESEARCH_BUDGET_*` | not recorded here | Coolify, optional | bounds research spending, as in `h8_provider_spend_cap.md` |
 
 The ledger is the money limit. The request limit is not: 60 requests at USD 0.180768 is USD 10.84608, which is more than
 the USD 5 balance. The ledger admits at most 11 open reservations, because 11 × USD 0.180768 is USD 1.988448 and a

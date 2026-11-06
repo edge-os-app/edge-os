@@ -8,7 +8,7 @@
   "host_gates": {
     "h1_egress": {"path": "docs/qualification/hosted-gates/evidence/h1_egress.md", "sha256": "d709c98bf266f954c347758db11a817287792e5b2e59442e31711027a2d4f0cc"},
     "h2_runner_isolation": {"path": "docs/qualification/hosted-gates/evidence/h2_runner_isolation.md", "sha256": "54fe2f41d1060aff2318e17e14a471f9e9df6a5823d528719a3733364cbeaba2"},
-    "h8_provider_spend_cap": {"path": "docs/qualification/hosted-gates/evidence/h8_provider_spend_cap_orbio.md", "sha256": "77c88b96f2f0bd8d1548663ad541dcce5fb88e5a889a5f28fff9124af4ed7d4f"},
+    "h8_provider_spend_cap": {"path": "docs/qualification/hosted-gates/evidence/h8_provider_spend_cap_orbio.md", "sha256": "7f9dbc9fade024ba96598af4abe3d0a1ce831667e4e8107522c312e8aee4476b"},
     "h10_backup_restore": {"path": "docs/qualification/hosted-gates/evidence/h10_backup_restore.md", "sha256": "de7bde06f7d94c797327b99e9601215424b4ed39207762e12a3a1d13a64e95b7"}
   },
   "image_digests": {

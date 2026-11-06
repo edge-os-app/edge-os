@@ -4,8 +4,9 @@ Status: **preparation only.** This file and the files it names were written on 2
 VPS. Nothing was installed, started, pushed or deployed. Every host result is `NOT RUN`. The builder or controller owns
 the VPS, DNS, secrets, the hosted-deployment record approval and every push.
 
-This candidate does not approve a hosted deployment. `core/hosted_deployment.APPROVED_HOSTED_DEPLOYMENTS` stays empty.
-Do not add an entry and do not present a deployment as approved because this runbook exists.
+This candidate does not approve a hosted deployment. `core/hosted_deployment.APPROVED_HOSTED_DEPLOYMENTS` holds the one
+record that a reviewed change registered. Do not add an entry and do not present a deployment as approved because this
+runbook exists.
 
 ## 0. Names and variables
 
@@ -331,9 +332,9 @@ timeout is `504 interpreter_timeout`, and any other transport failure is `502 in
 application serves only the six paths plus `GET /healthz` and `GET /readyz`; everything else is 404.
 
 Rollout: the controller deploys the new API image only after the host application is READY and the public checks pass.
-The same rule holds for the Orbio switch: see `docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md` §9.
 Until then the running API image stays. With `EDGE_OS_HERMES_APP_URL` empty in production, the six paths return
-`503 interpreter_unavailable`; local and test runs keep the fixture behaviour.
+`503 interpreter_unavailable`; local and test runs keep the fixture behaviour. The same rule holds for the Orbio switch:
+see `docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md` §9.
 
 Host firewall and public-port checks, run by the controller only:
 
@@ -534,7 +535,7 @@ GLOBAL allocations described in `HOST_QUALIFICATION_RUNBOOK.md` 6.7. Prefer rest
 ## 10. Hosted-deployment record fields the builder must approve
 
 The record format is frozen in `apps/api/src/edge_os_api/core/hosted_deployment.py`. A record is admitted only after a
-reviewed code change adds its id and canonical SHA-256 to `APPROVED_HOSTED_DEPLOYMENTS`. This candidate adds no entry.
+reviewed code change adds its id and canonical SHA-256 to `APPROVED_HOSTED_DEPLOYMENTS`.
 
 | Field | Constraint |
 |---|---|
