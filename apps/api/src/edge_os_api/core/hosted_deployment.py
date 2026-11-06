@@ -58,7 +58,7 @@ MAX_PATH = 400
 # Adding, changing or removing an entry is a reviewed code change that cites the builder's recorded approval of that
 # exact record. Builder decision 2026-11-06: replace `edgeos-fun-vps1` with the Orbio record. The old record file stays
 # as frozen history and admits nothing. See HOSTED_RECORD_V2_RUNBOOK.md §9.
-APPROVED_HOSTED_DEPLOYMENTS: Mapping[str, str] = {"edgeos-fun-vps1-orbio": "c0c0f07c9787c7487a823951954afdf5979e71d13e9cfde09a340502b65062dd"}
+APPROVED_HOSTED_DEPLOYMENTS: Mapping[str, str] = {"edgeos-fun-vps1-orbio-list-price": "699ef23236c193dcd7a84bbedc4496fe69d80abe33a25fc92f5ad31370d67217"}
 
 
 class HostedDeploymentRefused(RuntimeError):

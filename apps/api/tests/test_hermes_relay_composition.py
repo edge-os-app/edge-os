@@ -35,7 +35,7 @@ from edge_os_api.research.hermes_relay_composition import (
 from edge_os_api.research.hermes_transport_mount import MountRefused
 from edge_os_api.research.provider_spend_ledger import TokenPrice
 from hermes_cases import case, turn_result
-from test_hermes_research_flow import create, retry, rows
+from test_hermes_research_flow import answer, create, retry, rows
 from test_hermes_transport_mount import job_report
 from test_provider_spend_ledger import empty_spend_ledger
 from tokens import TestSigner
@@ -609,7 +609,7 @@ def test_a_saved_request_is_sent_once_settled_at_the_snapshot_price_reopened_els
 
 
 @pytest.mark.parametrize("cost", [0.0074285, 0.009767, 0.0097681, 0.05])  # the LOCAL price, one nano-USD either side, above
-def test_a_provider_cost_other_than_the_snapshot_price_keeps_the_whole_reservation_and_is_never_resent(
+def test_a_provider_cost_other_than_the_snapshot_price_keeps_the_answer_and_the_whole_reservation_and_is_never_resent(
         mounted, owner_a, cost: float) -> None:
     job = StandInJob(mounted.relay, (reply_record(cost=cost), RETURNED))
     app, app_client = mounted("cost", job)
@@ -617,12 +617,51 @@ def test_a_provider_cost_other_than_the_snapshot_price_keeps_the_whole_reservati
     bundle = create(app_client, owner_a, "concrete-thesis").json()
 
     [attempt] = bundle["attempts"]
-    assert (attempt["status"], attempt["parse_result"], attempt["error_class"]) == (
-        "UNKNOWN", "NOT_PARSED", "RelayCostUnverified")
+    assert (attempt["status"], attempt["parse_result"], attempt["error_class"], attempt["request_count"]) == (
+        "COMPLETED", "ACCEPTED", "RelayCostUnverified", 1)
     assert attempt["spend"] == {"state": "UNKNOWN", "charge_usd": str(RESERVATION)}
-    assert bundle["head"]["interpretation_revision_id"] is None
+    assert bundle["head"]["interpretation_revision_id"] == attempt["revision_id"] is not None
+    assert (bundle["model_cost"]["settled_usd"], bundle["model_cost"]["unknown_calls"]) == (None, 1)
     assert retry(app_client, owner_a, bundle, attempt["attempt_id"]).status_code == 409
+    assert saved(app_client, attempt["attempt_id"])["state"] == "UNKNOWN"
+    assert saved(app_client, attempt["attempt_id"])["charged"] is None
     assert len(job.turns) == 1 and len(mounted.relay.grants()) == 1 and app.spend.committed_usd() == RESERVATION
+
+
+def test_a_kept_answer_refuses_a_typed_reply_without_a_call_and_a_new_request_still_works(mounted, owner_a) -> None:
+    hunch = turn_result(case("rough-hunch")["provider"])
+    job = StandInJob(mounted.relay, (reply_record(cost=0.05), hunch), (reply_record(), RETURNED))
+    app, app_client = mounted("kept", job)
+    bundle = create(app_client, owner_a, "rough-hunch").json()
+    assert bundle["attempts"][0]["spend"]["state"] == "UNKNOWN"
+
+    replied = answer(app_client, owner_a, bundle, "choose-entry", answer_text="Enter at two percent.")
+
+    assert replied.status_code == 200, replied.text
+    reply = replied.json()["head"]["reply"]
+    assert (reply["state"], reply["reason_code"]) == ("FAILED", "cost_not_confirmed")
+    assert replied.json()["attempts"][-1]["request_count"] == 0
+    assert len(job.turns) == 1 and app.spend.committed_usd() == RESERVATION
+
+    fresh = create(app_client, owner_a, "concrete-thesis").json()
+
+    assert fresh["attempts"][0]["spend"] == {"state": "SETTLED", "charge_usd": str(CHARGE)}
+    assert len(job.turns) == 2 and app.spend.committed_usd() == RESERVATION + CHARGE
+
+
+def test_a_reply_withheld_for_a_count_mismatch_stays_unknown_with_no_text(mounted, owner_a) -> None:
+    wrong = reply_record(usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
+    job = StandInJob(mounted.relay, (wrong, RETURNED))
+    app, app_client = mounted("count", job)
+
+    bundle = create(app_client, owner_a, "concrete-thesis").json()
+
+    [attempt] = bundle["attempts"]
+    assert (attempt["status"], attempt["parse_result"], attempt["error_class"], attempt["request_count"]) == (
+        "UNKNOWN", "NOT_PARSED", "RelayCountMismatch", None)
+    assert bundle["outcomes"][-1]["record"]["content"]["findings"][0]["detail"] == (
+        "We did not get an answer we can show you. Your request is saved. You may be charged for this read.")
+    assert app.spend.committed_usd() == RESERVATION
 
 
 @pytest.mark.parametrize("records, result", [

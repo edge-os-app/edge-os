@@ -4,8 +4,8 @@ Order of work for one request: save the request, interpret it in a recorded atte
 result (revision, outcome and attempt link) in one transaction. The provider call never sits inside a transaction.
 
 Three failures stay apart. Malformed model output is `malformed_model_output`. A provider that could not answer is
-`interpreter_unavailable`. An answer that may or may not exist is `interpreter_outcome_unknown`. None of them is a
-verdict on the user's idea, and an unsupported capability is a different outcome (`UNSUPPORTED`).
+`interpreter_unavailable`. An attempt with no answer to show and an open cost is `interpreter_outcome_unknown`. None of
+them is a verdict on the user's idea, and an unsupported capability is a different outcome (`UNSUPPORTED`).
 
 Recovery never calls a model. It closes only attempts whose claim nobody holds, and it publishes a saved accepted
 result by parsing its stored text again.
@@ -35,8 +35,8 @@ from edge_os_api.records.models import Record
 from edge_os_api.research import service
 from edge_os_api.research.attempt_store import AdvisoryLockGuard, PostgresAttemptStore
 from edge_os_api.research.hermes_interpreter import (
-    HermesInterpreter, HermesInterpreterConfig, HermesTurnRunner, Interpreted, InterpretResult, OutputRejected,
-    Unavailable, apply_choice_answer, open_questions,
+    NO_ANSWER_TEXT, HermesInterpreter, HermesInterpreterConfig, HermesTurnRunner, Interpreted, InterpretResult,
+    OutputRejected, Unavailable, apply_choice_answer, open_questions,
 )
 from edge_os_api.research.interpretation_attempts import AttemptLedger, AttemptView
 from edge_os_api.research.interpretation_response import (
@@ -66,13 +66,14 @@ MALFORMED = "malformed_model_output"
 BUDGET_EXHAUSTED = "budget_exhausted"
 UNAVAILABLE = "interpreter_unavailable"
 OUTCOME_UNKNOWN = "interpreter_outcome_unknown"
+COST_NOT_CONFIRMED = "cost_not_confirmed"  # the ledger refused a reply: an earlier call on this request has an open cost
 REJECTION_DETAIL = "The model's answer could not be used (reason: {reason}). Nothing was changed. You can try again."
 UNAVAILABLE_TEXT = {
     "budget_exhausted": "The model budget for this demo is used. The request is saved. No model call was made.",
     "provider_failed": "The model provider did not return a result. This is a system failure, not a verdict on the idea. "
                        "The request is saved. You can try again.",
-    "timed_out": "It is not known whether the model provider finished. The request is saved. This attempt was not repeated.",
-    "outcome_unknown": "It is not known whether the model provider finished. The request is saved. This attempt was not repeated.",
+    "timed_out": NO_ANSWER_TEXT,
+    "outcome_unknown": NO_ANSWER_TEXT,
     "result_arrived_late": "The result arrived after the attempt was closed. It is kept for review and was not used.",
 }
 
@@ -589,10 +590,12 @@ class HermesResearch:
                 and history[-1].settlement is not None and history[-1].start.identity.previous_revision_id == head_id:
             last = history[-1]
             parse = last.settlement.parse_result  # type: ignore[union-attr]
+            blocked = last.settlement.error_class == "SpendScopeBlocked"  # type: ignore[union-attr]
             reply = {"state": "REJECTED" if parse.startswith("REJECTED:") else
                      ("UNCERTAIN" if last.status in UNCERTAIN else
                       ("PENDING_SAVE" if parse == "ACCEPTED" else "FAILED")),
-                     "reason_code": parse.removeprefix("REJECTED:") if parse.startswith("REJECTED:") else None,
+                     "reason_code": parse.removeprefix("REJECTED:") if parse.startswith("REJECTED:")
+                     else COST_NOT_CONFIRMED if blocked else None,
                      "attempt_id": last.start.attempt_id}
         attempts = [public_attempt(v) for v in history]
         budget = None

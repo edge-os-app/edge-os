@@ -11,8 +11,9 @@ The job never holds a key or a network path: its one request goes through the jo
 the synthetic key and is the only component that can reach the AUTHORED provider. Construction does no I/O: no file is
 read or written, no key is read and nothing starts. An ACTUAL route is refused before anything is built unless the
 caller gives the approved release record it came from (CONTRACT A6); none is approved in this candidate. With an ACTUAL
-record the caller must also give the ledger's own TokenPrice, and a counted result needs the provider-reported cost,
-rounded up to a whole nano-USD, to EQUAL that price's charge for the reported usage, within the held reservation.
+record the caller must also give the ledger's own TokenPrice. A counted result settles only when the provider-reported
+cost, rounded up to a whole nano-USD, EQUALS that price's charge for the reported usage, within the held reservation.
+Otherwise the answer stands and the whole reservation stays as UNKNOWN liability.
 See `docs/qualification/hermes-provider-relay/CONTRACT.md`.
 """
 
@@ -33,7 +34,7 @@ from typing import Any
 from edge_os_api.research.hermes_interpreter import HermesTurn, HermesTurnResult, HermesTurnRunner
 from edge_os_api.research.interpretation_attempts import Usage
 from guarded_docker_runner import GuardedDockerTurnRunner, JobEntry
-from guarded_turn_runner import GuardedTurnRunner
+from guarded_turn_runner import COST_UNVERIFIED, GuardedTurnRunner
 from provider_guard import GuardPolicy
 from provider_transport import HERMES_CLIENT_URL, ActualProviderUnavailable, TransportRoute
 from relay_admission import CLOCK_SKEW_SECONDS, ActualRelease, RelayRelease, RelaySubject, issue_grant
@@ -110,7 +111,8 @@ class RelayTurnRunner:
 
     A zero-request result stands only when the relay recorded the attempt closed and never started. A counted result
     stands only when the relay started exactly once and received a reply whose reported usage equals the job's.
-    Anything else is withheld as UNKNOWN with no request count, so the reservation stays as liability.
+    Anything else is withheld as UNKNOWN with no request count, so the reservation stays as liability. A counted result
+    that fails only the cost check keeps its answer and is named `COST_UNVERIFIED`, so it is never settled.
     """
 
     def __init__(self, delegate: HermesTurnRunner, *, endpoint: RelayEndpoint, release: RelayRelease, policy: GuardPolicy,
@@ -211,8 +213,8 @@ class RelayTurnRunner:
         """E1-COST1: the provider-reported cost, rounded up to a whole nano-USD like the ledger rounds, equals the ledger
         price's charge for the reported usage, and that charge is within the held reservation. Unreadable means no.
 
-        shortcut: other provider prices, cached-token discounts or fees make this UNKNOWN; settling at a reported cost
-        needs the ledger owner (CONTRACT A6)."""
+        shortcut: other provider prices, cached-token discounts or fees leave the charge unsettled; settling at a reported
+        cost needs the ledger owner (CONTRACT A6)."""
         cost, usage = finished.get("cost"), finished.get("usage")
         if (self._price is None or isinstance(cost, bool) or not isinstance(cost, (int, float))
                 or not math.isfinite(cost) or cost < 0 or not isinstance(usage, dict)):
@@ -250,7 +252,7 @@ class RelayTurnRunner:
             if not same:
                 return self._withheld(result, "RelayCountMismatch")
             if self._actual is not None and not self._cost_equals_charge(attempt_id, finished):
-                return self._withheld(result, "RelayCostUnverified")  # the full reservation stays as liability
+                return replace(result, error_class=COST_UNVERIFIED)  # the full reservation stays as liability
             return result
         if result.request_count == 0:  # the relay started a request the job says it never sent
             return self._withheld(result, "RelayCountMismatch")

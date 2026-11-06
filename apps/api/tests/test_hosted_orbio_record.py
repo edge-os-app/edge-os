@@ -27,11 +27,11 @@ from test_hosted_deployment import production_env
 
 REPO = Path(__file__).resolve().parents[3]
 RECORDS = REPO / "docs/qualification/hosted-gates/records"
-RECORD_ID = "edgeos-fun-vps1-orbio"
+RECORD_ID = "edgeos-fun-vps1-orbio-list-price"
 RECORD_PATH = RECORDS / f"{RECORD_ID}.json"
-RECORD_SHA = "c0c0f07c9787c7487a823951954afdf5979e71d13e9cfde09a340502b65062dd"
-ORBIO_ID = "orbio-first-call-1"
-ORBIO_SHA = "041f588d3b9564fd605d00d2204083cbfc4e4cd3307906656345a73118ac563f"
+RECORD_SHA = "699ef23236c193dcd7a84bbedc4496fe69d80abe33a25fc92f5ad31370d67217"
+ORBIO_ID = "orbio-list-price-1"
+ORBIO_SHA = "dc78e3613c92954a8491ae2e177b4686b159a9dd7927a9b4771c68752e0d913c"
 OPENROUTER_ID = "hermes-first-call-1"
 OPENROUTER_SHA = "3fa94dd73e53a72ca8af6cda9c8633770de89c262fa5303756c1965bb92fed8f"
 RESEARCH_ID = "actual-moe-history2h-nansen-20261022/1"
@@ -40,6 +40,9 @@ OLD_ID = "edgeos-fun-vps1"
 OLD_CANONICAL_SHA = "0e56ad4290b522d450142c5baa367b5daacf695dfe563102e85bc43f0bb7b728"
 OLD_RECORD_FILE_SHA = "0e56ad4290b522d450142c5baa367b5daacf695dfe563102e85bc43f0bb7b728"
 OLD_VALUES_FILE_SHA = "263f9627564b73bf0b58d97d0f1012963754c9f6e92af2c56ba809ce939e3bed"
+RETIRED_ORBIO_FILES = {"records/edgeos-fun-vps1-orbio.json": "c0c0f07c9787c7487a823951954afdf5979e71d13e9cfde09a340502b65062dd",
+                       "records/edgeos-fun-vps1-orbio.values.json": "69f4674fa22a5048965d78a610e47986959a2d7ced3404e8134b2287cc5872bc",
+                       "evidence/h8_provider_spend_cap_orbio.md": "7f9dbc9fade024ba96598af4abe3d0a1ce831667e4e8107522c312e8aee4476b"}
 SNAPSHOT_AUTO_DELETION = datetime(2026, 11, 29, tzinfo=UTC)  # h10_backup_restore.md: the record must end before it
 INSIDE_WINDOW = datetime(2026, 11, 10, 12, tzinfo=UTC)
 
@@ -137,6 +140,11 @@ def test_the_old_record_keeps_its_frozen_bytes() -> None:
     assert hashlib.sha256(hosted_deployment.canonical(old_record())).hexdigest() == OLD_CANONICAL_SHA
     assert hashlib.sha256((RECORDS / f"{OLD_ID}.json").read_bytes()).hexdigest() == OLD_RECORD_FILE_SHA
     assert (hashlib.sha256((RECORDS / f"{OLD_ID}.values.json").read_bytes()).hexdigest() == OLD_VALUES_FILE_SHA)
+
+
+def test_the_retired_orbio_record_and_its_evidence_keep_their_bytes() -> None:
+    for name, digest in RETIRED_ORBIO_FILES.items():
+        assert hashlib.sha256((RECORDS.parent / name).read_bytes()).hexdigest() == digest, name
 
 
 @pytest.mark.usefixtures("inside_window")

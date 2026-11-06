@@ -176,10 +176,11 @@ class Unavailable:
 
 InterpretResult = Interpreted | OutputRejected | Unavailable
 
+NO_ANSWER_TEXT = "We did not get an answer we can show you. Your request is saved. You may be charged for this read."
 UNAVAILABLE_DETAIL = {
     "provider_failed": "The model provider did not return a result. The request is saved. You can try again.",
-    "timed_out": "The model provider took too long. The request is saved. You can try again.",
-    "outcome_unknown": "It is not known whether the model provider finished. The request is saved.",
+    "timed_out": NO_ANSWER_TEXT,
+    "outcome_unknown": NO_ANSWER_TEXT,
     "attempt_in_flight": "An earlier attempt for this request has not finished.",
     "retry_target_invalid": "The attempt to retry does not belong to this request.",
     "revision_moved": "The saved meaning changed after this was requested, so no model call was made.",

@@ -116,7 +116,7 @@ test("a lost provider reply is an unknown outcome, is not accepted and is not re
   script({ case: "concrete-thesis", transport_fault: "lost_reply" });
   const id = await submit(page, tokens.a, THESIS);
 
-  await expect(page.getByRole("heading", { name: "We do not know if the research agent finished" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "We did not get an answer we can show you" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Try the research agent again" })).toHaveCount(0);
   await openAttempts(page);
   await expect(rows(page)).toHaveCount(1);

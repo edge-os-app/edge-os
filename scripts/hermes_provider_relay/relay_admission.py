@@ -32,11 +32,11 @@ __all__ = ["APPROVED_ACTUAL_RELEASES", "CHANNEL_FIELDS", "PROVIDER_KEY_REFUSED_R
 RELEASE_KINDS = ("AUTHORED", "ACTUAL")  # an ACTUAL release exists only through an approved record (CONTRACT A6)
 # SHA256 of approved release records. Every other ACTUAL record fails closed. The operator handoff selects one of them:
 # hermes-first-call-1: docs/qualification/hermes-actual-operation/release/hermes_first_call_record.json
-# orbio-first-call-1: docs/qualification/orbio-release/orbio_first_call_record.json
+# orbio-list-price-1: docs/qualification/orbio-release/orbio_list_price_record.json
 # The approved record names its own destination (host, port, path; the TLS server name is its host), routing and CA
 # bundle pin: approving its SHA256 approves them. A record naming any other destination is not approved.
 APPROVED_ACTUAL_RELEASES: frozenset[str] = frozenset({"3fa94dd73e53a72ca8af6cda9c8633770de89c262fa5303756c1965bb92fed8f",
-                                                      "041f588d3b9564fd605d00d2204083cbfc4e4cd3307906656345a73118ac563f"})
+                                                      "dc78e3613c92954a8491ae2e177b4686b159a9dd7927a9b4771c68752e0d913c"})
 ACTUAL_BODY_FIELDS = frozenset({"model", "messages", "stream", "response_format", "provider", "reasoning", "max_tokens",
                                 "session_id", "prompt_cache_options"})
 REQUIRED_BODY_FIELDS = frozenset({"model", "messages", "stream", "provider", "max_tokens", "session_id"})

@@ -117,7 +117,7 @@ _PINNED_IMAGES = (("linux/arm64", "sha256:2d28b6d634bb32e45409575433fb2404ba6a61
 
 # The approved releases. An operator handoff selects one by record hash; the order selects nothing. Record and price
 # bytes are the frozen files, held here so that binding reads no file: hermes-first-call-1 in
-# docs/qualification/hermes-actual-operation/release/, orbio-first-call-1 in docs/qualification/orbio-release/.
+# docs/qualification/hermes-actual-operation/release/, orbio-list-price-1 in docs/qualification/orbio-release/.
 RELEASE_DEFINITIONS: tuple[RelayApplicationDefinition, ...] = (RelayApplicationDefinition(
     record=(b'{"allowed_fields":["model","messages","stream","response_format","provider","reasoning",'
             b'"max_tokens","session_id","prompt_cache_options"],'
@@ -141,19 +141,20 @@ RELEASE_DEFINITIONS: tuple[RelayApplicationDefinition, ...] = (RelayApplicationD
     global_cap_usd=Decimal("2.00"),  # the one shared USD 2.00 model and data ceiling, not a Hermes allocation
     owner_cap_usd=Decimal("2.00"),
 ), RelayApplicationDefinition(
-    record=(b'{"allowed_fields":["model","messages","stream","response_format","reasoning","max_tokens","session_id","'
-            b'prompt_cache_options"],"approval":{"path":"docs/qualification/orbio-release/orbio_first_call_approval.js'
-            b'on","sha256":"22e9ccdc52de423f8c612bc59376bec38357a47134f2c130b50a75e7c9e23e48"},"ca_bundle_sha256":"22b'
-            b'557a27055b33606b6559f37703928d3e4ad79f110b407d04986e1843543d1","destination":{"host":"api.orbio.so","pat'
-            b'h":"/api/v1/chat/completions","port":443},"kind":"ACTUAL","max_reply_bytes":262144,"max_request_bytes":6'
-            b'5536,"max_tokens":4096,"model":"openai/gpt-6.1-sol","price_snapshot_sha256":"4f83b00bd51b0614f1da551c762'
-            b'ce8969f27c5bb26bf5edf8a3f6e3412f982dc","prompt_cache_options":{"mode":"explicit"},"provider":null,"reaso'
-            b'ning":{"effort":"low"},"recorded_reply_headers":["X-Orbio-Balance","X-Orbio-Ignored-Parameters"],"releas'
-            b'e_id":"orbio-first-call-1","response_format_sha256":"cdffe6fd07f14b796cae3f97268148f6ad8893100b8080e1bc6'
-            b'52c7d3e9cbc60","route_id":"orbio-openrouter-managed","stream":false,"timeout_seconds":90}'),
-    record_sha256="041f588d3b9564fd605d00d2204083cbfc4e4cd3307906656345a73118ac563f",
-    price_snapshot=(b'{"completion_usd_per_million":"10.5","model":"openai/gpt-6.1-sol","prompt_usd_per_millio'
-                    b'n":"2.1","provider":"orbio"}'),
+    record=(b'{"allowed_fields":["model","messages","stream","response_format","reasoning","max_tokens","session_i'
+            b'd","prompt_cache_options"],"approval":{"path":"docs/qualification/orbio-release/orbio_list_price_app'
+            b'roval.json","sha256":"1aa401dda867aaef88bac0ca0688edec9a3d391be80cb88c7822cf415d58c9dc"},"ca_bundle_'
+            b'sha256":"22b557a27055b33606b6559f37703928d3e4ad79f110b407d04986e1843543d1","destination":{"host":"ap'
+            b'i.orbio.so","path":"/api/v1/chat/completions","port":443},"kind":"ACTUAL","max_reply_bytes":262144,"'
+            b'max_request_bytes":65536,"max_tokens":4096,"model":"openai/gpt-6.1-sol","price_snapshot_sha256":"eaa'
+            b'1ad5580c7b1a0296d8830fdbeaeb28ba0d39fb483144e1108ad6db71ae16f","prompt_cache_options":{"mode":"expli'
+            b'cit"},"provider":null,"reasoning":{"effort":"low"},"recorded_reply_headers":["X-Orbio-Balance","X-Or'
+            b'bio-Ignored-Parameters"],"release_id":"orbio-list-price-1","response_format_sha256":"cdffe6fd07f14b7'
+            b'96cae3f97268148f6ad8893100b8080e1bc652c7d3e9cbc60","route_id":"orbio-list-price","stream":false,"tim'
+            b'eout_seconds":90}'),
+    record_sha256="dc78e3613c92954a8491ae2e177b4686b159a9dd7927a9b4771c68752e0d913c",
+    price_snapshot=(b'{"completion_usd_per_million":"10","model":"openai/gpt-6.1-sol","prompt_usd_per_million":"'
+                    b'2","provider":"orbio"}'),
     response_format=interpretation_response_format(),
     images=_PINNED_IMAGES,
     channel_root="edge-os-research",

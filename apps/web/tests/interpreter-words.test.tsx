@@ -89,7 +89,8 @@ describe("interpreter attempts", () => {
     render(<InterpretationAttempts attempts={[failed, retry]} lateResults={[]} open currentRevisionId="r1" />);
     const [first, second] = screen.getAllByRole("listitem");
     expect(within(first).getByRole("heading", { name: "Read #1: First read" })).toBeInTheDocument();
-    expect(within(first).getByText("Provider failed (ProviderHTTPError)")).toBeInTheDocument();
+    expect(within(first).getByText("Provider failed")).toBeInTheDocument(); // the raw class stays in Details
+    expect(within(first).getByText(/error ProviderHTTPError/).closest("details")).not.toBeNull();
     expect(within(first).getAllByText("Unknown")).toHaveLength(3); // tokens, time and model cost
     expect(within(second).getByRole("heading", { name: "Read #2: First read, retry of #1" })).toBeInTheDocument();
     expect(within(second).getByText("1,423 in, 611 out")).toBeInTheDocument();
@@ -168,13 +169,62 @@ describe("system failures on the request page", () => {
     expect(screen.getAllByRole("listitem")).toHaveLength(2); // both attempts stay listed
   });
 
-  it("offers no retry for an unknown outcome and explains why", async () => {
+  it("gives one plain message and no retry for an unknown outcome", async () => {
     mocks.get.mockResolvedValue(baseBundle("INVALID_INPUT", { code: "interpreter_outcome_unknown", detail: "It is not known whether the provider finished." },
       { allowed: false, retry_of: null, reason: "outcome_uncertain" }, [attempt({ status: "TIMED_OUT", completion: "UNKNOWN", parse_result: "NOT_PARSED", revision_id: null })]));
     render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
-    expect(await screen.findByRole("heading", { name: "We do not know if the research agent finished" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "We did not get an answer we can show you" })).toBeInTheDocument();
+    expect(screen.getByText("Your request is saved. You may be charged for this read.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Try the research agent again" })).toBeNull();
-    expect(screen.getByTestId("retry-blocked")).toHaveTextContent("Nothing was replayed.");
+    expect(screen.queryByTestId("retry-blocked")).toBeNull();
+    expect(screen.queryByTestId("failure-detail")).toBeNull();
+    expect(screen.queryByText(/It is not known|may or may not|No strategy was created/)).toBeNull();
+  });
+
+  const kept = (overrides: Partial<Attempt>) => attempt({ error_class: "RelayCostUnverified", request_count: 1,
+    spend: { state: "UNKNOWN", charge_usd: "0.17216" }, identity: { ...attempt({}).identity, route: "orbio-list-price" }, ...overrides });
+
+  it("shows a kept answer as ready, its cost as unknown and its Orbio route", async () => {
+    mocks.get.mockResolvedValue({ ...baseBundle("UNRESOLVED", { code: "x", detail: "Nothing was tested." },
+      { allowed: false, retry_of: null, reason: "nothing_to_retry" }, [kept({})]),
+    model_cost: { settled_usd: null, settled_calls: 0, unknown_calls: 1, unit: "CREDIT", settled_credit: null, held_credit: "0.17216" } });
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    expect(await screen.findByTestId("cost-not-confirmed")).toHaveTextContent(/^Answer ready\. Cost not confirmed yet\.$/);
+    expect(screen.getAllByText("Unknown").length).toBeGreaterThan(0);
+    expect(screen.getByText("Finished")).toBeInTheDocument();
+    expect(screen.getByText(/error RelayCostUnverified/).closest("details")).not.toBeNull();
+    expect(screen.queryByText(/\$0\b|0 CREDIT/)).toBeNull();
+  });
+
+  it("does not call a rejected answer ready when its cost is open", async () => {
+    mocks.get.mockResolvedValue(baseBundle("INVALID_INPUT", { code: "malformed_model_output", detail: "Not usable." },
+      { allowed: true, retry_of: "a1", reason: null }, [kept({ parse_result: "REJECTED:bad_shape", revision_id: null })]));
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    await screen.findByRole("heading", { name: "The research agent's answer was not usable" });
+    expect(screen.queryByTestId("cost-not-confirmed")).toBeNull();
+  });
+
+  it("explains a reply the ledger refused in one plain sentence, with no retry and no raw class in the main text", async () => {
+    mocks.get.mockResolvedValue(baseBundle("UNRESOLVED", { code: "x", detail: "Nothing was tested." }, { allowed: true, retry_of: "a2", reason: null }, [
+      kept({}), attempt({ attempt_id: "a2", sequence: 2, status: "PROVIDER_FAILED", completion: "NONE", parse_result: "NOT_PARSED", revision_id: null,
+        error_class: "SpendScopeBlocked", request_count: 0 })],
+    { state: "FAILED", reason_code: "cost_not_confirmed", attempt_id: "a2" }));
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    const section = await screen.findByTestId("reply-state");
+    expect(section).toHaveTextContent("You can't reply to this request yet, because its cost is not confirmed. Start a new request to continue.");
+    expect(section).not.toHaveTextContent("SpendScopeBlocked");
+    expect(screen.queryByRole("button", { name: "Try this reply again" })).toBeNull();
+  });
+
+  it("gives an uncertain reply the same plain words", async () => {
+    mocks.get.mockResolvedValue(baseBundle("UNRESOLVED", { code: "x", detail: "Nothing was tested." }, { allowed: false, retry_of: null, reason: "outcome_uncertain" },
+      [attempt({ status: "UNKNOWN", completion: "UNKNOWN", parse_result: "NOT_PARSED", revision_id: null })],
+      { state: "UNCERTAIN", reason_code: null, attempt_id: "a1" }));
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    const section = await screen.findByTestId("reply-state");
+    expect(section).toHaveTextContent("We did not get an answer we can show you");
+    expect(section).toHaveTextContent("You may be charged for this read.");
+    expect(section).not.toHaveTextContent("may or may not");
   });
 
   it("names malformed model output separately from a provider failure", async () => {
@@ -331,12 +381,13 @@ describe("a first request with no saved outcome and no revision", () => {
     expect(screen.getByRole("button", { name: "Try the research agent again" })).toBeInTheDocument();
   });
 
-  it.each(["TIMED_OUT", "UNKNOWN", "INTERRUPTED"] as const)("says the outcome is unknown for %s, gives the blocked-retry reason and offers no retry", async (status) => {
+  it.each(["TIMED_OUT", "UNKNOWN", "INTERRUPTED"] as const)("gives one plain message for %s and offers no retry", async (status) => {
     const section = await show(noOutcome([attempt({ status, completion: "UNKNOWN", parse_result: "NOT_PARSED", revision_id: null })],
       { allowed: false, retry_of: null, reason: "outcome_uncertain" }));
     expect(section).toHaveAttribute("data-reading", "UNCERTAIN");
-    expect(screen.getByRole("heading", { name: "We do not know if the research agent finished" })).toBeInTheDocument();
-    expect(screen.getByTestId("retry-blocked")).toHaveTextContent("Nothing was replayed.");
+    expect(screen.getByRole("heading", { name: "We did not get an answer we can show you" })).toBeInTheDocument();
+    expect(screen.getByTestId("reading-state")).toHaveTextContent(/^Your request is saved\. You may be charged for this read\.$/);
+    expect(screen.queryByTestId("retry-blocked")).toBeNull();
     expect(screen.queryByRole("button", { name: /Try the research agent again|Read my request now/ })).toBeNull();
     wrongClaims();
   });
@@ -407,10 +458,10 @@ describe("a first request with no saved outcome and no revision", () => {
     bundle.outcomes[0].record.operation_id = "a1"; // only attempt 1 has an outcome
     const section = await show(bundle);
     expect(section).toHaveAttribute("data-reading", "UNCERTAIN");
-    expect(screen.getByRole("heading", { name: "We do not know if the research agent finished" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "We did not get an answer we can show you" })).toBeInTheDocument();
     expect(screen.queryByText("The research agent did not answer")).toBeNull();
     expect(screen.queryByText(/did not return a result|You can try again/)).toBeNull();
-    expect(screen.getByTestId("retry-blocked")).toHaveTextContent("Nothing was replayed.");
+    expect(screen.queryByTestId("retry-blocked")).toBeNull();
   });
 
   it("says the latest attempt was read and is not saved when an earlier attempt failed: failed, then accepted but unsaved", async () => {

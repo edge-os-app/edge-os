@@ -46,7 +46,7 @@ EXTRA = {"stream": False, "provider": ROUTING, "reasoning": {"effort": "low"}, "
 OTHER_PLATFORM_IMAGE = "sha256:" + "0" * 64
 ORBIO_KEY = "sk-orbio-SYNTHETIC-shape-sentinel-7a1c"
 ORBIO_CA = Path(__file__).resolve().parents[2] / "docs/qualification/orbio-release/orbio_ca_isrg_root_x1.pem"
-ORBIO_CHARGE = Decimal("0.0094038")  # concrete-thesis: 1,423 prompt and 611 completion tokens at USD 2.1 and 10.5 per million
+ORBIO_CHARGE = Decimal("0.008956")  # concrete-thesis: 1,423 prompt and 611 completion tokens at USD 2 and 10 per million
 
 
 def pinned_images_for_host(host: str, image_id: str) -> tuple[tuple[str, str], tuple[str, str]]:
@@ -580,7 +580,7 @@ def test_docker_the_orbio_record_goes_through_pinned_hermes_with_no_routing_and_
 
 
 @pytest.mark.parametrize("answer", ["cost_mismatch", "lost_reply"])
-def test_docker_a_cost_mismatch_or_a_lost_reply_is_never_accepted_keeps_the_full_reservation_and_is_never_resent(
+def test_docker_a_cost_mismatch_keeps_the_answer_a_lost_reply_does_not_and_both_keep_the_reservation_and_are_never_resent(
         shaped, owner_a, pg, answer: str) -> None:
     from relay_transport import ReplyLost
 
@@ -592,7 +592,11 @@ def test_docker_a_cost_mismatch_or_a_lost_reply_is_never_accepted_keeps_the_full
     created = first.post("/v1/research/requests", json=intake(), headers=owner_a)
 
     [attempt] = created.json()["attempts"]
-    assert attempt["parse_result"] != "ACCEPTED" and created.json()["head"]["interpretation_revision_id"] is None
+    revision = created.json()["head"]["interpretation_revision_id"]
+    if answer == "cost_mismatch":
+        assert (attempt["parse_result"], attempt["request_count"]) == ("ACCEPTED", 1) and revision is not None
+    else:
+        assert attempt["parse_result"] != "ACCEPTED" and revision is None
     assert attempt["spend"] == {"state": "UNKNOWN", "charge_usd": str(RESERVATION)}
     assert len(relay.sends) == 1 and relay.record_of(attempt["attempt_id"], "started") is not None
     path = f"/v1/research/requests/{created.json()['intake']['record_id']}"

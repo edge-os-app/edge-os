@@ -21,8 +21,8 @@ export const FAILURE_COPY: Record<FailureKind, { title: string; lead: string }> 
     lead: "A system failure stopped the research agent. This is not a verdict on your idea.",
   },
   OUTCOME_UNKNOWN: {
-    title: "We do not know if the research agent finished",
-    lead: "The research agent may or may not have produced an answer. This read was not repeated, and nothing was assumed.",
+    title: "We did not get an answer we can show you",
+    lead: "Your request is saved. You may be charged for this read.",
   },
 };
 
@@ -33,14 +33,15 @@ export function systemFailure(findings: Finding[]): FailureKind | null {
 
 export const RETRY_BLOCKED: Record<string, string> = {
   attempt_in_flight: "An earlier read has no saved result and may still be running, so a retry is not offered.",
-  outcome_uncertain: "An earlier read may still finish, so a retry is not offered. Nothing was replayed.",
   stale_reply: "Your saved meaning changed after that reply, so the reply cannot be tried again.",
 };
 
-const ORBIO_ROUTE = "orbio-openrouter-managed";
+/** The current route, and the retired one that saved attempts still name. */
+const ORBIO_ROUTES: readonly (string | null)[] = ["orbio-list-price", "orbio-openrouter-managed"];
 
 const ROUTE_WORDS: Record<string, string> = {
-  [ORBIO_ROUTE]: "via Orbio",
+  "orbio-list-price": "via Orbio",
+  "orbio-openrouter-managed": "via Orbio",
   "openrouter-openai-standard": "via OpenRouter",
 };
 
@@ -55,7 +56,7 @@ export function describeRoute(route: string | null): string | null {
  */
 export function describeRouteSummary(attempts: Attempt[]): string | null {
   const calls = attempts.filter((a) => a.request_count !== 0);
-  const orbioCalls = calls.filter((a) => a.identity.route === ORBIO_ROUTE && a.request_count !== null).length;
+  const orbioCalls = calls.filter((a) => ORBIO_ROUTES.includes(a.identity.route) && a.request_count !== null).length;
   if (orbioCalls === 0) return null;
   return orbioCalls === calls.length ? "Model calls ran through Orbio" : `${orbioCalls} of ${plural(calls.length, "model call")} ran through Orbio`;
 }
@@ -94,6 +95,11 @@ function usd(amount: string | null): string | null {
   const decimals = point <= 0 ? "0".repeat(-point) + digits : digits.slice(point);
   const trimmed = decimals.replace(/0+$/, "");
   return `$${integer.replace(/^0+(?=\d)/, "")}${trimmed ? `.${trimmed}` : ""}`;
+}
+
+/** An accepted answer whose provider cost did not match the ledger price: the answer stands, and the full hold stays. */
+export function answerCostNotConfirmed(attempts: Attempt[]): boolean {
+  return attempts.some((a) => a.error_class === "RelayCostUnverified" && a.parse_result === "ACCEPTED" && a.spend.state === "UNKNOWN");
 }
 
 /** An attempt's model cost: its charge only when the ledger settled it. Unknown, released or missing spend is Unknown. */
@@ -257,6 +263,9 @@ function describeReading(facts: ReadingFacts): Omit<FirstReading, "tag"> | null 
   return null;
 }
 
+/** The API's reason for a reply the ledger refused: an earlier call on this request has an open cost. A retry cannot help. */
+export const COST_NOT_CONFIRMED = "cost_not_confirmed";
+
 /** Heading and words for the last reply when it has no saved revision. Each follows from the stored attempt only. */
 export function replyCopy(reply: ReplyState): { title: string; body: string } {
   const kept = "Your saved meaning did not change.";
@@ -266,7 +275,7 @@ export function replyCopy(reply: ReplyState): { title: string; body: string } {
         ? { title: "Your last reply could not be used", body: "Your reply matched what is already saved, so nothing changed. Say what you want to change, or answer one of the questions." }
         : { title: "Your last reply could not be used", body: `The research agent's answer broke a rule (${reply.reason_code?.replaceAll("_", " ")}), so none of it was used. ${kept}` };
     case "UNCERTAIN":
-      return { title: "We do not know if your last reply was read", body: `The research agent may or may not have read it. This read was not repeated, and ${kept.toLowerCase()}` };
+      return { title: FAILURE_COPY.OUTCOME_UNKNOWN.title, body: `${kept} You may be charged for this read.` };
     case "PENDING_SAVE":
       return { title: "Your last reply was read but is not saved yet",
         body: `The research agent read it and the answer was accepted. Saving it did not finish. A restart tries to save it again. If the cause stays, it stays unsaved, and this page cannot tell you why. ${kept}` };
@@ -274,7 +283,9 @@ export function replyCopy(reply: ReplyState): { title: string; body: string } {
       return { title: "Your last reply has no saved result",
         body: `A read of your reply was started and no result is saved. It may still be running, or it may have stopped. This page cannot tell which. ${kept} Nothing is repeated while it may still run.` };
     default:
-      return { title: "Your last reply was not read", body: `A system failure stopped the research agent. ${kept}` };
+      return reply.reason_code === COST_NOT_CONFIRMED
+        ? { title: "Your last reply was not sent", body: "You can't reply to this request yet, because its cost is not confirmed. Start a new request to continue." }
+        : { title: "Your last reply was not read", body: `A system failure stopped the research agent. ${kept}` };
   }
 }
 

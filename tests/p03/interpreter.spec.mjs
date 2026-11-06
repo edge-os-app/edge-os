@@ -149,9 +149,9 @@ test("unusable model output and an unknown outcome are named apart, and an unkno
   await expect(page.getByRole("heading", { name: "Research", level: 1 })).toBeVisible();
   script({ case: "provider-hang" });
   const unknown = await submit(page, THESIS);
-  await expect(page.getByRole("heading", { name: "We do not know if the research agent finished" })).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByRole("heading", { name: "We did not get an answer we can show you" })).toBeVisible({ timeout: 90_000 });
   await expect(page.getByRole("button", { name: "Try the research agent again" })).toHaveCount(0);
-  await expect(page.getByTestId("retry-blocked")).toContainText("Nothing was replayed.");
+  await expect(page.getByTestId("retry-blocked")).toHaveCount(0);
   await expect(attemptRows(page).first()).toContainText(/outcome unknown/);
   await shot(page, project, "unknown");
   await inspect(page, project, "unknown");
@@ -313,7 +313,7 @@ test("a request whose outcome was not saved is worded from its attempt, offers t
   });
   await page.reload();
   await expect(outcome(page)).toHaveAttribute("data-reading", "UNCERTAIN");
-  await expect(page.getByTestId("retry-blocked")).toContainText("Nothing was replayed.");
+  await expect(page.getByTestId("retry-blocked")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Try the research agent again" })).toHaveCount(0);
   await inspect(page, project, "no-outcome-uncertain");
 
@@ -351,10 +351,10 @@ test("after a retry, the page describes the latest attempt and not an older fail
   });
   await page.reload();
   await expect(outcome(page)).toHaveAttribute("data-reading", "UNCERTAIN");
-  await expect(page.getByRole("heading", { name: "We do not know if the research agent finished" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "We did not get an answer we can show you" })).toBeVisible();
   await expect(page.getByText("The research agent did not answer")).toHaveCount(0);
   await expect(page.getByText(/did not return a result/)).toHaveCount(0);
-  await expect(page.getByTestId("retry-blocked")).toContainText("Nothing was replayed.");
+  await expect(page.getByTestId("retry-blocked")).toHaveCount(0);
   await shot(page, project, "latest-attempt-unknown");
   await inspect(page, project, "latest-attempt-unknown");
   await page.unrouteAll({ behavior: "wait" });

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { CLASS_LABEL, FIELD_LABEL, JOB_LABEL, ORIGIN_LABEL, OUTCOME_COPY, formatTime, shortId, summarizeValue } from "../lib/describe";
-import { FAILURE_COPY, RETRY_BLOCKED, firstReading, replyCopy, sourceQuote, systemFailure } from "../lib/interpretation";
+import { COST_NOT_CONFIRMED, FAILURE_COPY, RETRY_BLOCKED, answerCostNotConfirmed, firstReading, replyCopy, sourceQuote, systemFailure } from "../lib/interpretation";
 import type { Bundle, Finding, Strategy } from "../lib/types";
 import type { ConversationContext } from "./Conversation";
 import { InterpretationAttempts } from "./InterpretationAttempts";
@@ -253,6 +253,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
       <section className={`status ${outcome === "PUBLISHED" || outcome === "COMPILED" ? "ok" : stopped || pending ? "stop" : ""}`} aria-labelledby="state-title" data-testid="outcome" data-outcome={pending ? "PENDING" : outcome} data-reading={pending?.kind}>
         <p className="visually-hidden" role="status">{pending ? pending.title : failure ? FAILURE_COPY[failure].title : copy.title}</p>
         <h2 id="state-title" ref={stateHeading} tabIndex={-1}><span className={`tag tag-${pending ? "neutral" : copy.tone}`} style={{ marginRight: 8 }}>{pending ? pending.title : failure ? FAILURE_COPY[failure].title : copy.title}</span></h2>
+        {answerCostNotConfirmed(bundle.attempts) ? <p data-testid="cost-not-confirmed">Answer ready. Cost not confirmed yet.</p> : null}
         {outcome === "NEEDS_CLARIFICATION" && <p>We need {head.questions.length === 1 ? "one answer" : "a few answers"} before the {intake.requested_job === "CREATE_STRATEGY" ? "rules" : "investigation"} can be reviewed. Nothing is guessed. Answer here or in the conversation.</p>}
         {outcome === "COMPILED" && <p>These rules came from your words and the settings you adopted. Check them, then save. Saving makes a saved version. It does not show the rules work.</p>}
         {outcome === "PUBLISHED" && <p>This version is saved. Reopening it later shows the same saved record.</p>}
@@ -273,7 +274,8 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
             {pending.action === "CHECK_AGAIN" && head.retry.reason && RETRY_BLOCKED[head.retry.reason] ? <p className="muted" data-testid="retry-blocked">{RETRY_BLOCKED[head.retry.reason]}</p> : null}
           </>
         ) : null}
-        {failure ? (
+        {failure === "OUTCOME_UNKNOWN" ? <p>{FAILURE_COPY.OUTCOME_UNKNOWN.lead}</p> : null}
+        {failure && failure !== "OUTCOME_UNKNOWN" ? (
           <>
             <p>{FAILURE_COPY[failure].lead}</p>
             <p data-testid="failure-detail">{findings[0]?.detail}</p>
@@ -307,7 +309,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
         <section className="status stop" aria-labelledby="reply-title" data-testid="reply-state" data-reply={head.reply.state}>
           <h2 id="reply-title" style={{ fontSize: 18 }}>{replyCopy(head.reply).title}</h2>
           <p>{replyCopy(head.reply).body}</p>
-          {head.retry.allowed ? (
+          {head.retry.allowed && head.reply.reason_code !== COST_NOT_CONFIRMED ? (
             <div className="btn-row">
               <button className="btn btn-secondary" type="button" onClick={retryInterpretation} aria-disabled={busy || undefined}>{busy ? "Trying again…" : "Try this reply again"}</button>
               <span className="muted">You can also answer one of the questions below.</span>

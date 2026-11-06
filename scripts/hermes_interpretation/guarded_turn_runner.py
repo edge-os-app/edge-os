@@ -7,6 +7,7 @@ default) the turn and the reservation are exactly the policy's.
 The wrapped runner is never called when the check or the reservation fails. After the run, only provable facts free
 or fix a reservation: a counted single request with usable usage is charged exactly, and a run that admitted no
 request is released. Anything else keeps the full reservation as liability and blocks the next attempt in its scope.
+A counted result named `COST_UNVERIFIED` is one of those: its answer stands, and its reservation stays.
 A failure to record a result never hides the result, and it never frees liability.
 
 It implements the same `HermesTurnRunner` interface as the runner it wraps, so it fits where the application already
@@ -24,13 +25,14 @@ from edge_os_api.research.interpretation_attempts import Usage
 from provider_guard import GuardPolicy
 from spend_ledger import CapExceeded, ReservationExists, ScopeBlocked, SpendLedger, check_smallest_limit
 
-__all__ = ["GuardedTurnRunner", "INPUT_TOKEN_MARGIN"]
+__all__ = ["COST_UNVERIFIED", "GuardedTurnRunner", "INPUT_TOKEN_MARGIN"]
 
 log = logging.getLogger(__name__)
 # A token is at least one byte of text, so the request's bytes bound its input tokens. The margin covers the few
 # special tokens that a provider's chat template adds. This is an assumption about tokenizers, not a proven ceiling.
 INPUT_TOKEN_MARGIN = 64
 COUNTED = ("RETURNED", "TRUNCATED")
+COST_UNVERIFIED = "RelayCostUnverified"
 
 
 def _refused(turn: HermesTurn, error_class: str) -> HermesTurnResult:
@@ -99,7 +101,7 @@ class GuardedTurnRunner:
             if count == 0 and result.status != "TIMED_OUT" and guard_agrees:
                 ledger.release_unsent(turn.attempt_id, reason=result.error_class or result.status)
                 state, charge = "RELEASED", "0"
-            elif count == 1 and result.status in COUNTED:
+            elif count == 1 and result.status in COUNTED and result.error_class != COST_UNVERIFIED:
                 usage = result.usage if result.usage.source == "PROVIDER_REPORTED" else Usage()
                 settled = ledger.settle(turn.attempt_id, input_tokens=usage.input_tokens, output_tokens=usage.output_tokens)
                 state, charge = settled.state, str(settled.cost_usd.normalize())

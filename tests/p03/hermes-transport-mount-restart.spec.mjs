@@ -38,7 +38,7 @@ test("the saved revision and mounted attempts reopen unchanged after the mount p
 
   const lost = results[`mount-lost-${project}`];
   await page.goto(`/app#/research/${lost.id}`);
-  await expect(page.getByRole("heading", { name: "We do not know if the research agent finished" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "We did not get an answer we can show you" })).toBeVisible({ timeout: 30_000 });
   await openAttempts(page);
   await expect(rows(page).first()).toHaveAttribute("data-attempt", lost.attempt);
   await expect(page.getByRole("button", { name: "Try the research agent again" })).toHaveCount(0);

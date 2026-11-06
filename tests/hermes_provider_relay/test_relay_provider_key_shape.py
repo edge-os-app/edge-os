@@ -22,7 +22,7 @@ import relay_service
 
 from conftest import REPO
 
-ORBIO_RECORD = REPO / "docs/qualification/orbio-release/orbio_first_call_record.json"
+ORBIO_RECORD = REPO / "docs/qualification/orbio-release/orbio_list_price_record.json"
 ORBIO_CA = REPO / "docs/qualification/orbio-release/orbio_ca_isrg_root_x1.pem"
 OPENROUTER_RECORD = REPO / "docs/qualification/hermes-actual-operation/release/hermes_first_call_record.json"
 RIGHT_ORBIO_KEY = b"sk-orbio-SYNTHETIC0sentinel0key"

@@ -25,7 +25,7 @@ export function InterpretationAttempts({ attempts, modelCost = null, modelBudget
           {attempts.map((a) => {
             const route = describeRoute(a.identity.route);
             const rows: [string, string][] = [
-              ["Result", ATTEMPT_STATUS_LABEL[a.status] + (a.error_class ? ` (${a.error_class})` : "")],
+              ["Result", ATTEMPT_STATUS_LABEL[a.status]],
               ["Answer", describeParse(a.parse_result) + (a.revision_id ? (a.revision_id === currentRevisionId ? ". Used for the current meaning" : ". Used for an earlier meaning") : "")],
               ["Tokens", describeUsage(a.usage)],
               ["Time", describeLatency(a.latency_ms)],

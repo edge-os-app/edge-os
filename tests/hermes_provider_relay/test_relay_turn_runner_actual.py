@@ -1,7 +1,8 @@
 """The host turn runner with an ACTUAL route (CONTRACT A6, E1-COST1): only with an approved release record whose request
 shape the policy matches and the ledger's own TokenPrice; a counted result only when the provider-reported cost, rounded
 up to a whole nano-USD, EQUALS the ledger-price charge for the reported usage and that charge is within the held
-reservation. Everything else is UNKNOWN with the full reservation, through the real runner and SQLite ledger.
+reservation. A reply that fails only that cost check keeps its answer and request count and holds the full reservation
+as UNKNOWN; everything else is withheld as UNKNOWN with the full reservation, through the real runner and SQLite ledger.
 A fake job and written relay records stand in for the containers: no network, no Docker, no key."""
 
 from __future__ import annotations
@@ -127,15 +128,17 @@ def test_a_route_or_policy_that_differs_from_the_record_is_refused(tmp_path: Pat
 
 class Rig:
     def __init__(self, tmp_path: Path, actual: ActualRelease, finished: dict[str, Any], usage: Usage = USAGE, *,
-                 cap: Decimal = Decimal("0.20"), min_output_tokens: int | None = None) -> None:
+                 cap: Decimal = Decimal("0.20"), min_output_tokens: int | None = None,
+                 price: TokenPrice = PRICE) -> None:
         state = tmp_path / "state"
         for folder in ("grants", "revocations", "state"):
             (tmp_path / folder).mkdir(exist_ok=True)
         (tmp_path / "key").write_bytes(b"a" * 32)
         (state / "heartbeat.json").write_text(json.dumps({"release": actual.release.settings(), "at": time.time(),
                                                           "started_at": 0}))
-        self.spend = SpendLedger(tmp_path / "spend.sqlite", cap_usd=cap, price=PRICE)
-        self.job = build(tmp_path, actual, route(actual), ledger=self.spend, min_output_tokens=min_output_tokens)
+        self.spend = SpendLedger(tmp_path / "spend.sqlite", cap_usd=cap, price=price)
+        self.job = build(tmp_path, actual, route(actual), ledger=self.spend, min_output_tokens=min_output_tokens,
+                         price=price)
         self.calls, self.turns = 0, []
 
         def run_turn(turn: HermesTurn) -> HermesTurnResult:
@@ -181,26 +184,50 @@ def test_a_reported_cost_equal_to_the_ledger_charge_counts_and_settles_at_exactl
     0.06,  # above the reservation
     None, "0.0074285", float("inf"), float("nan"), True, -0.0074285, [0.0074285],
 ])
-def test_any_other_reported_cost_keeps_the_full_reservation_and_withholds_the_answer(tmp_path: Path, actual: ActualRelease,
-                                                                                     cost: Any) -> None:
+def test_any_other_reported_cost_keeps_the_answer_and_the_full_reservation_and_never_settles(
+        tmp_path: Path, actual: ActualRelease, cost: Any) -> None:
     record = reply_record(cost=cost)
     if cost is None:
         record.pop("cost")
     rig = Rig(tmp_path, actual, record)
     result = rig.job.runner.run_turn(TURN)
     assert (result.status, result.text, result.request_count, result.error_class) == (
-        "UNKNOWN", None, None, "RelayCostUnverified")
+        "RETURNED", "{}", 1, "RelayCostUnverified")
+    assert result.usage == USAGE
+    assert (result.observed["spend_state"], result.observed["spend_charge_usd"]) == ("UNKNOWN", str(RESERVATION.normalize()))
     assert rig.spend.state("att-1") == "UNKNOWN" and rig.spend.liability_usd("att-1") == RESERVATION
     assert rig.calls == 1 and len(list((tmp_path / "grants").iterdir())) == 1  # one job, one grant: nothing resent
 
 
-def test_a_matching_cost_whose_charge_exceeds_the_reservation_is_unknown(tmp_path: Path, actual: ActualRelease) -> None:
+def test_a_matching_cost_whose_charge_exceeds_the_reservation_never_settles(tmp_path: Path, actual: ActualRelease) -> None:
     big = Usage(30_000, 4_096, 34_096, "PROVIDER_REPORTED")  # 0.06 + 0.03072 = 0.09072 > 0.054848
     rig = Rig(tmp_path, actual, reply_record(cost=0.09072, usage={"prompt_tokens": 30_000, "completion_tokens": 4_096,
                                                                    "total_tokens": 34_096}), usage=big)
     result = rig.job.runner.run_turn(TURN)
-    assert (result.status, result.error_class) == ("UNKNOWN", "RelayCostUnverified")
+    assert (result.status, result.request_count, result.error_class) == ("RETURNED", 1, "RelayCostUnverified")
     assert rig.spend.state("att-1") == "UNKNOWN" and rig.spend.liability_usd("att-1") == RESERVATION
+
+
+LIST_PRICE = TokenPrice(Decimal("2"), Decimal("10"))
+FIRST_CALL_USAGE = Usage(3_442, 228, 3_670, "PROVIDER_REPORTED")  # request f82a30d4
+
+
+def first_call(cost: float) -> dict[str, Any]:
+    return reply_record(cost=cost, usage={"prompt_tokens": 3_442, "completion_tokens": 228, "total_tokens": 3_670})
+
+
+def test_the_first_paid_calls_reported_cost_settles_exactly_at_the_list_price(tmp_path: Path, actual: ActualRelease) -> None:
+    rig = Rig(tmp_path, actual, first_call(0.009164), FIRST_CALL_USAGE, price=LIST_PRICE)
+    result = rig.job.runner.run_turn(TURN)
+    assert (result.error_class, result.observed["spend_state"]) == (None, "SETTLED")
+    assert rig.spend.liability_usd("att-1") == Decimal("0.009164")
+
+
+def test_a_cost_at_the_retired_price_no_longer_settles(tmp_path: Path, actual: ActualRelease) -> None:
+    rig = Rig(tmp_path, actual, first_call(0.0096222), FIRST_CALL_USAGE, price=LIST_PRICE)
+    result = rig.job.runner.run_turn(TURN)
+    assert (result.status, result.error_class) == ("RETURNED", "RelayCostUnverified")
+    assert rig.spend.state("att-1") == "UNKNOWN"
 
 
 @pytest.mark.parametrize("usage", [
@@ -209,12 +236,12 @@ def test_a_matching_cost_whose_charge_exceeds_the_reservation_is_unknown(tmp_pat
     {"prompt_tokens": 1423, "completion_tokens": 610, "total_tokens": 2033},
     None,
 ])
-def test_invalid_or_different_usage_keeps_the_full_reservation(tmp_path: Path, actual: ActualRelease,
+def test_invalid_or_different_usage_stays_withheld_with_the_full_reservation(tmp_path: Path, actual: ActualRelease,
                                                               usage: Any) -> None:
     rig = Rig(tmp_path, actual, reply_record(usage=usage))
     result = rig.job.runner.run_turn(TURN)
-    assert (result.status, result.text) == ("UNKNOWN", None) and result.error_class in (
-        "RelayCountMismatch", "RelayCostUnverified")
+    assert (result.status, result.text, result.request_count, result.error_class) == (
+        "UNKNOWN", None, None, "RelayCountMismatch")
     assert rig.spend.state("att-1") == "UNKNOWN" and rig.spend.liability_usd("att-1") == RESERVATION
 
 
@@ -263,7 +290,7 @@ def test_with_a_lowered_limit_any_other_cost_keeps_the_lowered_reservation(tmp_p
                                                                          cost: float) -> None:
     rig = Rig(tmp_path, actual, reply_record(cost=cost), cap=Decimal("0.04"), min_output_tokens=1)
     result = rig.job.runner.run_turn(TURN)
-    assert (result.status, result.error_class) == ("UNKNOWN", "RelayCostUnverified")
+    assert (result.status, result.error_class) == ("RETURNED", "RelayCostUnverified")
     assert rig.spend.state("att-1") == "UNKNOWN" and rig.spend.liability_usd("att-1") == LOWERED_RESERVATION
 
 

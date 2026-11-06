@@ -37,7 +37,7 @@ test("saved attempts and states reopen unchanged in a fresh context", async ({ b
 
   const unknown = results[`p05-malformed-unknown-${project}`];
   await open(unknown.unknown);
-  await expect(page.getByRole("heading", { name: "We do not know if the research agent finished" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "We did not get an answer we can show you" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Try the research agent again" })).toHaveCount(0);
   await open(unknown.malformed);
   await expect(page.getByRole("heading", { name: "The research agent's answer was not usable" })).toBeVisible();

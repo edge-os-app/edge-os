@@ -1,0 +1,162 @@
+{
+  "format": "edge-os.hermes-release-approval/1",
+  "status": "APPROVED_RELEASE_VALUES",
+  "meaning": "The builder-decided values of one ACTUAL Orbio relay release (orbio-list-price-1). It approves these values for a reviewed code registry entry beside hermes-first-call-1, in place of orbio-first-call-1. An operator handoff selects it explicitly; nothing selects it by default. It does not authorize a provider call, a key, a purchase or any spending, and it is not evidence that any provider call ran. See docs/qualification/orbio-release/ORBIO_RELEASE_DRAFT.md.",
+  "adopted_utc": "2026-11-06",
+  "base": "4375097fd5b3aa94d0ad9c03a71c7fdd7b4b68ab",
+  "record_values_except_approval": {
+    "allowed_fields": [
+      "model",
+      "messages",
+      "stream",
+      "response_format",
+      "reasoning",
+      "max_tokens",
+      "session_id",
+      "prompt_cache_options"
+    ],
+    "ca_bundle_sha256": "22b557a27055b33606b6559f37703928d3e4ad79f110b407d04986e1843543d1",
+    "destination": {
+      "host": "api.orbio.so",
+      "path": "/api/v1/chat/completions",
+      "port": 443
+    },
+    "kind": "ACTUAL",
+    "max_reply_bytes": 262144,
+    "max_request_bytes": 65536,
+    "max_tokens": 4096,
+    "model": "openai/gpt-6.1-sol",
+    "price_snapshot_sha256": "eaa1ad5580c7b1a0296d8830fdbeaeb28ba0d39fb483144e1108ad6db71ae16f",
+    "prompt_cache_options": {
+      "mode": "explicit"
+    },
+    "provider": null,
+    "reasoning": {
+      "effort": "low"
+    },
+    "release_id": "orbio-list-price-1",
+    "response_format_sha256": "cdffe6fd07f14b796cae3f97268148f6ad8893100b8080e1bc652c7d3e9cbc60",
+    "route_id": "orbio-list-price",
+    "stream": false,
+    "timeout_seconds": 90,
+    "recorded_reply_headers": [
+      "X-Orbio-Balance",
+      "X-Orbio-Ignored-Parameters"
+    ]
+  },
+  "application_definition_values": {
+    "images": "the same pinned image ids as hermes-first-call-1",
+    "channel_root": "edge-os-research",
+    "global_cap_usd": "2.00",
+    "owner_cap_usd": "2.00",
+    "seller": "orbio"
+  },
+  "inputs": {
+    "response_format": {
+      "source": "edge_os_api.research.interpreter_output_schema.interpretation_response_format()",
+      "sha256": "cdffe6fd07f14b796cae3f97268148f6ad8893100b8080e1bc652c7d3e9cbc60"
+    },
+    "price_snapshot": {
+      "path": "docs/qualification/orbio-release/orbio_list_price_prices.json",
+      "sha256": "eaa1ad5580c7b1a0296d8830fdbeaeb28ba0d39fb483144e1108ad6db71ae16f",
+      "rule": "the catalogue list rate USD 2 / 10 per million, which is the rate of the one observed Orbio charge (facts.first_paid_call). No 5% fee is added: that call showed none. A later fee makes the cost check fail, and the hold then stays."
+    },
+    "ca_bundle": {
+      "path": "docs/qualification/orbio-release/orbio_ca_isrg_root_x1.pem",
+      "sha256": "22b557a27055b33606b6559f37703928d3e4ad79f110b407d04986e1843543d1",
+      "certificate": "ISRG Root X1, DER SHA256 96bcec06264976f37460779acf28c5a7cfe8a3c0aae11a8ffcee05c0bddf08c6"
+    }
+  },
+  "decisions": {
+    "terms": "Step 1: the builder accepted Orbio's terms of service and privacy policy (closes U5).",
+    "routing": "Step 3 option (b): a reviewed code change admits a release that names no routing.",
+    "reply_headers": "Step 5 option one: the relay records X-Orbio-Ignored-Parameters and X-Orbio-Balance only.",
+    "selection": "The operator handoff selects the release. OpenRouter stays a separate approved release.",
+    "price": "Builder approval of 2026-11-06: one price, USD 2 / 10 per million tokens, for hold, check and settle.",
+    "cost_mismatch": "Builder approval of 2026-11-06: when only the cost check fails, the answer is kept and the whole hold stays."
+  },
+  "facts": {
+    "catalogue": {
+      "read_utc": "2026-11-05",
+      "read_by": "controller",
+      "source": "https://www.orbio.so/api/v1/models",
+      "model": "openai/gpt-6.1-sol",
+      "listed": true,
+      "prompt_usd_per_token": "0.000002",
+      "completion_usd_per_token": "0.00001",
+      "override": {
+        "min_prompt_tokens": 272000,
+        "prompt_usd_per_token": "0.000004",
+        "completion_usd_per_token": "0.000015"
+      },
+      "override_count": 1,
+      "time_of_day_part": false,
+      "reach": "the 65,536-byte request limit cannot reach min_prompt_tokens 272000 (closes U6)"
+    },
+    "tls": {
+      "read_utc": "2026-11-05",
+      "read_by": "controller",
+      "scope": "handshake only, no HTTP request",
+      "endpoint": "api.orbio.so:443",
+      "sni": "api.orbio.so",
+      "trust": "orbio_ca_isrg_root_x1.pem alone",
+      "protocol": "TLSv1.3",
+      "verify_return_code": 0,
+      "chain": [
+        "api.orbio.so",
+        "YR1",
+        "Root YR",
+        "ISRG Root X1"
+      ],
+      "closes": "U8"
+    },
+    "first_paid_call": {
+      "date_utc": "2026-11-06",
+      "release": "orbio-first-call-1",
+      "request": "f82a30d4",
+      "attempt_id": "7745cb6c-d571-41e0-8fdd-c65e8181d1ab",
+      "generation_id": "gen-1793976555-x7pBoFFNTlMkoKFiZi2U",
+      "http_status": 200,
+      "finish_reason": "stop",
+      "model": "openai/gpt-6.1-sol",
+      "provider": "OpenAI",
+      "prompt_tokens": 3442,
+      "completion_tokens": 228,
+      "reasoning_tokens": 69,
+      "cached_tokens": 0,
+      "usage_cost": "0.009164",
+      "balance_before_micro_usd": 5000000,
+      "balance_after_micro_usd": 4990836,
+      "x_orbio_balance": "4.84281",
+      "meaning": "The balance drop equals usage.cost exactly, and that cost is the list rate with no fee. One call explains neither why no fee applied nor why X-Orbio-Balance differs (U9)."
+    }
+  },
+  "spending": {
+    "combined_model_and_data_ceiling_usd": "2.00",
+    "ledger": "one ledger database for every route: OpenRouter and Orbio reservations count against the same caps in the one settings row",
+    "maximum_reservation_usd": "0.17216",
+    "maximum_reservation_meaning": "The worst-case reservation of one request ((65,536 + 64) prompt tokens x 2 + 4,096 completion tokens x 10, USD per million). An accounting calculation, not an allocation.",
+    "credit_purchase": "The builder bought USD 5 of balance on 2026-11-06. This release buys nothing."
+  },
+  "open": {
+    "U1": "whether usage.cost stays equal to the balance drop beyond the one observed call",
+    "U2": "whether a cost lookup endpoint exists",
+    "U3": "whether a provider object is forwarded, dropped or rejected (this release sends none)",
+    "U7": "whether reasoning, response_format, max_tokens and prompt_cache_options are forwarded or dropped",
+    "U9": "why X-Orbio-Balance read 4.84281 on the first paid call when the balance after it was USD 4.990836, and its timing and precision",
+    "U10": "whether the discount and the 5% fee apply only at purchase or change each request's charge",
+    "U11": "whether the balance is USD cash or inference face value"
+  },
+  "limits": [
+    "At most one further model request, after the gate PASS and under the builder approval of 2026-11-06; no fallback and no blind retry.",
+    "The model job holds no provider key; the relay alone reads it. No key in logs, model context, source control or application responses.",
+    "Production stays refused.",
+    "No funded transaction, policy or wallet change, host deployment or main publication is approved by this release."
+  ],
+  "replaces": {
+    "release_id": "orbio-first-call-1",
+    "route_id": "orbio-openrouter-managed",
+    "record_sha256": "041f588d3b9564fd605d00d2204083cbfc4e4cd3307906656345a73118ac563f",
+    "why": "The ledger froze orbio-openrouter-managed at USD 2.1 / 10.5 at its first use, and a frozen route price never changes. The old files stay as history, and the old release is no longer approved."
+  }
+}

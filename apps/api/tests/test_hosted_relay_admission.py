@@ -104,6 +104,6 @@ def test_production_refuses_a_record_with_another_relay_record_hash(
 
 def test_local_admission_is_unchanged(unreachable, approve, tmp_path: Path) -> None:  # noqa: F811
     approve()  # explicitly empty relay registries, whatever the ordinary ones hold
-    assert "edgeos-fun-vps1-orbio" in hosted_deployment.APPROVED_HOSTED_DEPLOYMENTS
+    assert "edgeos-fun-vps1-orbio-list-price" in hosted_deployment.APPROVED_HOSTED_DEPLOYMENTS
     assert open_with(unreachable, tmp_path) is None
     assert list(tmp_path.iterdir()) == []

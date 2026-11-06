@@ -376,3 +376,12 @@ def test_an_unusable_reservation_that_cannot_be_released_stays_liability_and_not
 
     assert (result.request_count, result.error_class) == (0, "SpendLedgerUnavailable") and delegate.calls == 0
     assert spend.state("attempt-1") == "RESERVED" and spend.committed_usd() == Decimal("0.02")  # kept, never lost
+
+
+def test_an_answer_with_an_unverified_cost_stands_and_its_full_reservation_stays_unknown(tmp_path: Path) -> None:
+    ledger = SpendLedger(tmp_path / "spend.sqlite", cap_usd=CAP, price=PRICE)
+    delegate = Delegate(ledger, returned(error_class="RelayCostUnverified"))
+    result = GuardedTurnRunner(delegate, ledger, POLICY, lambda _turn: "scope").run_turn(turn())
+    assert (result.status, result.text, result.request_count) == ("RETURNED", "{}", 1)
+    assert (result.observed["spend_state"], result.observed["spend_charge_usd"]) == ("UNKNOWN", "0.04532")
+    assert ledger.state("attempt-1") == "UNKNOWN" and ledger.liability_usd("attempt-1") == RESERVATION

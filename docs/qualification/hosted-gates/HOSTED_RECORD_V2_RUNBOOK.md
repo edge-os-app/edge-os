@@ -690,16 +690,20 @@ passes. The first real Orbio study still runs locally.
 
 ### 9.1 The replacement record
 
-`records/edgeos-fun-vps1-orbio.json`, canonical SHA-256
-`c0c0f07c9787c7487a823951954afdf5979e71d13e9cfde09a340502b65062dd`, replaces `edgeos-fun-vps1` in
-`APPROVED_HOSTED_DEPLOYMENTS`. The id is new because §8.3 names the file after the id, and the old file stays frozen.
-The old record files are unchanged history. They admit nothing after this build.
+`records/edgeos-fun-vps1-orbio-list-price.json`, canonical SHA-256
+`699ef23236c193dcd7a84bbedc4496fe69d80abe33a25fc92f5ad31370d67217`, replaces `edgeos-fun-vps1` and
+`edgeos-fun-vps1-orbio` in `APPROVED_HOSTED_DEPLOYMENTS`. The id is new because §8.3 names the file after the id, and the
+old files stay frozen. The old record files are unchanged history. They admit nothing after this build.
+
+`edgeos-fun-vps1-orbio` named `orbio-first-call-1` at USD 2.1 / 10.5. No host ran it. The USD 2 / 10 price needs a new
+release and route (`ORBIO_RELEASE_DRAFT.md` §2), so the record changed. The switch below still starts from
+`edgeos-fun-vps1`. This hash needs the builder's approval before it goes to `main`.
 
 | Field | Old record | New record |
 |---|---|---|
-| `deployment_id` | `edgeos-fun-vps1` | `edgeos-fun-vps1-orbio` |
-| `hermes_relay` | `hermes-first-call-1`, `3fa94dd7…` | `orbio-first-call-1`, `041f588d…` |
-| `host_gates.h8_provider_spend_cap` | `h8_provider_spend_cap.md` | `h8_provider_spend_cap_orbio.md` |
+| `deployment_id` | `edgeos-fun-vps1` | `edgeos-fun-vps1-orbio-list-price` |
+| `hermes_relay` | `hermes-first-call-1`, `3fa94dd7…` | `orbio-list-price-1`, `dc78e361…` |
+| `host_gates.h8_provider_spend_cap` | `h8_provider_spend_cap.md` | `h8_provider_spend_cap_orbio_list_price.md` |
 | `valid_from` | `2026-10-30T00:00:00Z` | `2026-11-06T00:00:00Z` |
 
 Every other field is the same, which includes `research_release`, `image_digests` and `valid_until`. `valid_until` stays
@@ -715,7 +719,7 @@ application and the host research worker read this record. The switch therefore 
 |---|---|---|---|
 | H1 | `h1_egress.md`, unchanged | No. It names neither OpenRouter nor Orbio. It tests the execution worker and PostgreSQL only. | Still true for what it tests. It never tested the relay's route to a provider, for either release. That route runs on the relay's own `relay-egress-*` network, and only the gateway code limits it to the record's host. §9.3 step 1 shows that the host reaches `api.orbio.so` from Docker's default bridge; the relay's own path first runs on a paid call. The H1 run predates the redeploy of 2026-11-06. |
 | H2 | `h2_runner_isolation.md`, unchanged | Partly. Row 6 tests `/etc/edge-os/relay/provider-key` and the `run-2` paths. | Row 6 does not cover the Orbio key file or the new run root. §9.3 step 8 repeats it on those paths. The rows marked PENDING stay PENDING, and decision N5 still applies (§9.4). |
-| H8 | `h8_provider_spend_cap_orbio.md`, new | The old file names no model provider at all. | The new file adds Orbio and states the limits. The prepaid balance is not a proven hard stop. |
+| H8 | `h8_provider_spend_cap_orbio_list_price.md`, new | The old file names no model provider at all. | The new file adds Orbio and states the limits. The prepaid balance is not a proven hard stop. |
 | H10 | `h10_backup_restore.md`, unchanged | No. | Unchanged. The drill ran on schema `0013`; the live schema is now `0015`. |
 
 No gate needs new host evidence before registration. The host application cannot start under a record until that record
@@ -747,7 +751,7 @@ unit's `ExecStop` command as `edge-os-relay`, with the unit's environment, befor
 **3. Move the code.** Use §6.2 of `deploy/coolify/RUNBOOK.md` with the approved commit. Then confirm the registry:
 
 ```sh
-grep -c '"edgeos-fun-vps1-orbio": "c0c0f07c9787c7487a823951954afdf5979e71d13e9cfde09a340502b65062dd"' \
+grep -c '"edgeos-fun-vps1-orbio-list-price": "699ef23236c193dcd7a84bbedc4496fe69d80abe33a25fc92f5ad31370d67217"' \
   /opt/edge-os/apps/api/src/edge_os_api/core/hosted_deployment.py   # must print 1
 ```
 
@@ -761,12 +765,12 @@ safe: it never replaces a backup, and it reads the old path from the backup. The
     [ -e "$f.bak-before-orbio" ] || cp -p "$f" "$f.bak-before-orbio"
   done
   OLD=$(sed -n 's/^EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH=//p' /etc/edge-os/hermes-app.env.bak-before-orbio)
-  NEW=/etc/edge-os/hosted/edgeos-fun-vps1-orbio.json
-  SRC=/opt/edge-os/docs/qualification/hosted-gates/records/edgeos-fun-vps1-orbio.json
+  NEW=/etc/edge-os/hosted/edgeos-fun-vps1-orbio-list-price.json
+  SRC=/opt/edge-os/docs/qualification/hosted-gates/records/edgeos-fun-vps1-orbio-list-price.json
   install -m "$(stat -c %a "$OLD")" -o "$(stat -c %U "$OLD")" -g "$(stat -c %G "$OLD")" "$SRC" "$NEW"
   cmp "$SRC" "$NEW"
   for f in /etc/edge-os/hermes-app.env /etc/edge-os/research-worker.env; do
-    sed -i -e 's/^EDGE_OS_HOSTED_DEPLOYMENT_ID=.*/EDGE_OS_HOSTED_DEPLOYMENT_ID=edgeos-fun-vps1-orbio/' \
+    sed -i -e 's/^EDGE_OS_HOSTED_DEPLOYMENT_ID=.*/EDGE_OS_HOSTED_DEPLOYMENT_ID=edgeos-fun-vps1-orbio-list-price/' \
            -e "s|^EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH=.*|EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH=$NEW|" "$f"
     [ "$(grep -c '^EDGE_OS_HOSTED_DEPLOYMENT_' "$f")" = 2 ]
   done
@@ -806,8 +810,8 @@ config = json.load(open(path))
 folder = "/opt/edge-os/docs/qualification/orbio-release"
 config.update({
     "operation_id": f"orbio-hosted-{run}",
-    "release_record": {"path": f"{folder}/orbio_first_call_record.json",
-                       "sha256": "041f588d3b9564fd605d00d2204083cbfc4e4cd3307906656345a73118ac563f"},
+    "release_record": {"path": f"{folder}/orbio_list_price_record.json",
+                       "sha256": "dc78e3613c92954a8491ae2e177b4686b159a9dd7927a9b4771c68752e0d913c"},
     "ca_bundle": {"path": f"{folder}/orbio_ca_isrg_root_x1.pem",
                   "sha256": "22b557a27055b33606b6559f37703928d3e4ad79f110b407d04986e1843543d1"},
     "run_root": f"/var/lib/edge-os/relay/run-orbio-{run}",
@@ -837,7 +841,7 @@ systemctl start edge-os-hermes-app.service edge-os-research-worker.service
 
 ```sh
 RUN=1                                                                      # the value from step 6
-journalctl -u edge-os-hermes-app.service -n 50 --no-pager | grep serving   # must name orbio-first-call-1
+journalctl -u edge-os-hermes-app.service -n 50 --no-pager | grep serving   # must name orbio-list-price-1
 GW=$(sed -n 's/^EDGE_OS_APP_BIND_HOST=//p' /etc/edge-os/hermes-app.env)    # one IPv4 address
 curl -sS "http://$GW:8011/healthz"; curl -sS "http://$GW:8011/readyz"      # the second must report ready
 curl -sS -o /dev/null -w '%{http_code}\n' "http://$GW:8011/outside"         # must print 404 (H2 row R7)
@@ -880,11 +884,11 @@ Coolify and restart the stack. Do not deploy an API image first. The running ima
 - R8 tests the public path, so it needs `EDGE_OS_HERMES_APP_URL` set, while N5 wants that value empty until R8 passes. The
   controller decides this order. One safe order: run every other row, set the value, and at once send requests with no
   token. Any answer other than an authentication refusal means clear the value.
-- The Orbio approval packet says at most one first model request and that production stays refused. The packet is
+- The Orbio approval packet says at most one further model request and that production stays refused. The packet is
   hash-bound, so it stays as it is. The builder decision of 2026-11-06 changes that scope for the host. The controller
   records this before step 9.
 - The ledger caps stay at USD 2.00, so the live site cannot spend the whole USD 5 balance. A higher cap needs a builder
-  decision and a reviewed change (`h8_provider_spend_cap_orbio.md`).
+  decision and a reviewed change (`h8_provider_spend_cap_orbio_list_price.md`).
 - The hosted and local ledgers do not see each other. Together they can admit USD 4.00, above the shared USD 2.00 ceiling.
   The controller records that the builder accepts this, or holds one route's spend to zero.
 

@@ -33,10 +33,10 @@ RESEARCH_SHA = "45c8cfbf5d61eb519ee3140e02e50b2b7091669dc28cbef224bdc6a0e77ca877
 IMAGE = "sha256:" + "1" * 64
 GATE_SHA = "2" * 64
 DEPLOYMENT = "hosted-demo-1"
-REGISTERED_ID = "edgeos-fun-vps1-orbio"
-REGISTERED_SHA = "c0c0f07c9787c7487a823951954afdf5979e71d13e9cfde09a340502b65062dd"
+REGISTERED_ID = "edgeos-fun-vps1-orbio-list-price"
+REGISTERED_SHA = "699ef23236c193dcd7a84bbedc4496fe69d80abe33a25fc92f5ad31370d67217"
 RECORD_PATH = (Path(__file__).resolve().parents[3]
-               / "docs/qualification/hosted-gates/records/edgeos-fun-vps1-orbio.json")
+               / "docs/qualification/hosted-gates/records/edgeos-fun-vps1-orbio-list-price.json")
 
 
 def canonical(value: Any) -> bytes:

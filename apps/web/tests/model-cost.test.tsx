@@ -249,6 +249,11 @@ describe("the route summary near the study total", () => {
     expect(describeRouteSummary(attemptsOn(ORBIO, ORBIO, "relay"))).toBe("2 of 3 model calls ran through Orbio");
   });
 
+  it("counts the current route and the retired route as Orbio", () => {
+    expect(describeRoute("orbio-list-price")).toBe("via Orbio");
+    expect(describeRouteSummary(attemptsOn("orbio-list-price", ORBIO))).toBe("Model calls ran through Orbio");
+  });
+
   it("never treats a missing route as Orbio", () => {
     expect(describeRouteSummary(attemptsOn(ORBIO, null))).toBe("1 of 2 model calls ran through Orbio");
     expect(describeRouteSummary(attemptsOn(null, ORBIO, OPENROUTER, null))).toBe("1 of 4 model calls ran through Orbio");
