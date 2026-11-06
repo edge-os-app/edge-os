@@ -26,6 +26,11 @@ export const FAILURE_COPY: Record<FailureKind, { title: string; lead: string }> 
   },
 };
 
+/** The lead for an unknown outcome. Only a hold the ledger freed proves that nothing can be charged. */
+export function noAnswerLead(spendState: string | null | undefined): string {
+  return spendState === "RELEASED" ? "Your request is saved." : FAILURE_COPY.OUTCOME_UNKNOWN.lead;
+}
+
 export function systemFailure(findings: Finding[]): FailureKind | null {
   for (const finding of findings) if (finding.code in FAILURE_BY_CODE) return FAILURE_BY_CODE[finding.code];
   return null;
@@ -99,7 +104,7 @@ function usd(amount: string | null): string | null {
 
 /** A saved answer whose provider cost did not match the ledger price: the answer stands, and the full hold stays. */
 export function answerCostNotConfirmed(attempts: Attempt[]): boolean {
-  return attempts.some((a) => a.error_class === "RelayCostUnverified" && a.revision_id !== null && a.spend.state === "UNKNOWN");
+  return attempts.some((a) => a.error_class === "RelayCostUnverified" && a.revision_id !== null);
 }
 
 /** An attempt's model cost: its charge only when the ledger settled it. Unknown, released or missing spend is Unknown. */
@@ -199,7 +204,7 @@ export interface ReadingFacts {
   has_interpretation: boolean;
   /** The request has a saved outcome. */
   outcome_present: boolean;
-  last_attempt: { attempt_id: string; status: AttemptStatus; parse_result: string | null } | null;
+  last_attempt: { attempt_id: string; status: AttemptStatus; parse_result: string | null; spend_state?: string | null } | null;
   /** An outcome was written for the latest attempt itself (its operation ID is the attempt ID). */
   last_covered: boolean;
   retry_allowed: boolean;
@@ -210,7 +215,7 @@ export function factsOf(bundle: Pick<Bundle, "attempts" | "interpretations" | "r
   return {
     has_interpretation: bundle.interpretations.length > 0 || bundle.revisions.length > 0,
     outcome_present: bundle.head.outcome !== null,
-    last_attempt: last ? { attempt_id: last.attempt_id, status: last.status, parse_result: last.parse_result } : null,
+    last_attempt: last ? { attempt_id: last.attempt_id, status: last.status, parse_result: last.parse_result, spend_state: last.spend.state } : null,
     last_covered: Boolean(last) && bundle.outcomes.some((o) => o.record.operation_id === last.attempt_id),
     retry_allowed: bundle.head.retry.allowed,
   };
@@ -258,7 +263,7 @@ function describeReading(facts: ReadingFacts): Omit<FirstReading, "tag"> | null 
       action: facts.retry_allowed ? "RETRY" : "CHECK_AGAIN" };
   }
   if (last.status === "TIMED_OUT" || last.status === "UNKNOWN" || last.status === "INTERRUPTED") {
-    return { kind: "UNCERTAIN", failure: "OUTCOME_UNKNOWN", title: FAILURE_COPY.OUTCOME_UNKNOWN.title, lead: FAILURE_COPY.OUTCOME_UNKNOWN.lead, action: "CHECK_AGAIN" };
+    return { kind: "UNCERTAIN", failure: "OUTCOME_UNKNOWN", title: FAILURE_COPY.OUTCOME_UNKNOWN.title, lead: noAnswerLead(last.spend_state), action: "CHECK_AGAIN" };
   }
   return null;
 }
@@ -267,7 +272,7 @@ function describeReading(facts: ReadingFacts): Omit<FirstReading, "tag"> | null 
 export const COST_NOT_CONFIRMED = "cost_not_confirmed";
 
 /** Heading and words for the last reply when it has no saved revision. Each follows from the stored attempt only. */
-export function replyCopy(reply: ReplyState): { title: string; body: string } {
+export function replyCopy(reply: ReplyState, spendState?: string | null): { title: string; body: string } {
   const kept = "Your saved meaning did not change.";
   switch (reply.state) {
     case "REJECTED":
@@ -275,7 +280,7 @@ export function replyCopy(reply: ReplyState): { title: string; body: string } {
         ? { title: "Your last reply could not be used", body: "Your reply matched what is already saved, so nothing changed. Say what you want to change, or answer one of the questions." }
         : { title: "Your last reply could not be used", body: `The research agent's answer broke a rule (${reply.reason_code?.replaceAll("_", " ")}), so none of it was used. ${kept}` };
     case "UNCERTAIN":
-      return { title: FAILURE_COPY.OUTCOME_UNKNOWN.title, body: `${kept} You may be charged for this read.` };
+      return { title: FAILURE_COPY.OUTCOME_UNKNOWN.title, body: spendState === "RELEASED" ? kept : `${kept} You may be charged for this read.` };
     case "PENDING_SAVE":
       return { title: "Your last reply was read but is not saved yet",
         body: `The research agent read it and the answer was accepted. Saving it did not finish. A restart tries to save it again. If the cause stays, it stays unsaved, and this page cannot tell you why. ${kept}` };

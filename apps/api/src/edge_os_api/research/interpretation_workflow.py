@@ -35,7 +35,7 @@ from edge_os_api.records.models import Record
 from edge_os_api.research import service
 from edge_os_api.research.attempt_store import AdvisoryLockGuard, PostgresAttemptStore
 from edge_os_api.research.hermes_interpreter import (
-    NO_ANSWER_TEXT, HermesInterpreter, HermesInterpreterConfig, HermesTurnRunner, Interpreted, InterpretResult,
+    NO_ANSWER_TEXT, NOTHING_CHARGED_TEXT, HermesInterpreter, HermesInterpreterConfig, HermesTurnRunner, Interpreted, InterpretResult,
     OutputRejected, Unavailable, apply_choice_answer, open_questions,
 )
 from edge_os_api.research.interpretation_attempts import AttemptLedger, AttemptView
@@ -74,6 +74,7 @@ UNAVAILABLE_TEXT = {
                        "The request is saved. You can try again.",
     "timed_out": NO_ANSWER_TEXT,
     "outcome_unknown": NO_ANSWER_TEXT,
+    "nothing_charged": NOTHING_CHARGED_TEXT,
     "result_arrived_late": "The result arrived after the attempt was closed. It is kept for review and was not used.",
 }
 
@@ -111,7 +112,8 @@ def retry_state(history: Sequence[AttemptView], has_interpretation: bool, head_r
     return RetryState(True, last.start.attempt_id, None)
 
 
-def failure_for(status: str, parse_result: str, error_class: str | None = None) -> tuple[str, str, str]:
+def failure_for(status: str, parse_result: str, error_class: str | None = None,
+                spend_state: str | None = None) -> tuple[str, str, str]:
     """The finding code, plain words and retry hint that a settled, unusable attempt maps to."""
     if error_class == "SpendCapReached":
         return BUDGET_EXHAUSTED, UNAVAILABLE_TEXT["budget_exhausted"], "NOT_RETRYABLE"
@@ -119,7 +121,7 @@ def failure_for(status: str, parse_result: str, error_class: str | None = None) 
         return UNAVAILABLE, UNAVAILABLE_TEXT["provider_failed"], "SAFE_SAME_KEY"
     if parse_result.startswith("REJECTED:"):
         return MALFORMED, REJECTION_DETAIL.format(reason=parse_result.removeprefix("REJECTED:")), "SAFE_SAME_KEY"
-    return OUTCOME_UNKNOWN, UNAVAILABLE_TEXT["outcome_unknown"], "RECONCILE"
+    return OUTCOME_UNKNOWN, UNAVAILABLE_TEXT["nothing_charged" if spend_state == "RELEASED" else "outcome_unknown"], "RECONCILE"
 
 
 def public_attempt(view: AttemptView) -> dict[str, Any]:
@@ -690,7 +692,8 @@ class HermesResearch:
         if last.start.identity.purpose != "INTERPRET" or settled is None or (
                 settled.status == "COMPLETED" and settled.parse_result == "ACCEPTED"):
             return
-        code, detail, retry = failure_for(settled.status, settled.parse_result, settled.error_class)
+        code, detail, retry = failure_for(settled.status, settled.parse_result, settled.error_class,
+                                          settled.runtime_observed.get("spend_state"))
         self._record_failure(session, principal, intake_id, last.start.attempt_id, code, detail, retry)
 
     def _recover(self, session: Session, principal: Principal, intake_id: uuid.UUID, view: AttemptView) -> None:

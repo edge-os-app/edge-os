@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { CLASS_LABEL, FIELD_LABEL, JOB_LABEL, ORIGIN_LABEL, OUTCOME_COPY, formatTime, shortId, summarizeValue } from "../lib/describe";
-import { COST_NOT_CONFIRMED, FAILURE_COPY, RETRY_BLOCKED, answerCostNotConfirmed, firstReading, replyCopy, sourceQuote, systemFailure } from "../lib/interpretation";
+import { COST_NOT_CONFIRMED, FAILURE_COPY, RETRY_BLOCKED, answerCostNotConfirmed, firstReading, noAnswerLead, replyCopy, sourceQuote, systemFailure } from "../lib/interpretation";
 import type { Bundle, Finding, Strategy } from "../lib/types";
 import type { ConversationContext } from "./Conversation";
 import { InterpretationAttempts } from "./InterpretationAttempts";
@@ -216,6 +216,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
   const findings: Finding[] = headOutcome?.findings ?? [];
   // No saved outcome and no revision: word the state from the stored attempt, never from the missing outcome.
   const pending = firstReading(bundle);
+  const lastSpend = bundle.attempts.at(-1)?.spend.state;
   const stopped = !pending && ["UNSUPPORTED", "UNRESOLVED", "INVALID_INPUT"].includes(outcome);
   const failure = outcome === "INVALID_INPUT" && !pending ? systemFailure(findings) : null; // the interpreter failed; the idea was not judged
   const usesWords = bundle.interpreter.kind !== "FIXTURE";
@@ -274,7 +275,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
             {pending.action === "CHECK_AGAIN" && head.retry.reason && RETRY_BLOCKED[head.retry.reason] ? <p className="muted" data-testid="retry-blocked">{RETRY_BLOCKED[head.retry.reason]}</p> : null}
           </>
         ) : null}
-        {failure === "OUTCOME_UNKNOWN" ? <p>{FAILURE_COPY.OUTCOME_UNKNOWN.lead}</p> : null}
+        {failure === "OUTCOME_UNKNOWN" ? <p>{noAnswerLead(lastSpend)}</p> : null}
         {failure && failure !== "OUTCOME_UNKNOWN" ? (
           <>
             <p>{FAILURE_COPY[failure].lead}</p>
@@ -307,8 +308,8 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
 
       {head.reply ? (
         <section className="status stop" aria-labelledby="reply-title" data-testid="reply-state" data-reply={head.reply.state}>
-          <h2 id="reply-title" style={{ fontSize: 18 }}>{replyCopy(head.reply).title}</h2>
-          <p>{replyCopy(head.reply).body}</p>
+          <h2 id="reply-title" style={{ fontSize: 18 }}>{replyCopy(head.reply, lastSpend).title}</h2>
+          <p>{replyCopy(head.reply, lastSpend).body}</p>
           {head.retry.allowed && head.reply.reason_code !== COST_NOT_CONFIRMED ? (
             <div className="btn-row">
               <button className="btn btn-secondary" type="button" onClick={retryInterpretation} aria-disabled={busy || undefined}>{busy ? "Trying again…" : "Try this reply again"}</button>

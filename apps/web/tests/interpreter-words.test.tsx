@@ -207,6 +207,13 @@ describe("system failures on the request page", () => {
     expect(screen.queryByRole("button", { name: "Try the research agent again" })).toBeNull();
   });
 
+  it("calls a kept answer ready when the ledger state was not recorded", async () => {
+    mocks.get.mockResolvedValue(baseBundle("UNRESOLVED", { code: "x", detail: "Nothing was tested." },
+      { allowed: false, retry_of: null, reason: "nothing_to_retry" }, [kept({ spend: { state: "SETTLEMENT_NOT_RECORDED", charge_usd: null } })]));
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    expect(await screen.findByTestId("cost-not-confirmed")).toBeInTheDocument();
+  });
+
   it("does not call an answer ready before it is saved", async () => {
     mocks.get.mockResolvedValue(baseBundle("UNRESOLVED", { code: "x", detail: "Nothing was tested." },
       { allowed: false, retry_of: null, reason: "nothing_to_retry" }, [kept({ revision_id: null })]));
@@ -225,6 +232,35 @@ describe("system failures on the request page", () => {
     expect(section).toHaveTextContent("You can't reply to this request yet, because its cost is not confirmed. Start a new request to continue.");
     expect(section).not.toHaveTextContent("SpendScopeBlocked");
     expect(screen.queryByRole("button", { name: "Try this reply again" })).toBeNull();
+  });
+
+  const released = { state: "RELEASED", charge_usd: "0" };
+  const neverSent = { status: "UNKNOWN", completion: "UNKNOWN", parse_result: "NOT_PARSED", revision_id: null, request_count: 0, spend: released } as const;
+
+  it("does not say the user may be charged when the ledger freed the hold", async () => {
+    mocks.get.mockResolvedValue(baseBundle("INVALID_INPUT", { code: "interpreter_outcome_unknown", detail: "Saved words." },
+      { allowed: false, retry_of: null, reason: "outcome_uncertain" }, [attempt(neverSent)]));
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    await screen.findByRole("heading", { name: "We did not get an answer we can show you" });
+    expect(screen.getByText("Your request is saved.")).toBeInTheDocument();
+    expect(screen.queryByText(/may be charged/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try the research agent again" })).toBeNull();
+  });
+
+  it("does not say an uncertain reply may be charged when the ledger freed the hold", async () => {
+    mocks.get.mockResolvedValue(baseBundle("UNRESOLVED", { code: "x", detail: "Nothing was tested." }, { allowed: false, retry_of: null, reason: "outcome_uncertain" },
+      [attempt(neverSent)], { state: "UNCERTAIN", reason_code: null, attempt_id: "a1" }));
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    const section = await screen.findByTestId("reply-state");
+    expect(section).toHaveTextContent("Your saved meaning did not change.");
+    expect(section).not.toHaveTextContent("may be charged");
+  });
+
+  it.each(["UNKNOWN", "RESERVED", "SETTLEMENT_NOT_RECORDED", null])("keeps the charge sentence while the hold may stay: %s", async (state) => {
+    mocks.get.mockResolvedValue(baseBundle("INVALID_INPUT", { code: "interpreter_outcome_unknown", detail: "Saved words." },
+      { allowed: false, retry_of: null, reason: "outcome_uncertain" }, [attempt({ ...neverSent, spend: { state, charge_usd: null } })]));
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    expect(await screen.findByText("Your request is saved. You may be charged for this read.")).toBeInTheDocument();
   });
 
   it("gives an uncertain reply the same plain words", async () => {
@@ -398,6 +434,18 @@ describe("a first request with no saved outcome and no revision", () => {
     expect(section).toHaveAttribute("data-reading", "UNCERTAIN");
     expect(screen.getByRole("heading", { name: "We did not get an answer we can show you" })).toBeInTheDocument();
     expect(screen.getByTestId("reading-state")).toHaveTextContent(/^Your request is saved\. You may be charged for this read\.$/);
+    expect(screen.queryByTestId("retry-blocked")).toBeNull();
+  });
+
+  it("does not say a read with no saved outcome may be charged when the ledger freed the hold", async () => {
+    await show(noOutcome([attempt({ status: "UNKNOWN", completion: "UNKNOWN", parse_result: "NOT_PARSED", revision_id: null, request_count: 0,
+      spend: { state: "RELEASED", charge_usd: "0" } })], { allowed: false, retry_of: null, reason: "outcome_uncertain" }));
+    expect(screen.getByTestId("reading-state")).toHaveTextContent(/^Your request is saved\.$/);
+  });
+
+  it.each(["TIMED_OUT", "UNKNOWN", "INTERRUPTED"] as const)("offers no retry for %s", async (status) => {
+    await show(noOutcome([attempt({ status, completion: "UNKNOWN", parse_result: "NOT_PARSED", revision_id: null })],
+      { allowed: false, retry_of: null, reason: "outcome_uncertain" }));
     expect(screen.queryByTestId("retry-blocked")).toBeNull();
     expect(screen.queryByRole("button", { name: /Try the research agent again|Read my request now/ })).toBeNull();
     wrongClaims();

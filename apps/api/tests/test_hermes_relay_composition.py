@@ -34,6 +34,8 @@ from edge_os_api.research.hermes_relay_composition import (
     RelayApplicationDefinition, bind_release, compose_application, open_hermes_application,
 )
 from edge_os_api.research.hermes_transport_mount import MountRefused
+from edge_os_api.research.interpretation_attempts import Usage
+from edge_os_api.research.interpretation_workflow import failure_for
 from edge_os_api.research.provider_spend_ledger import TokenPrice
 from hermes_cases import case, turn_result
 from test_hermes_research_flow import answer, create, retry, rows
@@ -526,6 +528,25 @@ class StandInJob:
         return job_report(result, route="route-app-synthetic")(turn)
 
 
+class NeverSentJob(StandInJob):
+    """After its script, each turn is the job's report that the guard admitted no request."""
+
+    def __init__(self, relay: StandInRelay, *script: tuple[dict[str, Any] | None, HermesTurnResult],
+                 error_class: str = "RuntimeError") -> None:
+        super().__init__(relay, *script)
+        self.error_class = error_class
+
+    def run_turn(self, turn: HermesTurn) -> HermesTurnResult:
+        if self.script:
+            return super().run_turn(turn)
+        self.turns.append(turn)
+        folder = self.relay.root / "state" / turn.attempt_id
+        folder.mkdir()
+        (folder / "closed.json").write_text(json.dumps({"started": False}))
+        never = replace(RETURNED, status="UNKNOWN", text=None, usage=Usage(), request_count=0, error_class=self.error_class)
+        return job_report(never, sent=0, route="route-app-synthetic")(turn)
+
+
 RETURNED = turn_result(case("concrete-thesis")["provider"])
 
 
@@ -683,6 +704,46 @@ def test_a_rejected_follow_up_with_an_unconfirmed_cost_is_uncertain_and_is_not_r
     assert replied["head"]["retry"] == {"allowed": False, "retry_of": None, "reason": "outcome_uncertain"}
     assert retry(app_client, owner_a, replied, last["attempt_id"]).status_code == 409
     assert saved(app_client, last["attempt_id"])["state"] == "UNKNOWN" and len(job.turns) == 2
+
+
+NO_ANSWER = "We did not get an answer we can show you. Your request is saved."
+MAY_BE_CHARGED = f"{NO_ANSWER} You may be charged for this read."
+
+
+@pytest.mark.parametrize("error_class", ["RuntimeError", "CredentialEchoed"])
+def test_a_read_that_sent_nothing_and_freed_its_hold_does_not_say_the_user_may_be_charged(
+        mounted, owner_a, error_class: str) -> None:
+    job = NeverSentJob(mounted.relay, error_class=error_class)
+    app, app_client = mounted("never-sent", job)
+
+    bundle = create(app_client, owner_a, "concrete-thesis").json()
+
+    [attempt] = bundle["attempts"]
+    assert (attempt["status"], attempt["request_count"], attempt["error_class"]) == ("UNKNOWN", 0, error_class)
+    assert attempt["spend"] == {"state": "RELEASED", "charge_usd": "0"}
+    [found] = bundle["outcomes"][-1]["record"]["content"]["findings"]
+    assert (found["code"], found["detail"]) == ("interpreter_outcome_unknown", NO_ANSWER)
+    assert bundle["head"]["retry"] == {"allowed": False, "retry_of": None, "reason": "outcome_uncertain"}
+    assert retry(app_client, owner_a, bundle, attempt["attempt_id"]).status_code == 409
+    assert saved(app_client, attempt["attempt_id"])["state"] == "RELEASED" and app.spend.committed_usd() == 0
+
+
+def test_a_reply_that_sent_nothing_is_uncertain_with_its_hold_freed_and_is_not_retried(mounted, owner_a) -> None:
+    job = NeverSentJob(mounted.relay, (reply_record(), turn_result(case("rough-hunch")["provider"])))
+    app, app_client = mounted("reply-never-sent", job)
+    bundle = create(app_client, owner_a, "rough-hunch").json()
+
+    replied = answer(app_client, owner_a, bundle, "choose-entry", answer_text="Enter at two percent.").json()
+
+    assert replied["attempts"][-1]["spend"] == {"state": "RELEASED", "charge_usd": "0"}
+    assert replied["head"]["reply"]["state"] == "UNCERTAIN"
+    assert replied["head"]["retry"]["reason"] == "outcome_uncertain" and app.spend.committed_usd() == CHARGE
+
+
+def test_a_saved_failure_says_the_user_may_be_charged_unless_the_ledger_freed_the_hold() -> None:
+    for state, words in (("RELEASED", NO_ANSWER), ("UNKNOWN", MAY_BE_CHARGED), ("RESERVED", MAY_BE_CHARGED),
+                         ("SETTLEMENT_NOT_RECORDED", MAY_BE_CHARGED), (None, MAY_BE_CHARGED)):
+        assert failure_for("UNKNOWN", "NOT_PARSED", "RuntimeError", state)[:2] == ("interpreter_outcome_unknown", words)
 
 
 def test_a_reply_withheld_for_a_count_mismatch_stays_unknown_with_no_text(mounted, owner_a) -> None:

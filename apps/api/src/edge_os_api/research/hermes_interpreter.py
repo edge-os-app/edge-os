@@ -177,11 +177,13 @@ class Unavailable:
 InterpretResult = Interpreted | OutputRejected | Unavailable
 
 COST_UNVERIFIED = "RelayCostUnverified"  # the relay could not confirm the cost: the ledger row stays open
-NO_ANSWER_TEXT = "We did not get an answer we can show you. Your request is saved. You may be charged for this read."
+NOTHING_CHARGED_TEXT = "We did not get an answer we can show you. Your request is saved."  # the ledger freed the hold
+NO_ANSWER_TEXT = f"{NOTHING_CHARGED_TEXT} You may be charged for this read."
 UNAVAILABLE_DETAIL = {
     "provider_failed": "The model provider did not return a result. The request is saved. You can try again.",
     "timed_out": NO_ANSWER_TEXT,
     "outcome_unknown": NO_ANSWER_TEXT,
+    "nothing_charged": NOTHING_CHARGED_TEXT,
     "attempt_in_flight": "An earlier attempt for this request has not finished.",
     "retry_target_invalid": "The attempt to retry does not belong to this request.",
     "revision_moved": "The saved meaning changed after this was requested, so no model call was made.",
@@ -481,6 +483,8 @@ class HermesInterpreter:
         if status == "PROVIDER_FAILED" and error_class == "SpendCapReached":
             return Unavailable(attempt_id, "budget_exhausted", UNAVAILABLE_DETAIL["budget_exhausted"])
         reason = UNAVAILABLE_BY_STATUS[status]
+        if reason == "outcome_unknown" and observed.get("spend_state") == "RELEASED":
+            reason = "nothing_charged"
         return Unavailable(attempt_id, reason, UNAVAILABLE_DETAIL[reason])
 
 
