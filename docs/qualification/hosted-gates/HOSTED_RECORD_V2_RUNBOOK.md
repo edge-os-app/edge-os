@@ -936,8 +936,8 @@ holds all three, so a rebuild keeps them. Coolify and the host hold their own co
 | The Hermes application has `TMPDIR=/var/lib/edge-os/research/tmp` | `/etc/edge-os/hermes-app.env` | `deploy/host/edge-os-hermes-app.service` |
 
 **Compose.** The record file must exist at its path before a deploy. A named record that cannot be read refuses startup,
-and so does a record outside its validity window (`CONTRACT.md` §5.3). This record ends on 2026-11-27. After that date
-the API cannot start until a new reviewed record replaces this one or the lines below go.
+and so does a record outside its validity window (`CONTRACT.md` §5.3). This record's window ends at 2026-11-27T00:00:00Z. From
+that moment the API cannot start until a new reviewed record replaces this one or the lines below go.
 
 To undo it, delete these lines from the `api` service in Coolify, then use Force Restart:
 the two `EDGE_OS_HOSTED_DEPLOYMENT_*` settings, `group_add` and `volumes`. The API then starts with no record. Sign-in and
