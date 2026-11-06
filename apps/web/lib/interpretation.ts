@@ -36,12 +36,12 @@ export const RETRY_BLOCKED: Record<string, string> = {
   stale_reply: "Your saved meaning changed after that reply, so the reply cannot be tried again.",
 };
 
-/** The current route, and the retired one that saved attempts still name. */
-const ORBIO_ROUTES: readonly (string | null)[] = ["orbio-list-price", "orbio-openrouter-managed"];
+const VIA_ORBIO = "via Orbio";
 
+/** Saved attempts still name the retired Orbio route. */
 const ROUTE_WORDS: Record<string, string> = {
-  "orbio-list-price": "via Orbio",
-  "orbio-openrouter-managed": "via Orbio",
+  "orbio-list-price": VIA_ORBIO,
+  "orbio-openrouter-managed": VIA_ORBIO,
   "openrouter-openai-standard": "via OpenRouter",
 };
 
@@ -56,7 +56,7 @@ export function describeRoute(route: string | null): string | null {
  */
 export function describeRouteSummary(attempts: Attempt[]): string | null {
   const calls = attempts.filter((a) => a.request_count !== 0);
-  const orbioCalls = calls.filter((a) => ORBIO_ROUTES.includes(a.identity.route) && a.request_count !== null).length;
+  const orbioCalls = calls.filter((a) => describeRoute(a.identity.route) === VIA_ORBIO && a.request_count !== null).length;
   if (orbioCalls === 0) return null;
   return orbioCalls === calls.length ? "Model calls ran through Orbio" : `${orbioCalls} of ${plural(calls.length, "model call")} ran through Orbio`;
 }
@@ -97,9 +97,9 @@ function usd(amount: string | null): string | null {
   return `$${integer.replace(/^0+(?=\d)/, "")}${trimmed ? `.${trimmed}` : ""}`;
 }
 
-/** An accepted answer whose provider cost did not match the ledger price: the answer stands, and the full hold stays. */
+/** A saved answer whose provider cost did not match the ledger price: the answer stands, and the full hold stays. */
 export function answerCostNotConfirmed(attempts: Attempt[]): boolean {
-  return attempts.some((a) => a.error_class === "RelayCostUnverified" && a.parse_result === "ACCEPTED" && a.spend.state === "UNKNOWN");
+  return attempts.some((a) => a.error_class === "RelayCostUnverified" && a.revision_id !== null && a.spend.state === "UNKNOWN");
 }
 
 /** An attempt's model cost: its charge only when the ledger settled it. Unknown, released or missing spend is Unknown. */

@@ -35,8 +35,6 @@ RETIRED_FILES = {"orbio_first_call_record.json": RETIRED_RECORD_SHA,
 ISRG_ROOT_X1_DER_SHA256 = "96bcec06264976f37460779acf28c5a7cfe8a3c0aae11a8ffcee05c0bddf08c6"
 STILL_UNKNOWN = ("U1", "U2", "U3", "U7", "U9", "U10", "U11")
 CLOSED = ("U4", "U5", "U6", "U8")
-
-
 RELEASE_MARKS = (b"orbio-list-price-1", b'"orbio-list-price"', b"orbio-first-call-1", b"orbio-openrouter-managed",
                  b"api.orbio.so")
 

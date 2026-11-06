@@ -635,6 +635,23 @@ def test_a_truncated_answer_with_no_text_settles_as_a_rejected_truncation_with_i
         "TRUNCATED", "", "REJECTED:truncated", REPORTED)
 
 
+@pytest.mark.parametrize("text, status", [
+    pytest.param("not an interpretation", "RETURNED", id="rejected"),
+    pytest.param("cut sho", "TRUNCATED", id="truncated"),
+])
+def test_an_unusable_reply_with_an_unconfirmed_cost_stays_unknown_and_keeps_no_text(text: str, status: str) -> None:
+    interpreter, _, ledger, _ = build(HermesTurnResult(status=status, text=text, usage=REPORTED, request_count=1,
+                                                       observed=OBSERVED_OK, error_class="RelayCostUnverified"))
+
+    result = interpreter.interpret(OWNER, INTAKE, THESIS_INTAKE)
+
+    assert isinstance(result, Unavailable) and result.reason_code == "outcome_unknown"
+    settlement = ledger.history(OWNER, INTAKE)[0].settlement
+    assert settlement is not None
+    assert (settlement.status, settlement.response_text, settlement.parse_result, settlement.error_class) == (
+        "UNKNOWN", None, "NOT_PARSED", "RelayCostUnverified")
+
+
 @pytest.mark.parametrize("usage", [
     Usage(-1, 5, 4, "PROVIDER_REPORTED"), Usage(2 ** 70, 5, 2 ** 70, "PROVIDER_REPORTED"),
     Usage(10, -5, 5, "PROVIDER_REPORTED"), Usage(10, 5, -1, "PROVIDER_REPORTED")])

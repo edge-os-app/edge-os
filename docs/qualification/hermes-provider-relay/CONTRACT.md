@@ -311,6 +311,7 @@ A11 (ORBIO-PRICE-L4-20261106, 2026-11-06; builder approval in the controller rec
 
 - A counted reply that passes every reply check and whose counts match, but fails only the cost check, keeps its text, status and `request_count` 1. `RelayTurnRunner` names it `RelayCostUnverified`.
 - `GuardedTurnRunner._account` never settles a result with that name. The ledger row goes to UNKNOWN and keeps the whole reservation. No ledger rule changed, and there is no migration.
+- The application keeps that text only as an accepted answer. A rejected or cut-short reply with that name is saved as `UNKNOWN`, `NOT_PARSED`, with no text, so a retry stays refused.
 - `RelayCountMismatch` and `RelayStateUnknown` stay withheld, with no text and no request count.
 - An open row blocks later reservations in its scope, as before. A typed reply on the same saved request is refused with `SpendScopeBlocked` and no provider request. The public reply state gives the reason `cost_not_confirmed`.
 - `orbio-list-price-1` replaces `orbio-first-call-1` in `APPROVED_ACTUAL_RELEASES` and `RELEASE_DEFINITIONS`, on a new route, because a frozen route price never changes. See `docs/qualification/orbio-release/ORBIO_RELEASE_DRAFT.md` sections 2 and 5.

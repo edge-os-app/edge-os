@@ -198,6 +198,7 @@ The relay also requires these for a counted reply (`ActualRelease.reply_check`):
 What happens when a check fails:
 
 - Only the cost check fails. The answer is kept and handled as a normal finished reply, and `request_count` stays 1. The ledger does not settle: the row goes to UNKNOWN and keeps the whole USD 0.17216. Cost lines stay unknown, and unknown is never shown as zero. The page says "Answer ready. Cost not confirmed yet." and the Orbio route line shows. The raw class `RelayCostUnverified` is in the attempt's Details line.
+- Only the cost fails, and the reply is rejected or cut short. The attempt is UNKNOWN, the text is not kept, a retry stays refused, and the full USD 0.17216 stays as liability.
 - Counts or state fail (`RelayCountMismatch`, `RelayStateUnknown`). The attempt is UNKNOWN, the text is withheld, nothing is resent, and the full USD 0.17216 stays as liability.
 
 The rule that ties this together is `guarded_turn_runner._account`: a result named `RelayCostUnverified` never reaches `settle`. An open row also blocks later reservations for the same saved request, so a typed reply on that request is refused with no provider call. The page then says "You can't reply to this request yet, because its cost is not confirmed. Start a new request to continue." A new request works, within the caps.
@@ -287,7 +288,7 @@ The one call must observe all of these:
 
 1. HTTP 200, `content-type: application/json`, and no `content-encoding`.
 2. `X-Orbio-Ignored-Parameters` absent or empty in `finished.json` `reply_headers`. If it names `reasoning`, `response_format`, `max_tokens`, `prompt_cache_options` or any other sent field, the release shape is not honored.
-3. One choice with `finish_reason` `stop`, and reply `model` exactly `openai/gpt-6.1-sol`. Record any provider field in the reply (UNKNOWN U4).
+3. One choice with `finish_reason` `stop`, and reply `model` exactly `openai/gpt-6.1-sol`. Record any provider field in the reply.
 4. Integer `usage.prompt_tokens`, `completion_tokens` and `total_tokens`, equal to the job's counts.
 5. `usage.cost` present and numeric, with `ceil(cost × 10^9) == prompt_tokens × 2,000 + completion_tokens × 10,000` nano-USD and at most 172,160,000 nano-USD (USD 0.17216). Example: 3,442 prompt and 228 completion tokens must cost exactly USD 0.009164. A cost at any other rate does not settle (section 5).
 6. No cached-token discount or separately priced reasoning tokens, for example `prompt_tokens_details.cached_tokens` absent or 0. Record any such field.
@@ -295,7 +296,7 @@ The one call must observe all of these:
 8. Record the generation `id`. If a cost lookup endpoint exists (UNKNOWN U2), its cost for that id equals `usage.cost`.
 9. Ledger: the attempt goes RESERVED, then SETTLED at exactly the token charge. Relay `started.json`, gateway `opening` receipts and ledger rows count exactly one request.
 
-If any item fails: the ledger row stays UNKNOWN with full liability. If only the cost failed, the answer stays on the page. There is no second request and no retry. Stop the operator, keep the evidence, and compare the ledger liability with the balance read. Orbio is not settled-eligible until the failing item is understood.
+If any item fails: the ledger row stays UNKNOWN with full liability. If only the cost failed and the answer was accepted, the answer stays on the page. There is no second request and no retry. Stop the operator, keep the evidence, and compare the ledger liability with the balance read. Orbio is not settled-eligible until the failing item is understood.
 
 ## 9. Open items
 

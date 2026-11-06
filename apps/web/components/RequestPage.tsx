@@ -314,7 +314,7 @@ export function RequestPage({ id, sourceRecordId, go, setContext, openConversati
               <button className="btn btn-secondary" type="button" onClick={retryInterpretation} aria-disabled={busy || undefined}>{busy ? "Trying again…" : "Try this reply again"}</button>
               <span className="muted">You can also answer one of the questions below.</span>
             </div>
-          ) : <p className="muted">{RETRY_BLOCKED[head.retry.reason ?? ""] ?? ""}</p>}
+          ) : RETRY_BLOCKED[head.retry.reason ?? ""] ? <p className="muted">{RETRY_BLOCKED[head.retry.reason ?? ""]}</p> : null}
         </section>
       ) : null}
 

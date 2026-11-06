@@ -17,6 +17,7 @@ import json
 import threading
 import time
 from collections.abc import Iterator
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -647,6 +648,24 @@ def test_a_kept_answer_refuses_a_typed_reply_without_a_call_and_a_new_request_st
 
     assert fresh["attempts"][0]["spend"] == {"state": "SETTLED", "charge_usd": str(CHARGE)}
     assert len(job.turns) == 2 and app.spend.committed_usd() == RESERVATION + CHARGE
+
+
+def test_a_rejected_reply_with_an_unconfirmed_cost_stays_unknown_with_no_text_and_no_retry(mounted, owner_a) -> None:
+    job = StandInJob(mounted.relay, (reply_record(cost=0.05), replace(RETURNED, text="not an interpretation")))
+    app, app_client = mounted("rejected-cost", job)
+
+    bundle = create(app_client, owner_a, "concrete-thesis").json()
+
+    [attempt] = bundle["attempts"]
+    assert (attempt["status"], attempt["parse_result"], attempt["error_class"], attempt["request_count"]) == (
+        "UNKNOWN", "NOT_PARSED", "RelayCostUnverified", 1)
+    assert attempt["spend"] == {"state": "UNKNOWN", "charge_usd": str(RESERVATION)}
+    assert bundle["outcomes"][-1]["record"]["content"]["findings"][0]["detail"] == (
+        "We did not get an answer we can show you. Your request is saved. You may be charged for this read.")
+    assert bundle["head"]["retry"] == {"allowed": False, "retry_of": None, "reason": "outcome_uncertain"}
+    assert retry(app_client, owner_a, bundle, attempt["attempt_id"]).status_code == 409
+    assert saved(app_client, attempt["attempt_id"])["charged"] is None
+    assert len(bundle["attempts"]) == 1 and len(job.turns) == 1 and app.spend.committed_usd() == RESERVATION
 
 
 def test_a_reply_withheld_for_a_count_mismatch_stays_unknown_with_no_text(mounted, owner_a) -> None:

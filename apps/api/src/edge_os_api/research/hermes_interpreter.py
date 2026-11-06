@@ -176,6 +176,7 @@ class Unavailable:
 
 InterpretResult = Interpreted | OutputRejected | Unavailable
 
+COST_UNVERIFIED = "RelayCostUnverified"  # the relay could not confirm the cost: the ledger row stays open
 NO_ANSWER_TEXT = "We did not get an answer we can show you. Your request is saved. You may be charged for this read."
 UNAVAILABLE_DETAIL = {
     "provider_failed": "The model provider did not return a result. The request is saved. You can try again.",
@@ -451,8 +452,11 @@ class HermesInterpreter:
                     log.error("parser raised for attempt %s: %s", attempt_id, type(error).__name__)
                     outcome = Rejection("unparseable_response", "", "The answer could not be read, so none of it was used.")
             parse_result = "ACCEPTED" if isinstance(outcome, ParsedInterpretation) else f"REJECTED:{outcome.reason_code}"
-        return self._settle(attempt_id, owner_id, status, text, usage, request_count, observed,
-                            _error_class(result.error_class), max(0, latency_ms), parse_result, outcome)
+        error_class = _error_class(result.error_class)
+        if error_class == COST_UNVERIFIED and not isinstance(outcome, ParsedInterpretation):
+            status, text, parse_result, outcome = "UNKNOWN", None, "NOT_PARSED", None  # only an accepted answer is kept
+        return self._settle(attempt_id, owner_id, status, text, usage, request_count, observed, error_class,
+                            max(0, latency_ms), parse_result, outcome)
 
     def _settle(self, attempt_id: str, owner_id: str, status: str, text: str | None, usage: Usage,
                 request_count: int | None, observed: Mapping[str, Any], error_class: str | None, latency_ms: int,

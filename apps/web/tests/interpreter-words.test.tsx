@@ -196,11 +196,22 @@ describe("system failures on the request page", () => {
     expect(screen.queryByText(/\$0\b|0 CREDIT/)).toBeNull();
   });
 
-  it("does not call a rejected answer ready when its cost is open", async () => {
-    mocks.get.mockResolvedValue(baseBundle("INVALID_INPUT", { code: "malformed_model_output", detail: "Not usable." },
-      { allowed: true, retry_of: "a1", reason: null }, [kept({ parse_result: "REJECTED:bad_shape", revision_id: null })]));
+  it("gives a reply it could not use the plain words and no retry when its cost is open", async () => {
+    mocks.get.mockResolvedValue(baseBundle("INVALID_INPUT", { code: "interpreter_outcome_unknown", detail: "Saved words." },
+      { allowed: false, retry_of: null, reason: "outcome_uncertain" },
+      [kept({ status: "UNKNOWN", completion: "UNKNOWN", parse_result: "NOT_PARSED", revision_id: null })]));
     render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
-    await screen.findByRole("heading", { name: "The research agent's answer was not usable" });
+    await screen.findByRole("heading", { name: "We did not get an answer we can show you" });
+    expect(screen.getByText("Your request is saved. You may be charged for this read.")).toBeInTheDocument();
+    expect(screen.queryByTestId("cost-not-confirmed")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try the research agent again" })).toBeNull();
+  });
+
+  it("does not call an answer ready before it is saved", async () => {
+    mocks.get.mockResolvedValue(baseBundle("UNRESOLVED", { code: "x", detail: "Nothing was tested." },
+      { allowed: false, retry_of: null, reason: "nothing_to_retry" }, [kept({ revision_id: null })]));
+    render(<RequestPage id="intake-1" go={vi.fn()} setContext={vi.fn()} openConversation={vi.fn()} />);
+    await screen.findByTestId("outcome");
     expect(screen.queryByTestId("cost-not-confirmed")).toBeNull();
   });
 

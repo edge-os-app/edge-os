@@ -112,7 +112,8 @@ class RelayTurnRunner:
     A zero-request result stands only when the relay recorded the attempt closed and never started. A counted result
     stands only when the relay started exactly once and received a reply whose reported usage equals the job's.
     Anything else is withheld as UNKNOWN with no request count, so the reservation stays as liability. A counted result
-    that fails only the cost check keeps its answer and is named `COST_UNVERIFIED`, so it is never settled.
+    that fails only the cost check keeps its text and is named `COST_UNVERIFIED`, so it is never settled. The
+    application keeps that text only as an accepted answer.
     """
 
     def __init__(self, delegate: HermesTurnRunner, *, endpoint: RelayEndpoint, release: RelayRelease, policy: GuardPolicy,

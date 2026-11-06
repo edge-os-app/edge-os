@@ -237,7 +237,7 @@ def test_a_cost_at_the_retired_price_no_longer_settles(tmp_path: Path, actual: A
     None,
 ])
 def test_invalid_or_different_usage_stays_withheld_with_the_full_reservation(tmp_path: Path, actual: ActualRelease,
-                                                              usage: Any) -> None:
+                                                                             usage: Any) -> None:
     rig = Rig(tmp_path, actual, reply_record(usage=usage))
     result = rig.job.runner.run_turn(TURN)
     assert (result.status, result.text, result.request_count, result.error_class) == (
