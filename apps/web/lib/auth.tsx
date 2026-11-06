@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, ApiError, setTokenSource, setUnauthorizedHandler } from "./api";
 import { clearClientState } from "./draft";
+import type { SignedInIdentity } from "./signed-in-identity";
 import type { CreatedWallet } from "./wallet-setup-api";
 
 export type AuthStatus = "loading" | "signed-out" | "signing-in" | "ready" | "unavailable";
@@ -30,6 +31,8 @@ export interface AuthValue {
   fixtureLabel: string | null;
   unavailableReason: string | null;
   userId: string | null;
+  /** Present only while the session is accepted. */
+  identity?: SignedInIdentity | null;
   signInMessage: string | null;
   signInSlow: boolean;
   explicitSignOut: boolean;
@@ -64,6 +67,7 @@ export interface Source {
   /** Counts sign-in attempts that ended in an error or a closed window. */
   loginErrors?: number;
   createEmbeddedWallet?: () => Promise<CreatedWallet>;
+  identity?: SignedInIdentity | null;
 }
 
 const SIGN_IN_SLOW_MS = 60_000;
@@ -174,8 +178,9 @@ function AuthSession({ source, fixtureLabel, unavailable, children }: {
     setUserId(null); setExplicitSignOut(true); setSignInMessage(null); setStatus("signed-out"); source?.logout();
   }, [source]);
   const createEmbeddedWallet = source?.createEmbeddedWallet ?? null;
+  const identity = status === "ready" ? source?.identity ?? null : null;
   const value = useMemo<AuthValue>(
-    () => ({ status, fixtureLabel, unavailableReason: reason, userId, signInMessage, signInSlow, explicitSignOut, login, logout, createEmbeddedWallet }),
-    [status, fixtureLabel, reason, userId, signInMessage, signInSlow, explicitSignOut, login, logout, createEmbeddedWallet]);
+    () => ({ status, fixtureLabel, unavailableReason: reason, userId, identity, signInMessage, signInSlow, explicitSignOut, login, logout, createEmbeddedWallet }),
+    [status, fixtureLabel, reason, userId, identity, signInMessage, signInSlow, explicitSignOut, login, logout, createEmbeddedWallet]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

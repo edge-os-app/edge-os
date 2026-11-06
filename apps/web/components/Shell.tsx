@@ -103,6 +103,7 @@ export function Shell() {
             <strong>Build scope.</strong> Account views show example records only, not live wallet data.
             Saving a Research rule grants no trading permission. This build does not connect a wallet or move funds.
           </div> : null}
+          {auth.identity ? <p className="side-identity muted" title={auth.identity.full}>{auth.identity.shown}</p> : null}
           <button className="btn btn-ghost" type="button" onClick={auth.logout}>Sign out</button>
         </div>
       </aside>
