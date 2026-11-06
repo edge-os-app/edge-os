@@ -114,7 +114,7 @@ def test_a_request_the_guard_refuses_never_reaches_the_transport_and_frees_its_r
     result = rig.run_case()
 
     # Hermes raises after the 429, so the accepted mapping saves UNKNOWN; the guard's count of 0 still frees the spend
-    assert isinstance(result, Unavailable) and result.reason_code == "outcome_unknown"
+    assert isinstance(result, Unavailable) and result.reason_code == "nothing_charged"
     container = rig.container_result()
     assert container["transport"]["sent"] == [] and container["hermes"]["request_count"] == 0
     assert [r["reason"] for r in container["guard"]["evidence"]] == ["model_not_as_configured"]

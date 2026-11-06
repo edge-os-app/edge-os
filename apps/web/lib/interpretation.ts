@@ -11,6 +11,9 @@ const FAILURE_BY_CODE: Record<string, FailureKind> = {
   interpreter_outcome_unknown: "OUTCOME_UNKNOWN",
 };
 
+const MAY_BE_CHARGED = "You may be charged for this read.";
+const REQUEST_SAVED = "Your request is saved.";
+
 export const FAILURE_COPY: Record<FailureKind, { title: string; lead: string }> = {
   MALFORMED_OUTPUT: {
     title: "The research agent's answer was not usable",
@@ -22,13 +25,17 @@ export const FAILURE_COPY: Record<FailureKind, { title: string; lead: string }> 
   },
   OUTCOME_UNKNOWN: {
     title: "We did not get an answer we can show you",
-    lead: "Your request is saved. You may be charged for this read.",
+    lead: `${REQUEST_SAVED} ${MAY_BE_CHARGED}`,
   },
 };
 
-/** The lead for an unknown outcome. Only a hold the ledger freed proves that nothing can be charged. */
+/** Only a hold the ledger freed proves that nothing can be charged. */
+function withChargeWords(text: string, spendState: string | null | undefined): string {
+  return spendState === "RELEASED" ? text : `${text} ${MAY_BE_CHARGED}`;
+}
+
 export function noAnswerLead(spendState: string | null | undefined): string {
-  return spendState === "RELEASED" ? "Your request is saved." : FAILURE_COPY.OUTCOME_UNKNOWN.lead;
+  return withChargeWords(REQUEST_SAVED, spendState);
 }
 
 export function systemFailure(findings: Finding[]): FailureKind | null {
@@ -280,7 +287,7 @@ export function replyCopy(reply: ReplyState, spendState?: string | null): { titl
         ? { title: "Your last reply could not be used", body: "Your reply matched what is already saved, so nothing changed. Say what you want to change, or answer one of the questions." }
         : { title: "Your last reply could not be used", body: `The research agent's answer broke a rule (${reply.reason_code?.replaceAll("_", " ")}), so none of it was used. ${kept}` };
     case "UNCERTAIN":
-      return { title: FAILURE_COPY.OUTCOME_UNKNOWN.title, body: spendState === "RELEASED" ? kept : `${kept} You may be charged for this read.` };
+      return { title: FAILURE_COPY.OUTCOME_UNKNOWN.title, body: withChargeWords(kept, spendState) };
     case "PENDING_SAVE":
       return { title: "Your last reply was read but is not saved yet",
         body: `The research agent read it and the answer was accepted. Saving it did not finish. A restart tries to save it again. If the cause stays, it stays unsaved, and this page cannot tell you why. ${kept}` };

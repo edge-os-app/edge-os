@@ -4,7 +4,7 @@ Order of work for one request: save the request, interpret it in a recorded atte
 result (revision, outcome and attempt link) in one transaction. The provider call never sits inside a transaction.
 
 Three failures stay apart. Malformed model output is `malformed_model_output`. A provider that could not answer is
-`interpreter_unavailable`. An attempt with no answer to show and an open cost is `interpreter_outcome_unknown`. None of
+`interpreter_unavailable`. An attempt with no answer to show is `interpreter_outcome_unknown`. None of
 them is a verdict on the user's idea, and an unsupported capability is a different outcome (`UNSUPPORTED`).
 
 Recovery never calls a model. It closes only attempts whose claim nobody holds, and it publishes a saved accepted

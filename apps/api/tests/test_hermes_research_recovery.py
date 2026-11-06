@@ -11,6 +11,7 @@ import hashlib
 import json
 import threading
 import uuid
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -382,6 +383,26 @@ def test_a_settled_failure_whose_outcome_was_not_saved_gets_its_outcome_after_re
     for _ in range(2):  # repeating the repair adds nothing
         second.app.state.hermes.recover_all()
     assert len(bundle_of(second, owner_a, intake)["outcomes"]) == 1
+
+
+@pytest.mark.parametrize("spend_state, words", [
+    ("RELEASED", "We did not get an answer we can show you. Your request is saved."),
+    ("UNKNOWN", "We did not get an answer we can show you. Your request is saved. You may be charged for this read.")])
+def test_a_repaired_unknown_outcome_says_the_user_may_be_charged_unless_the_hold_was_freed(
+        make_client, owner_a, monkeypatch: pytest.MonkeyPatch, spend_state: str, words: str) -> None:
+    unknown = replace(turn_result(case("concrete-thesis")["provider"]), status="UNKNOWN", text=None, request_count=0,
+                      observed={"spend_state": spend_state})
+    first = make_client(CaseRunner(unknown))
+    with monkeypatch.context() as crashing:
+        crashing.setattr(interpretation_workflow.HermesResearch, "_record_failure",
+                         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("process died before the outcome")))
+        assert create(first, owner_a, "concrete-thesis").status_code == 500
+    intake = first_request_id(first, owner_a)
+
+    second = make_client(CaseRunner())  # startup recovery runs here
+
+    [found] = bundle_of(second, owner_a, intake)["outcomes"][-1]["record"]["content"]["findings"]
+    assert (found["code"], found["detail"]) == ("interpreter_outcome_unknown", words)
 
 
 def test_an_attempt_closed_as_interrupted_whose_outcome_was_not_saved_gets_its_outcome(

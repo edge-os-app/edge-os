@@ -300,6 +300,12 @@ If any item fails: the ledger row stays UNKNOWN with full liability. If only the
 
 ## 9. Open items
 
+Known limits of the page words:
+
+- The saved attempt keeps the spend state it had when it finished. If an operator resolves a row later, the page does not change. The line "Answer ready. Cost not confirmed yet." then stays.
+- If a store failure drops the saved spend state of a released read, the page still says "You may be charged for this read." This is the safe form, and no path says "no charge" while a hold stays.
+- A released read still shows its cost as "Unknown" and counts in the unknown calls.
+
 Later fix, noted at the builder's request on 2026-11-06. Not started.
 
 - Change: settle at the cost Orbio reports, when that cost is within the hold, in place of the exact-price match.
