@@ -129,7 +129,7 @@ Checked by `tests/hermes_provider_relay/test_orbio_first_call_release.py`, `test
 5. The operator handoff selects the release. An unknown hash, an unapproved hash, a definition in one registry only, or handoff bytes that do not match the given SHA256 are refused before any launch. An existing OpenRouter configuration selects the same OpenRouter release.
 6. One ledger database serves every route. Caps stay in the one settings row, so the cap check sees OpenRouter and Orbio spend together. Each reservation saves its `route_id`. Each route's token price is frozen at that route's first use, and a later different price gets the same refusal. Settlement uses the price of the reservation's own route.
 7. The adopted record, approval packet and price bytes keep their SHA256 values. The CLOUD-02 golden test (`test_release_destination_golden.py`) still passes unchanged.
-8. The relay checks the key file at start, before it serves anything. A release that sends to `api.orbio.so` takes only a key that starts with `sk-orbio-`, and every other ACTUAL release refuses such a key. A key that an HTTP header cannot carry unchanged is refused too. A refusal ends the relay, so no handoff, grant, `started.json`, byte or spend can follow. The record holds a fixed reason and no part of the key. The operator still never opens the file.
+8. The relay checks the key file at start, before it serves anything. A release that sends to `api.orbio.so` takes only a key that starts with `sk-orbio-`, and every other ACTUAL release refuses such a key. A key that an HTTP header cannot carry unchanged is refused too. A refusal ends the relay, so no handoff, grant, `started.json`, byte or spend can follow. The record holds a fixed reason and no part of the key. The operator still never opens the file. "No handoff" is true for `start`. A refused `restart` differs: section 8 has the note.
 
 ## 4. Price table rule
 
@@ -215,7 +215,21 @@ Before the call:
 
 - [ ] Steps 1 to 7 are done and recorded, and the builder authorized step 8.
 - [ ] The builder records the balance B0, the usage and the rate limits, from Orbio's account page or from `GET /api/v1/key` in the builder's own terminal. The controller does not do this read, because the relay alone reads the key.
-- [ ] Rerun the handshake-only TLS check before the leaf certificate expires on 2026-12-06, from the pinned image's own Python. That image has Python 3.14.8 and OpenSSL 3.5.7; the check of 2026-11-06 used Python 3.14.4 and OpenSSL 3.6.4. The image has the same strict settings, but the handshake has not run on its OpenSSL.
+- [ ] Rerun the handshake-only TLS check before the leaf certificate expires on 2026-12-06, from the pinned image's own Python. That image has Python 3.14.8 and OpenSSL 3.5.7; the check of 2026-11-06 used Python 3.14.4 and OpenSSL 3.6.4. The image has the same strict settings, but the handshake has not run on its OpenSSL. Use the command below. `IMAGE` is the pinned image id for this host from `RELEASE_DEFINITIONS`. Run it from the repository root. It sends no HTTP byte and reads no key. It must exit 0 and print TLSv1.3, the issuer `YR1` and the leaf's end date. Any other result ends here, before any request byte.
+
+```sh
+CHECK='import socket, ssl, sys
+host, port, bundle = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+context = ssl.create_default_context(cafile=bundle)
+with socket.create_connection((host, port), 10) as raw, context.wrap_socket(raw, server_hostname=host) as tls:
+    leaf = tls.getpeercert()
+    print(sys.version.split()[0], ssl.OPENSSL_VERSION, tls.version(), leaf["issuer"], leaf["notAfter"])'
+docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --user 65534:65534 \
+  -v "$PWD/docs/qualification/orbio-release/orbio_ca_isrg_root_x1.pem:/orbio-ca.pem:ro" \
+  --entrypoint python3 "$IMAGE" -I -c "$CHECK" api.orbio.so 443 /orbio-ca.pem
+```
+
+  The context is the relay's own: `relay_transport.py` builds it with the same call. The command was tested on 2026-11-06 in the pinned arm64 image against a throwaway server on an internal Docker network. It exited 0 with the right CA and 1 with a wrong CA or a wrong name, and the server received no byte after the handshake. It has not yet run against `api.orbio.so`.
 - [ ] Record the call's UTC time, and confirm the catalogue list rates for that model at that time are still USD 2 / 10 with no reachable override, no cache, reasoning, request or other fee is listed, the platform fee is still 5%, and no tier costs more than the list price (section 4 rules 3 and 4).
 
 Operator steps. The controller runs these. The key stays in one file that only the relay reads. The operator only checks that file's mode and place, and never opens it.
@@ -242,6 +256,8 @@ Use the API's Python in every command, as the commands show. A plain `python` is
    - the reply body, `<channel>/turn-NN-<attempt>/output/relay-channel/reply.json`, for `finish_reason`, the reply `model`, provider fields and `prompt_tokens_details`. The file holds the body in `body_b64`, so decode it first;
    - the gateway `opening` line in `<run root>/relay/gateway/receipts/tunnels.jsonl`, and the ledger row in `usage_local.provider_spend_reservations` for the attempt.
 11. Stop the web page, the ordinary API and the application. From the repository root, run `apps/api/.venv/bin/python scripts/hermes_provider_relay/relay_operator.py CONFIG stop`, whatever the result. Keep the run root. Before any publication, the builder scans for the key, because only the builder and the relay read that file: `grep -rlF -f KEY_FILE RUN_ROOT CHANNEL_FOLDER` must print nothing.
+
+Restart note. This checklist has no restart step, because a relay that stops ends the one call. If an operator runs `relay_operator.py CONFIG restart` and the key check refuses it, the earlier `handoff.json` stays in the run root and no relay runs. A present handoff therefore does not show a live relay. By the code, the application reads a stale heartbeat in that state and treats the relay as not alive; no test has sent an application request in this state. Send nothing. Correct the key file and run `restart` again, which removes the refusal record on success, or run `stop`.
 
 The caps need no hand check: the one ledger counts both routes (section 3 item 6).
 

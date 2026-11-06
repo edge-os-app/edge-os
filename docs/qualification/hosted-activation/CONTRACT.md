@@ -204,6 +204,9 @@ H3, H4, H6, H7, H9, H11 and H12 are still deployment-plan work. H9 abuse protect
 - The validity window is the deployment's review period. An expired record admits nothing until a new record is
   approved.
 - Removing a registry entry removes the approval for every process started after that build.
+- A replacement record takes a new deployment id and a new file. The old record files stay as frozen history, and the
+  registry entry changes in the same reviewed change. `edgeos-fun-vps1-orbio` replaced `edgeos-fun-vps1` this way on
+  2026-11-06 (`docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md` §9).
 - A running process keeps the deployment it started with. Start a new process to apply a changed record.
 
 ## 10. Tests and evidence

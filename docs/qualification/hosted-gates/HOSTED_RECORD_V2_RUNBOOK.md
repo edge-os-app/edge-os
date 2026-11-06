@@ -681,3 +681,210 @@ that depends on the hash. Pin only images that do not carry the registry hash, f
 VPS runs, and a host relay job image only when its build context does not contain
 `apps/api/src/edge_os_api/core/hosted_deployment.py`. Omit `api`, `execution-worker` and every other source-built
 image. The parser still requires at least one entry.
+
+## 9. Replace the record and switch the host to Orbio
+
+Status: **files only, NOT RUN.** The controller runs these steps after the gate PASS. Builder decision, 2026-11-06:
+skip OpenRouter on the server, go straight to a hosted Orbio record, and copy the Orbio key to the server when the record
+passes. The first real Orbio study still runs locally.
+
+### 9.1 The replacement record
+
+`records/edgeos-fun-vps1-orbio.json`, canonical SHA-256
+`75aa306039ce54b8817b4ebb5f17fcd2f81fcb137a2f410a4f967a2a9cc2a201`, replaces `edgeos-fun-vps1` in
+`APPROVED_HOSTED_DEPLOYMENTS`. The id is new because §8.3 names the file after the id, and the old file stays frozen.
+The old record files are unchanged history. They admit nothing after this build.
+
+| Field | Old record | New record |
+|---|---|---|
+| `deployment_id` | `edgeos-fun-vps1` | `edgeos-fun-vps1-orbio` |
+| `hermes_relay` | `hermes-first-call-1`, `3fa94dd7…` | `orbio-first-call-1`, `041f588d…` |
+| `host_gates.h8_provider_spend_cap` | `h8_provider_spend_cap.md` | `h8_provider_spend_cap_orbio.md` |
+| `valid_from` | `2026-10-30T00:00:00Z` | `2026-11-06T00:00:00Z` |
+
+Every other field is the same, which includes `research_release`, `image_digests` and `valid_until`. `valid_until` stays
+`2026-11-27T00:00:00Z`, before the snapshot's auto-deletion on 2026-11-29 (H10). The `hermes-relay-job` id is the amd64 id
+in `_PINNED_IMAGES`, which both releases use. The `postgres` id is the one in the compose file deployed on 2026-11-06.
+
+The Coolify services name no record, because `compose.coolify.yml` does not pass the two record settings. Only the host
+application and the host research worker read this record. The switch therefore needs no new API image.
+
+### 9.2 Host gates against Orbio
+
+| Gate | File | Specific to OpenRouter? | Result |
+|---|---|---|---|
+| H1 | `h1_egress.md`, unchanged | No. It names neither OpenRouter nor Orbio. It tests the execution worker and PostgreSQL only. | Still true for what it tests. It never tested the relay's route to a provider, for either release. That route runs on the relay's own `relay-egress-*` network, and only the gateway code limits it to the record's host. §9.3 step 1 shows that the host reaches `api.orbio.so`. Its run also predates the redeploy of 2026-11-06. |
+| H2 | `h2_runner_isolation.md`, unchanged | Partly. Row 6 tests `/etc/edge-os/relay/provider-key` and the `run-2` paths. | Row 6 does not cover the Orbio key file or the new run root. §9.3 step 8 repeats it on those paths. The rows marked PENDING stay PENDING, and decision N5 still applies (§9.4). |
+| H8 | `h8_provider_spend_cap_orbio.md`, new | The old file names no model provider at all. | The new file adds Orbio and states the limits. The prepaid balance is not a proven hard stop. |
+| H10 | `h10_backup_restore.md`, unchanged | No. | Unchanged. The drill ran on schema `0013`; the live schema is now `0015`. |
+
+No gate needs new host evidence before registration. The host application cannot start under a record until that record
+is registered, so the host results of §9.3 go to a separate evidence file outside the record, as N5 requires. Do not edit
+a bound file after registration.
+
+### 9.3 Switch steps
+
+Preconditions: the controller accepted the candidate, the builder approved this exact record hash, and the commit is on
+the remote. `EDGE_OS_HERMES_APP_URL` stays empty for every step here, so the six public paths keep returning 503. No step
+below prints the key. Do not use `set -x`, and do not `cat` the key file.
+
+**1. Check TLS from the host.** Nothing has changed yet, so a failure here costs nothing. Use the command in
+`ORBIO_RELEASE_DRAFT.md` §8 with the amd64 image id, from `/opt/edge-os`. It must exit 0.
+
+**2. Stop the old services.** Stop the relay while `/etc/edge-os/relay.json` still names the old operation, because the
+unit's stop command reads that file.
+
+```sh
+systemctl stop edge-os-hermes-app.service edge-os-research-worker.service
+systemctl stop edge-os-hermes-relay.service
+docker ps --filter name=relay- --format '{{.Names}}'   # must print nothing
+```
+
+If a `relay-*` container remains, the operation did not start from the unit. Run the unit's `ExecStop` command as
+`edge-os-relay`, with the unit's environment, before you continue.
+
+**3. Move the code.** Use §6.2 of `deploy/coolify/RUNBOOK.md` with the approved commit. Then confirm the registry:
+
+```sh
+grep -c '"edgeos-fun-vps1-orbio": "75aa306039ce54b8817b4ebb5f17fcd2f81fcb137a2f410a4f967a2a9cc2a201"' \
+  /opt/edge-os/apps/api/src/edge_os_api/core/hosted_deployment.py   # must print 1
+```
+
+**4. Install the record.** Keep the old file. The new file takes the old file's owner and mode.
+
+```sh
+OLD=$(sed -n 's/^EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH=//p' /etc/edge-os/hermes-app.env)
+NEW=/etc/edge-os/hosted/edgeos-fun-vps1-orbio.json
+SRC=/opt/edge-os/docs/qualification/hosted-gates/records/edgeos-fun-vps1-orbio.json
+install -m "$(stat -c %a "$OLD")" -o "$(stat -c %U "$OLD")" -g "$(stat -c %G "$OLD")" "$SRC" "$NEW"
+cmp "$SRC" "$NEW" && echo "record installed"
+for f in /etc/edge-os/hermes-app.env /etc/edge-os/research-worker.env; do
+  cp -p "$f" "$f.bak-before-orbio"
+  sed -i -e 's/^EDGE_OS_HOSTED_DEPLOYMENT_ID=.*/EDGE_OS_HOSTED_DEPLOYMENT_ID=edgeos-fun-vps1-orbio/' \
+         -e "s|^EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH=.*|EDGE_OS_HOSTED_DEPLOYMENT_RECORD_PATH=$NEW|" "$f"
+  grep -c '^EDGE_OS_HOSTED_DEPLOYMENT_' "$f"   # must print 2
+done
+```
+
+**5. Copy the key.** Run this from the machine that holds the key. It uses a new file, so it overwrites no key on the
+host. The key travels on standard input and appears in no argument and no output.
+
+```sh
+KEY=$HOME/.edge-os/orbio.key
+HOST=<operator ssh target>
+ssh "$HOST" 'set -eu; D=/etc/edge-os/relay/orbio-provider-key; test ! -e "$D"
+  T=$(mktemp /etc/edge-os/relay/.orbio-key.XXXXXX); cat > "$T"
+  chown edge-os-relay:edge-os-relay "$T"; chmod 0600 "$T"; mv "$T" "$D"' < "$KEY"
+ssh "$HOST" 'stat -c "%F %U %G %a" /etc/edge-os/relay/orbio-provider-key'
+# must print: regular file edge-os-relay edge-os-relay 600
+[ "$(shasum -a 256 < "$KEY" | cut -d' ' -f1)" = \
+  "$(ssh "$HOST" 'sha256sum < /etc/edge-os/relay/orbio-provider-key | cut -d" " -f1')" ] && echo same || echo different
+# must print: same
+```
+
+**6. Hand the relay to the Orbio release.** Keep a copy of the old configuration, then change its content only, so the
+file keeps its owner and mode. The CA bundle is the tracked file, so the host needs no CA copy.
+
+```sh
+cp -p /etc/edge-os/relay.json /etc/edge-os/relay.json.bak-before-orbio
+python3 - <<'PY'
+import json
+path = "/etc/edge-os/relay.json"
+config = json.load(open(path))
+folder = "/opt/edge-os/docs/qualification/orbio-release"
+config.update({
+    "operation_id": "orbio-hosted-1",
+    "release_record": {"path": f"{folder}/orbio_first_call_record.json",
+                       "sha256": "041f588d3b9564fd605d00d2204083cbfc4e4cd3307906656345a73118ac563f"},
+    "ca_bundle": {"path": f"{folder}/orbio_ca_isrg_root_x1.pem",
+                  "sha256": "22b557a27055b33606b6559f37703928d3e4ad79f110b407d04986e1843543d1"},
+    "run_root": "/var/lib/edge-os/relay/run-orbio-1",
+    "channel": {"name": "edge-os-research", "path": "/var/lib/edge-os/channel/orbio-channel-1"},
+    "provider_key_file": "/etc/edge-os/relay/orbio-provider-key",
+})
+with open(path, "w") as out:
+    json.dump(config, out, indent=2)
+PY
+systemctl start edge-os-hermes-relay.service
+journalctl -u edge-os-hermes-relay.service -n 20 --no-pager | grep 'handoff '
+```
+
+`format`, `kind`, `release`, `image` and `shutdown_owner` stay as they were, because both releases use the same pinned
+image. Copy the printed path and hash into `EDGE_OS_HANDOFF_PATH` and `EDGE_OS_HANDOFF_SHA256` in
+`/etc/edge-os/hermes-app.env`. Never type a hash from another start.
+
+**7. Start the application and the research worker.**
+
+```sh
+systemctl start edge-os-hermes-app.service edge-os-research-worker.service
+```
+
+**8. Run the checks.** Save the output in a new file outside the record.
+
+```sh
+journalctl -u edge-os-hermes-app.service -n 50 --no-pager | grep serving   # must name orbio-first-call-1
+GW=$(sed -n 's/^EDGE_OS_APP_BIND_HOST=//p' /etc/edge-os/hermes-app.env)    # one IPv4 address
+curl -sS "http://$GW:8011/healthz"; curl -sS "http://$GW:8011/readyz"      # the second must report ready
+journalctl -u edge-os-hermes-app.service -u edge-os-research-worker.service -n 100 --no-pager \
+  | grep -E 'hosted_deployment_|invalid configuration' || echo "no record refusal"
+ss -ltn | grep ':8011'                                                     # only $GW:8011
+R=/var/lib/edge-os/relay/run-orbio-1/relay
+A='sudo -g edge-os-relay-share -u edge-os-research'
+$A test -r /etc/edge-os/relay/orbio-provider-key; echo "key_read=$?"       # must print key_read=1
+$A test -r "$R/relay-config.json"; echo "config_read=$?"                   # must print config_read=1
+$A test -r "$R/provider-config.json"; echo "provider_read=$?"              # must print provider_read=1
+$A test -w "$R/state"; echo "state_write=$?"                               # must print state_write=1
+$A test -r "$R/secrets/admission-key"; echo "admission_read=$?"            # must print admission_read=0
+$A test -w "$R/grants"; echo "grants_write=$?"                             # must print grants_write=0
+grep -h '^EDGE_OS_USAGE_GLOBAL_\(PROVIDER_REQUESTS\|NANSEN_CREDITS\)=' \
+  /etc/edge-os/hermes-app.env /etc/edge-os/research-worker.env             # 60 and 50 in both files
+grep -rlF -f /etc/edge-os/relay/orbio-provider-key \
+  /var/lib/edge-os/relay/run-orbio-1 /var/lib/edge-os/channel/orbio-channel-1 || echo "no key copy"
+```
+
+The last line prints file names only, never a match. Any file name is a failed check. A missing usage line means the
+host process uses its default limit, so add the value and restart before you continue.
+
+**9. Open the public route last.** Rollout rule: the host application is READY and §9.3 step 8 passes before any API image
+or Coolify value that needs it. Also finish §9.4. Then set `EDGE_OS_HERMES_APP_URL=http://<coolify-gateway>:8011` in
+Coolify and restart the stack. Do not deploy an API image first. The running image already forwards the six paths.
+
+### 9.4 Open items before step 9
+
+- N5 keeps the public route closed until every PENDING row of `h2_runner_isolation.md` passes. A decision made for the old
+  record does not bind the new one by itself, so the controller records that N5 carries over.
+- Rows 1 to 5 and 8 to 10 need a real job. With this record, a real job is a paid Orbio call. It needs the builder's
+  approval, and the local first study comes first.
+- R8 tests the public path, so it needs `EDGE_OS_HERMES_APP_URL` set, while N5 wants that value empty until R8 passes. The
+  controller decides this order. One safe order: run every other row, set the value, and at once send requests with no
+  token. Any answer other than an authentication refusal means clear the value.
+- The ledger caps stay at USD 2.00, so the live site cannot spend the whole USD 5 balance. A higher cap is a code change
+  and a builder decision (`h8_provider_spend_cap_orbio.md`).
+
+### 9.5 Failure steps
+
+Stop at the first failure. Do not run a later step. Do not resend a request that left the host, because an UNKNOWN attempt
+keeps its liability.
+
+| Failure | Meaning | Action |
+|---|---|---|
+| Step 1 exits 1 | The host cannot reach Orbio, or the chain no longer ends at ISRG Root X1 | Stop. Nothing changed. A new chain needs a new release record, not a host edit. |
+| `hosted_deployment_not_approved` | An env file or the checkout still has the old state | Repeat step 3 or step 4. |
+| `hosted_deployment_hash_mismatch` | The installed record differs | Install it again in step 4. Never edit it by hand. |
+| `hosted_deployment_outside_window` | The window ended on 2026-11-27 | Stop. A new record needs a new reviewed change. |
+| `refused: the relay refused the provider key file` | The key is wrong for this release. There is no handoff, and nothing can be sent. | Read `<run root>/relay/state/provider-key-refused.json`, which holds a fixed reason and no key. The builder corrects the file. Use a new `run_root` and channel folder. |
+| `start` refuses an existing run root or channel | That operation already ran | Use new folders. |
+| A refused `restart` | The old handoff stays and no relay runs (`ORBIO_RELEASE_DRAFT.md` §8) | Keep the public route closed. Correct the cause and run `restart` again. |
+| A check in step 8 fails | The host is not READY | Keep `EDGE_OS_HERMES_APP_URL` empty. Stop the application and the relay. The public paths keep returning 503. |
+| A failure after step 9 | The public route is not safe | Clear `EDGE_OS_HERMES_APP_URL` and restart the stack first. Then stop the application and the relay. |
+
+To return the host to its earlier state:
+
+1. Stop the application, the research worker and the relay, in the step 2 order, while `relay.json` still names the Orbio
+   operation.
+2. Restore the three `*.bak-before-orbio` files.
+3. Check out the earlier commit, which holds the old registry entry, and run `uv sync --frozen`.
+4. Start the research worker only.
+
+The old relay operation has ended, and the builder chose no OpenRouter on the server, so do not start the relay or the
+application. The public paths keep returning 503. The key file stays in place, mode `0600`, until the builder decides.

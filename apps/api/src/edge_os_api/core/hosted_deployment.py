@@ -56,8 +56,9 @@ MAX_PATH = 400
 
 # Approved hosted deployment id -> the canonical SHA-256 of its record. It names the one registered deployment.
 # Adding, changing or removing an entry is a reviewed code change that cites the builder's recorded approval of that
-# exact record.
-APPROVED_HOSTED_DEPLOYMENTS: Mapping[str, str] = {"edgeos-fun-vps1": "0e56ad4290b522d450142c5baa367b5daacf695dfe563102e85bc43f0bb7b728"}
+# exact record. Builder decision 2026-11-06: replace `edgeos-fun-vps1` with the Orbio record. The old record file stays
+# as frozen history and admits nothing. See HOSTED_RECORD_V2_RUNBOOK.md §9.
+APPROVED_HOSTED_DEPLOYMENTS: Mapping[str, str] = {"edgeos-fun-vps1-orbio": "75aa306039ce54b8817b4ebb5f17fcd2f81fcb137a2f410a4f967a2a9cc2a201"}
 
 
 class HostedDeploymentRefused(RuntimeError):

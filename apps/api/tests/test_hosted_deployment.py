@@ -33,10 +33,10 @@ RESEARCH_SHA = "45c8cfbf5d61eb519ee3140e02e50b2b7091669dc28cbef224bdc6a0e77ca877
 IMAGE = "sha256:" + "1" * 64
 GATE_SHA = "2" * 64
 DEPLOYMENT = "hosted-demo-1"
-REGISTERED_ID = "edgeos-fun-vps1"
-REGISTERED_SHA = "0e56ad4290b522d450142c5baa367b5daacf695dfe563102e85bc43f0bb7b728"
+REGISTERED_ID = "edgeos-fun-vps1-orbio"
+REGISTERED_SHA = "75aa306039ce54b8817b4ebb5f17fcd2f81fcb137a2f410a4f967a2a9cc2a201"
 RECORD_PATH = (Path(__file__).resolve().parents[3]
-               / "docs/qualification/hosted-gates/records/edgeos-fun-vps1.json")
+               / "docs/qualification/hosted-gates/records/edgeos-fun-vps1-orbio.json")
 
 
 def canonical(value: Any) -> bytes:
@@ -126,7 +126,7 @@ def test_the_committed_record_is_admitted_with_the_running_origin_and_tls() -> N
     settings = running(deployment_id=REGISTERED_ID, record_path=RECORD_PATH,
                        cors=("https://app.edgeos.fun",), sslmode="require")
     loaded = hosted_deployment.check_hosted_deployment(
-        settings, approvals={REGISTERED_ID: digest}, now=datetime(2026, 10, 30, 12, tzinfo=UTC))
+        settings, approvals={REGISTERED_ID: digest}, now=datetime(2026, 11, 10, 12, tzinfo=UTC))
     assert loaded is not None and loaded.record_sha256 == digest
     assert loaded.admits_execution_release("anything/1", "0" * 64) is False
 

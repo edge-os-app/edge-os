@@ -331,6 +331,7 @@ timeout is `504 interpreter_timeout`, and any other transport failure is `502 in
 application serves only the six paths plus `GET /healthz` and `GET /readyz`; everything else is 404.
 
 Rollout: the controller deploys the new API image only after the host application is READY and the public checks pass.
+The same rule holds for the Orbio switch: see `docs/qualification/hosted-gates/HOSTED_RECORD_V2_RUNBOOK.md` §9.
 Until then the running API image stays. With `EDGE_OS_HERMES_APP_URL` empty in production, the six paths return
 `503 interpreter_unavailable`; local and test runs keep the fixture behaviour.
 
