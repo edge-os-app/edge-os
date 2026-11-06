@@ -57,8 +57,8 @@ MAX_PATH = 400
 # Approved hosted deployment id -> the canonical SHA-256 of its record. It names the one registered deployment.
 # Adding, changing or removing an entry is a reviewed code change that cites the builder's recorded approval of that
 # exact record. Builder decision 2026-11-06: replace `edgeos-fun-vps1` with the Orbio record. The old record file stays
-# as frozen history and admits nothing. See HOSTED_RECORD_V2_RUNBOOK.md §9. The list-price entry waits for the builder's
-# approval of this exact record, which this comment must cite before the entry reaches main.
+# as frozen history and admits nothing. See HOSTED_RECORD_V2_RUNBOOK.md §9. Builder decision 2026-11-06: approved this
+# exact list-price record, 699ef23236c1…, in place of the record that held the 2.10 / 10.50 price.
 APPROVED_HOSTED_DEPLOYMENTS: Mapping[str, str] = {"edgeos-fun-vps1-orbio-list-price": "699ef23236c193dcd7a84bbedc4496fe69d80abe33a25fc92f5ad31370d67217"}
 
 
