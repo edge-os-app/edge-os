@@ -161,6 +161,7 @@ table.records th { font-size: 11px; letter-spacing: 0.08em; text-transform: uppe
   .convo-button { display: inline-flex; }
 }
 @media (min-width: 1181px) { .convo-button { display: none; } }
+/* The exact opposite of the 760px rule below, so no fractional width falls between the two. */
 @media (width > 760px) {
   .sidebar { position: sticky; top: 0; height: 100dvh; overflow-y: auto; }
 }

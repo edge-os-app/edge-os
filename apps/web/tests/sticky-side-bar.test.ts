@@ -9,24 +9,32 @@ import { describe, expect, it } from "vitest";
 
 const APP = readFileSync(resolve(process.cwd(), "app/app.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
-function mediaBlock(condition: string): string {
-  const start = APP.indexOf(`@media ${condition} {`);
-  if (start === -1) return "";
-  const end = APP.indexOf("\n}", start);
-  return APP.slice(start, end);
+type SidebarRule = { media: string; declarations: Record<string, string> };
+
+function sidebarRules(): SidebarRule[] {
+  const rules: SidebarRule[] = [];
+  let media = "";
+  for (const match of APP.matchAll(/@media\s+([^{]+?)\s*\{|([^{}]+)\{([^{}]*)\}|\}/g)) {
+    const [token, condition, selectors, body] = match;
+    if (condition !== undefined) media = condition;
+    else if (token === "}") media = "";
+    else if (selectors.split(",").some((selector) => selector.trim() === ".sidebar")) {
+      const parts = body.split(";").filter((part) => part.includes(":"));
+      rules.push({
+        media,
+        declarations: Object.fromEntries(parts.map((part) => {
+          const colon = part.indexOf(":");
+          return [part.slice(0, colon).trim(), part.slice(colon + 1).trim()];
+        })),
+      });
+    }
+  }
+  return rules;
 }
 
-function sidebarDeclarations(css: string): Record<string, string> {
-  const body = css.match(/(?:^|[\s}])\.sidebar\s*\{([^}]*)\}/)?.[1] ?? "";
-  return Object.fromEntries(body.split(";").filter((part) => part.includes(":")).map((part) => {
-    const colon = part.indexOf(":");
-    return [part.slice(0, colon).trim(), part.slice(colon + 1).trim()];
-  }));
-}
-
-describe("side bar position", () => {
-  it("stays in the window and scrolls by itself above the 760px phone rule", () => {
-    expect(sidebarDeclarations(mediaBlock("(width > 760px)"))).toEqual({
+describe("side bar position rules", () => {
+  it("sets the sticky declarations in the rule above the 760px phone rule", () => {
+    expect(sidebarRules().find((rule) => rule.media === "(width > 760px)")?.declarations).toEqual({
       position: "sticky",
       top: "0",
       height: "100dvh",
@@ -34,11 +42,12 @@ describe("side bar position", () => {
     });
   });
 
-  it("adds no position rule to the base or phone layout", () => {
-    const phone = sidebarDeclarations(mediaBlock("(max-width: 760px)"));
-    expect(Object.keys(phone).sort()).toEqual(["gap", "padding"]);
-    const base = sidebarDeclarations(APP.slice(0, APP.indexOf("@media")));
-    expect(base).not.toHaveProperty("position");
-    expect(base).not.toHaveProperty("height");
+  it("has no other side bar rule that sets a position, height or overflow", () => {
+    const others = sidebarRules().filter((rule) => rule.media !== "(width > 760px)");
+    expect(others.map((rule) => rule.media)).toEqual(["", "(max-width: 760px)"]);
+    expect(Object.keys(others[1].declarations).sort()).toEqual(["gap", "padding"]);
+    for (const property of ["position", "top", "height", "overflow", "overflow-y"]) {
+      expect(others[0].declarations).not.toHaveProperty(property);
+    }
   });
 });
