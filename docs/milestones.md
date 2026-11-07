@@ -12,7 +12,7 @@ This is the six-month plan for an Orbio grant of USD 25,000. Each milestone ends
 | M4, live agents | 3-5 | Real in-app trades. An agent that runs its signed rules, with no model choosing a trade. Recovery after a failure. Sell, stop, withdraw, remove and renew permission. Recurring edge checks. | 5,500 |
 | M5, fast entry and second chain | 4-5 | Paste a token address or link. An exit watcher for sell and stop terms. Token checks. A second venue. A first move to a second chain. | 3,000 |
 | M6, LP traders | 5-6 | LP research, rules and simulation. Live LP trade support inside signed limits. | 1,800 |
-| M7, perp and prediction market traders | 4-6 | Research and simulation on the same core. Live trades on existing venues such as Hyperliquid. Edge OS holds the signed limits, because venues do not. Records for liquidation and market resolution. | 3,500 |
+| M7, perp and prediction market traders | 4-6 | Research and simulation on the same core. Live trades on existing venues such as Hyperliquid and Polymarket. Edge OS holds the signed limits, because venues do not. Records for liquidation and market resolution. | 3,500 |
 
 ## Done when
 
