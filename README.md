@@ -4,7 +4,7 @@
 
 Edge OS is an operating system for trading edges, used from one agentic trading terminal. It is not a full market terminal. It starts with meme-token traders on Monad. A research agent checks your idea against on-chain history and saves what it found. Rules that hold up can be replayed on past prices. The plan is an agent with its own wallet that trades on Kuru, where a wallet permission you sign decides what it may do. No model chooses a trade.
 
-[Pitch video](https://vimeo.com/1235649955) · [Technical demo](https://vimeo.com/1235648532) · [Live site](https://edgeos.fun)
+[Pitch video](https://vimeo.com/1235649955) · [Technical demo](https://vimeo.com/1235648532) · [Orbio study](https://vimeo.com/1244493143) · [Live site](https://edgeos.fun)
 
 First built for the Monad hackathon, Onchain Finance & Trading track.
 
@@ -133,6 +133,8 @@ Not built yet: X tools, Sign in with Orbio and recurring edge checks.
 Three real calls matched the drop in the Orbio balance exactly: USD 0.009016 on a local call, USD 0.006766 on a host job, and USD 0.007164 on the live study, where the balance went from 4.9683 to 4.961136.
 
 The live study used 12 of 14 provider requests and checked 8 of 90 receipts, with 0 mismatches. Its result was limited data.
+
+Watch the [live study through Orbio](https://vimeo.com/1244493143). The [milestones](docs/milestones.md) list the work ahead and what each part costs.
 
 ## Bugs that shaped the design
 
