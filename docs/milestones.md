@@ -24,6 +24,20 @@ This is the six-month plan for an Orbio grant of USD 25,000. Each milestone ends
 - **M6:** a study tests an LP range on real history, and one small real LP position opens and closes inside signed limits.
 - **M7:** one small real perp trade and one small real prediction market trade run inside signed limits. A test liquidation and a market resolution show correctly in the record.
 
+## Targets
+
+Each target is a count that anyone can check in the saved records or on chain.
+
+| Milestone | Target |
+|---|---|
+| M1 | Each permission limit has a refusal test. 0 trades run outside a signed permission. |
+| M2 | 50 real studies run through Orbio, and each report shows the CREDIT cost of every call. |
+| M3 | 20 traders sign in with Orbio. 5 of them finish a study paid from their own balance. |
+| M4 | 3 agents make real in-app trades under signed rules. Each one stops, sells and withdraws on command. |
+| M5 | 10 pasted tokens trade on a second venue. 1 trade runs on a second chain. |
+| M6 | 1 small real LP position opens and closes inside signed limits. |
+| M7 | 1 small real perp trade and 1 small real prediction market trade run inside signed limits. |
+
 ## Use of the money
 
 | Use | USD |

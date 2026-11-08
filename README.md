@@ -125,7 +125,7 @@ Orbio is an AI gateway. Its usage unit is CREDIT, and 1 CREDIT is USD 1 of usage
 Built:
 
 - A [model route to Orbio](apps/api/src/edge_os_api/research/hermes_relay_composition.py) beside OpenRouter. The operator selects one route per release, and there is no default.
-- A model budget shown in CREDIT. Each owner has one limit, shared by all of their studies, and the [spend ledger](apps/api/src/edge_os_api/research/provider_spend_ledger.py) refuses a call that could go over it before the call is sent.
+- A model budget shown in CREDIT. Each owner has one limit, shared by all of their studies, and the [spend ledger](apps/api/src/edge_os_api/research/provider_spend_ledger.py) refuses a call that could go over it before the call is sent. The limit works like a prepaid card that the agent cannot overspend.
 - A saved route for each attempt, and the line "Model calls ran through Orbio" near the study's total cost.
 
 Not built yet: X tools, Sign in with Orbio and recurring edge checks.
